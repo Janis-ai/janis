@@ -2,11 +2,11 @@ import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, eq, gt, isNotNull, isNull, ne } from 'drizzle-orm';
+import { and, asc, eq, gt, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { Context } from 'hono';
 import type { Db } from '../db/client.js';
-import { agentMembers, agents, emailVerificationTokens, memberships, passwordResetTokens, sessions, users, workspaces } from '../db/schema.js';
+import { agentMembers, agents, conversations, emailVerificationTokens, memberships, passwordResetTokens, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken, hashPassword, sha256, verifyPassword } from '../lib/crypto.js';
 import { passwordIssue } from '../lib/passwordCheck.js';
 import { dbRateLimit } from '../lib/rateLimit.js';
@@ -532,7 +532,18 @@ export function authRoutes(db: Db) {
   // Switch the session's active workspace (must hold an accepted membership).
   app.post(
     '/switch',
-    zValidator('json', z.object({ workspace_id: z.string() })),
+    zValidator(
+      'json',
+      z.object({
+        workspace_id: z.string().optional(),
+        // Deep-link mode: "switch to whichever workspace owns this
+        // conversation" (alert/invite email links). Resolves the owning
+        // workspace and confirms the user could actually see the
+        // conversation there before moving the session — a uniform 404
+        // otherwise, so the probe can't map other workspaces' ids.
+        for_conversation: z.string().optional(),
+      }),
+    ),
     async (c) => {
       const token = getCookie(c, SESSION_COOKIE);
       if (!token) return c.json({ error: 'unauthenticated' }, 401);
@@ -543,7 +554,65 @@ export function authRoutes(db: Db) {
         .where(and(eq(sessions.id, sessionId), gt(sessions.expiresAt, new Date())))
         .limit(1);
       if (!session) return c.json({ error: 'unauthenticated' }, 401);
-      const targetWs = c.req.valid('json').workspace_id;
+      const body = c.req.valid('json');
+      if (!body.workspace_id && !body.for_conversation) {
+        return c.json({ error: 'workspace_id required' }, 400);
+      }
+
+      if (body.for_conversation) {
+        const [owner] = await db
+          .select({ agentId: agents.id, ws: agents.workspaceId })
+          .from(conversations)
+          .innerJoin(agents, eq(conversations.agentId, agents.id))
+          .where(eq(conversations.id, body.for_conversation))
+          .limit(1);
+        if (!owner) return c.json({ error: 'not found' }, 404);
+        const [mem] = await db
+          .select()
+          .from(memberships)
+          .where(
+            and(
+              eq(memberships.userId, session.userId),
+              eq(memberships.workspaceId, owner.ws),
+              isNotNull(memberships.acceptedAt),
+            ),
+          )
+          .limit(1);
+        // A member sees the conversation unless an agent_members row hides
+        // the agent from them; a non-member needs an accepted grant on this
+        // specific agent — anything else 404s rather than revealing the
+        // conversation's existence.
+        const [grant] = await db
+          .select({ role: agentMembers.role })
+          .from(agentMembers)
+          .where(
+            and(
+              eq(agentMembers.userId, session.userId),
+              eq(agentMembers.agentId, owner.agentId),
+              isNotNull(agentMembers.acceptedAt),
+            ),
+          )
+          .limit(1);
+        if (mem ? grant?.role === 'hidden' : !grant || grant.role === 'hidden') {
+          return c.json({ error: 'not found' }, 404);
+        }
+        if (session.workspaceId === owner.ws) {
+          // Already in the right workspace — the 404 the client saw means
+          // something else; tell it not to reload-loop.
+          return c.json({ ok: true, workspace_id: owner.ws, unchanged: true });
+        }
+        await db
+          .update(sessions)
+          .set({ workspaceId: owner.ws })
+          .where(eq(sessions.id, sessionId));
+        await db
+          .update(users)
+          .set({ lastWorkspaceId: owner.ws })
+          .where(eq(users.id, session.userId));
+        return c.json({ ok: true, workspace_id: owner.ws });
+      }
+
+      const targetWs = body.workspace_id!;
       const [mem] = await db
         .select()
         .from(memberships)
@@ -748,8 +817,13 @@ export function authRoutes(db: Db) {
     return user;
   };
 
-  const beginOAuth = (c: Context, authorizeUrl: string, params: Record<string, string>) => {
-    const state = randomBytes(16).toString('hex');
+  const beginOAuth = (
+    c: Context,
+    authorizeUrl: string,
+    params: Record<string, string>,
+    statePrefix = '',
+  ) => {
+    const state = statePrefix + randomBytes(16).toString('hex');
     setCookie(c, OAUTH_STATE_COOKIE, state, {
       httpOnly: true,
       sameSite: 'Lax',
@@ -759,6 +833,10 @@ export function authRoutes(db: Db) {
     const url = new URL(authorizeUrl);
     for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     url.searchParams.set('state', state);
+    // 302s are cacheable — a replayed authorize URL carries a dead state and
+    // the callback rejects it. Force the browser back through /auth/* for a
+    // fresh state cookie on every sign-in attempt.
+    c.header('Cache-Control', 'no-store');
     return c.redirect(url.toString());
   };
 
@@ -837,36 +915,118 @@ export function authRoutes(db: Db) {
     });
   });
 
-  // ---- Enterprise SSO (WorkOS AuthKit) --------------------------------
+  // ---- Enterprise SSO (WorkOS) ----------------------------------------
   // /auth/sso?connection=<id> | organization=<id> | domain=acme.com —
   // WorkOS brokers SAML/OIDC to the customer's IdP; we get a verified
   // profile back on the callback. Membership still comes from an existing
   // Janis account or invite — SSO proves identity, not authorization.
-  app.get('/sso', (c) => {
+  //
+  // Two WorkOS surfaces: user_management (AuthKit — providers/hosted UI)
+  // and the standalone SSO product (api.workos.com/sso/*). SAML/OIDC
+  // customer connections resolve ONLY on sso/authorize — user_management
+  // can't route them on non-migrated environments (ours is one). The
+  // `sso_`/`um_` state prefix tells the callback which exchange to use.
+  const ssoOrgForDomain = async (domain: string): Promise<string | undefined> => {
+    // WorkOS deprecated bare-domain routing, so we resolve it ourselves:
+    // the workspace that claimed this domain in Settings, then WorkOS's
+    // org-domain registry (covers orgs created outside our portal flow).
+    const [row] = await db
+      .select({ oid: sql<string>`config->'workos'->>'organization_id'` })
+      .from(workspaces)
+      .where(sql`config->'workos'->>'domain' = ${domain}`)
+      .limit(1);
+    if (row?.oid) return row.oid;
+    try {
+      const res = await fetch(
+        `https://api.workos.com/organizations?domains=${encodeURIComponent(domain)}`,
+        { headers: { authorization: `Bearer ${env.workosApiKey}` } },
+      );
+      const list = (await res.json()) as { data?: { id?: string }[] };
+      return list.data?.[0]?.id;
+    } catch {
+      return undefined;
+    }
+  };
+
+  app.get('/sso', async (c) => {
     if (!env.workosClientId || !env.workosApiKey) {
       return oauthError(c, 'SSO is not configured on this deployment');
     }
     const q = new URL(c.req.url).searchParams;
-    const params: Record<string, string> = {
+    const base: Record<string, string> = {
       client_id: env.workosClientId,
       redirect_uri: env.workosRedirectUri,
       response_type: 'code',
     };
-    // WorkOS accepts exactly one selector — prefer the most specific.
-    for (const k of ['connection', 'organization', 'domain', 'provider', 'login_hint'] as const) {
-      const v = q.get(k);
-      if (v) params[k] = v;
+    const provider = q.get('provider');
+    const loginHint = q.get('login_hint');
+    if (provider || loginHint) {
+      return beginOAuth(
+        c,
+        'https://api.workos.com/user_management/authorize',
+        {
+          ...base,
+          ...(provider ? { provider } : {}),
+          ...(loginHint ? { login_hint: loginHint } : {}),
+        },
+        'um_',
+      );
     }
-    if (!params.connection && !params.organization && !params.domain && !params.provider) {
+    let organization = q.get('organization');
+    const domain = q.get('domain')?.trim().toLowerCase();
+    if (!organization && domain) {
+      organization = (await ssoOrgForDomain(domain)) ?? null;
+      if (!organization) {
+        return oauthError(
+          c,
+          `No organization is set up for ${domain} — check your sign-in link or ask your admin`,
+        );
+      }
+    }
+    const connection = q.get('connection');
+    if (!connection && !organization) {
       return oauthError(c, 'SSO requires ?connection, ?organization, or ?domain');
     }
-    return beginOAuth(c, 'https://api.workos.com/user_management/authorize', params);
+    return beginOAuth(
+      c,
+      'https://api.workos.com/sso/authorize',
+      {
+        ...base,
+        ...(connection ? { connection } : {}),
+        ...(organization ? { organization } : {}),
+      },
+      'sso_',
+    );
   });
 
   app.get('/sso/callback', async (c) => {
     if (!checkState(c)) return oauthError(c, 'invalid OAuth state');
-    const code = new URL(c.req.url).searchParams.get('code');
+    const q = new URL(c.req.url).searchParams;
+    // WorkOS bounces selector/config errors back to the callback — surface
+    // their reason instead of a generic "missing code".
+    const errDesc = q.get('error_description') ?? q.get('error');
+    if (errDesc) return oauthError(c, `SSO: ${errDesc}`);
+    const code = q.get('code');
     if (!code) return oauthError(c, 'missing authorization code');
+    if ((q.get('state') ?? '').startsWith('sso_')) {
+      const res = await fetch('https://api.workos.com/sso/token', {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'authorization_code',
+          client_id: env.workosClientId,
+          client_secret: env.workosApiKey,
+          code,
+        }),
+      });
+      if (!res.ok) return oauthError(c, 'SSO authentication failed');
+      const data = (await res.json()) as {
+        profile?: { email?: string; first_name?: string; last_name?: string };
+      };
+      const p = data.profile;
+      const name = [p?.first_name, p?.last_name].filter(Boolean).join(' ');
+      return finishOAuth(c, { email: p?.email, name });
+    }
     const res = await fetch('https://api.workos.com/user_management/authenticate', {
       method: 'POST',
       headers: { 'content-type': 'application/x-www-form-urlencoded' },

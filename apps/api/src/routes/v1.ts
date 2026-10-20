@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, sql } from 'drizzle-orm';
 import { IngestRequest } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { channels, conversations, hookSubscriptions } from '../db/schema.js';
@@ -144,21 +144,19 @@ export function v1Routes(db: Db) {
       const conv = await convFor(agent.id, c.req.param('externalId'));
       if (!conv) return c.json({ error: 'conversation not found' }, 404);
       const { name, email, external_id, traits } = c.req.valid('json');
-      const base = (conv.userProfile ?? {}) as Record<string, unknown>;
       const patch: Record<string, unknown> = {
         ...(name ? { name } : {}),
         ...(email ? { email } : {}),
         ...(external_id ? { external_id, identity_verified: true } : {}),
       };
-      if (traits) {
-        patch.metadata = {
-          ...((base.metadata as Record<string, unknown>) ?? {}),
-          ...traits,
-        };
-      }
+      // Per-key merge — a stale read-modify-write would clobber concurrent
+      // verification/profile keys; traits concat at the nested metadata key.
+      let profileMerge = sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`;
+      if (traits)
+        profileMerge = sql`${profileMerge} || jsonb_build_object('metadata', coalesce(${conversations.userProfile}->'metadata', '{}'::jsonb) || ${JSON.stringify(traits)}::jsonb)`;
       await db
         .update(conversations)
-        .set({ userProfile: { ...base, ...patch } })
+        .set({ userProfile: profileMerge })
         .where(eq(conversations.id, conv.id));
       // Host-asserted data also enriches the bound contact — same trust bar
       // as an import, so no 'self-reported' tag. Traits merge into

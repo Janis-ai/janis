@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, gte, ilike, inArray, isNotNull, isNull, ne, or, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { Db } from '../db/client.js';
 import {
@@ -77,6 +77,10 @@ export interface BuiltinTool {
   /** JSON-schema-ish params the model fills, same shape as ToolDef.params. */
   params?: Record<string, string>;
   available: (workspaceId?: string) => boolean;
+  /** True for builtins a customer may arm on their own agents (the
+   *  "Platform tools" card). Operator-gated tools omit this — they stay
+   *  concierge-only no matter which workspace the agent lives in. */
+  platform?: boolean;
   run: (args: Record<string, string>, ctx?: BuiltinCtx) => Promise<string>;
 }
 
@@ -509,23 +513,33 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     description:
       'Search the web for current information, links, products or answers. Returns titles, URLs and snippets.',
     params: { q: 'search query' },
-    available: () => env.searchApiKey.length > 0,
+    platform: true,
+    available: () => env.searchApiKey.length > 0 || env.searchBaseUrl.length > 0,
     run: async (args) => {
-      const res = await fetch(
-        `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(args.q ?? '')}&count=5`,
-        {
-          headers: { 'X-Subscription-Token': env.searchApiKey, accept: 'application/json' },
-          signal: AbortSignal.timeout(10_000),
-        },
-      );
+      const q = encodeURIComponent(args.q ?? '');
+      // the endpoint is gated by a shared secret enforced by an auth shim
+      // in the searxng container — Bearer token on every call
+      const res = env.searchBaseUrl
+        ? await fetch(`${env.searchBaseUrl}/search?q=${q}&format=json`, {
+            headers: {
+              accept: 'application/json',
+              ...(env.searchToken ? { authorization: `Bearer ${env.searchToken}` } : {}),
+            },
+            signal: AbortSignal.timeout(10_000),
+          })
+        : await fetch(`https://api.search.brave.com/res/v1/web/search?q=${q}&count=5`, {
+            headers: { 'X-Subscription-Token': env.searchApiKey, accept: 'application/json' },
+            signal: AbortSignal.timeout(10_000),
+          });
       if (!res.ok) return `error: search failed (${res.status})`;
       const data = (await res.json()) as {
+        results?: { title?: string; url?: string; content?: string }[];
         web?: { results?: { title?: string; url?: string; description?: string }[] };
       };
-      const hits = (data.web?.results ?? [])
-        .slice(0, 5)
-        .map((r) => ({ title: r.title ?? '', url: r.url ?? '', snippet: r.description ?? '' }));
-      return JSON.stringify(hits);
+      const raw = env.searchBaseUrl
+        ? (data.results ?? []).map((r) => ({ title: r.title, url: r.url, snippet: r.content }))
+        : (data.web?.results ?? []).map((r) => ({ title: r.title, url: r.url, snippet: r.description }));
+      return JSON.stringify(raw.slice(0, 5));
     },
   },
   {
@@ -559,11 +573,44 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           agents: agentRows.length,
         });
       }
+      // Agent-scoped grants sit in the console switcher alongside member
+      // workspaces — a membership-only list makes the concierge deny an
+      // "agent access" workspace exists. Report them separately (grant
+      // holders can view the named agents, not manage the workspace).
+      const memberWsIds = new Set(accepted.map((m) => m.ws.id));
+      const grants = await ctx.db
+        .select({ workspaceId: agents.workspaceId, wsName: workspaces.name, agentName: agents.name })
+        .from(agentMembers)
+        .innerJoin(agents, eq(agentMembers.agentId, agents.id))
+        .innerJoin(workspaces, eq(agents.workspaceId, workspaces.id))
+        .where(
+          and(
+            eq(agentMembers.userId, user.id),
+            isNotNull(agentMembers.acceptedAt),
+            ne(agentMembers.role, 'hidden'),
+          ),
+        );
+      const grantWs = new Map<string, { name: string; agents: string[] }>();
+      for (const g of grants) {
+        if (memberWsIds.has(g.workspaceId)) continue;
+        const e = grantWs.get(g.workspaceId) ?? { name: g.wsName, agents: [] };
+        e.agents.push(g.agentName);
+        grantWs.set(g.workspaceId, e);
+      }
       return JSON.stringify({
         signed_in: true,
         name: user.name,
         email: user.email,
         workspaces: out,
+        ...(grantWs.size
+          ? {
+              agent_access: [...grantWs.values()].map((w) => ({
+                workspace: w.name,
+                agents: w.agents,
+                note: 'agent-scoped access — can view these agents, not a workspace member',
+              })),
+            }
+          : {}),
       });
     },
   },
@@ -1328,6 +1375,157 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         per_agent: perAgent,
         reports_url: `${env.webOrigin}/reports`,
       });
+    },
+  },
+  {
+    name: 'inspect_agent',
+    description:
+      "Read an agent's current setup in the visitor's workspace — tone, greeting, instructions, knowledge note lines, knowledge-source inventory, channels, routing rules, escalation/CSAT settings, procedures, collect-forms, saved components, tool names. ALWAYS call this before proposing a config change that depends on existing values (copying one agent's setup to another, 'what does X know', appending instructions) — never guess or fabricate existing config. To move knowledge to another agent, read it here first, then write it via teach_agent (facts) or add_knowledge_source kind=text (documents). Returns only what an admin sees on the agent's pages — never credentials, headers, secrets, tokens, or channel auth. Read-only — admin-only.",
+    params: {
+      agent: 'agent name (required)',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const picked = await visitorAgent(ctx, ws, args.agent);
+      if ('error' in picked) return JSON.stringify(picked);
+      const agent = picked.agent;
+      const cfg = (agent.config ?? {}) as AgentConfig;
+      const [files, chans, rules, widgets] = await Promise.all([
+        ctx.db
+          .select({
+            name: knowledgeFiles.name,
+            status: knowledgeFiles.status,
+            chars: sql<number>`length(${knowledgeFiles.text})`,
+            sourceUrl: knowledgeFiles.sourceUrl,
+            enabled: knowledgeFiles.enabled,
+          })
+          .from(knowledgeFiles)
+          .where(eq(knowledgeFiles.agentId, agent.id)),
+        // name + kind only — credentials (OAuth tokens, webhook secrets,
+        // API keys) are never surfaced to the transcript, even for admins
+        ctx.db
+          .select({ id: channels.id, name: channels.name, kind: channels.kind })
+          .from(channels)
+          .where(eq(channels.agentId, agent.id)),
+        ctx.db
+          .select({ kind: alertRules.kind, config: alertRules.config })
+          .from(alertRules)
+          .where(eq(alertRules.agentId, agent.id)),
+        ctx.db
+          .select({
+            name: agentWidgets.name,
+            description: agentWidgets.description,
+            autoGreet: agentWidgets.autoGreet,
+          })
+          .from(agentWidgets)
+          .where(eq(agentWidgets.agentId, agent.id)),
+      ]);
+      return JSON.stringify({
+        agent: agent.name,
+        // Real ids are the corpus console links verify against — without
+        // them the model invents a uuid and the link guard strips it.
+        agent_id: agent.id,
+        url: `${env.webOrigin}/agents/${agent.id}`,
+        tone: cfg.tone ?? null,
+        greeting: cfg.greeting ?? null,
+        greeting_enabled: cfg.greeting_enabled ?? null,
+        instructions: cfg.system_prompt ?? null,
+        quick_replies: cfg.quick_replies ?? [],
+        handoff_enabled: cfg.handoff_enabled ?? null,
+        auto_assign: cfg.auto_assign ?? null,
+        sla_minutes: cfg.sla_minutes ?? null,
+        csat: cfg.csat ?? null,
+        knowledge: cfg.knowledge ?? [],
+        procedures: (cfg.procedures ?? []).map((p) => ({
+          name: p.name,
+          when: p.when ?? null,
+          steps: p.steps.map((s) => (typeof s === 'string' ? s : { text: s.text, tool: s.tool ?? null })),
+        })),
+        collect_forms: (cfg.collect_forms ?? []).map((f) => ({
+          name: f.name,
+          when: f.when ?? null,
+          title: f.title ?? null,
+          fields: f.fields.map((fld) => ({ name: fld.name, label: fld.label, type: fld.type, required: fld.required ?? false })),
+          tags: f.tags ?? [],
+          // webhook destinations can embed auth tokens in the URL — report
+          // presence, not the value. Email destinations are member-visible.
+          webhook_configured: Boolean(f.webhook_url),
+          email_notify: f.email ?? null,
+        })),
+        tools: ((cfg.tools ?? []) as { name?: string }[]).map((t) => t.name).filter(Boolean),
+        knowledge_sources: files.map((f) => ({
+          name: f.name,
+          kind: f.sourceUrl ? 'url' : 'file',
+          status: f.status,
+          chars: f.chars,
+          enabled: f.enabled,
+          source_url: f.sourceUrl,
+        })),
+        channels: chans,
+        alert_rules: rules.map((r) => ({ kind: r.kind, config: r.config })),
+        components: widgets,
+      });
+    },
+  },
+  {
+    name: 'select_agent',
+    description:
+      "Switch the console's focus to an agent — 'select the Jerry bot', 'take me to marcel', 'work on X now'. Stamps the agent as this conversation's current selection (so follow-up 'this agent' asks resolve to it even in Slack) AND navigates the visitor's open console to the agent's page. Immediate, no approval — it's navigation, not a change. For a full settings rundown on the agent follow with inspect_agent. Any member.",
+    params: {
+      agent: 'agent name (required)',
+      workspace: 'workspace name — only needed when ambiguous',
+      section:
+        'optional console section to land on: inbox | behavior | knowledge | channels | integrations | components | tests | settings — default inbox',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace);
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const picked = await visitorAgent(ctx, ws, args.agent);
+      if ('error' in picked) return JSON.stringify(picked);
+      const agent = picked.agent;
+      // Allowlist — the path is emitted verbatim to SSE clients; never trust
+      // free text where a URL is expected.
+      const section = ['inbox', 'behavior', 'knowledge', 'channels', 'integrations', 'components', 'tests', 'settings'].includes(
+        String(args.section ?? '').toLowerCase(),
+      )
+        ? String(args.section).toLowerCase()
+        : 'inbox';
+      const path = `/agents/${agent.id}/${section}`;
+      // Stamp the selection on the conversation — the same metadata bag the
+      // rail stamps current_agent through, so Slack-side and thread-forked
+      // follow-ups resolve "this agent" even though the console's next
+      // message restamps from its own selection.
+      const stamp = JSON.stringify({ current_agent: agent.name, current_agent_id: agent.id });
+      await ctx.db
+        .update(conversations)
+        .set({
+          userProfile: sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || jsonb_build_object('metadata', coalesce(${conversations.userProfile}->'metadata', '{}'::jsonb) || ${stamp}::jsonb)`,
+        })
+        .where(eq(conversations.id, ctx.convId));
+      // Navigate the open console — user_id targets just this person's
+      // session; agent_id lets the stream's visibility filter drop the
+      // event for members who can't see the target.
+      bus.publish(ws.id, {
+        type: 'navigate',
+        data: { user_id: user.id, agent_id: agent.id, path },
+      });
+      return `focused: ${agent.name} — the console navigates to ${path} if it's open; this conversation now treats ${agent.name} as the selected agent. url: ${env.webOrigin}${path}`;
     },
   },
   {
@@ -3411,5 +3609,6 @@ export function builtinCatalog(workspaceId?: string) {
     name: b.name,
     description: b.description,
     available: b.available(workspaceId),
+    platform: b.platform === true,
   }));
 }

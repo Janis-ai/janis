@@ -8,6 +8,7 @@ import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAu
 import { hashPassword, verifyPassword } from '../lib/crypto.js';
 import { toWorkspaceUser } from '../lib/serializers.js';
 import { removeMemberFromAlertChannels } from '../lib/slack.js';
+import { sendEmail } from '../lib/notify.js';
 import { audit } from '../lib/audit.js';
 
 const createUser = z.object({
@@ -99,6 +100,25 @@ export function userRoutes(db: Db) {
     const workspaceId = c.get('workspaceId');
     const body = c.req.valid('json');
 
+    const [ws] = await db
+      .select({ name: workspaces.name })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    // Transactional, not a notify event — fires even when the invitee has
+    // never set prefs (they may not have an account yet).
+    const inviteEmail = (isNew: boolean) =>
+      void sendEmail(
+        [body.email],
+        `${me.name} invited you to ${ws?.name ?? 'a workspace'} on Janis`,
+        `Hi — ${me.name} invited you to join the "${ws?.name ?? ''}" workspace on Janis as ${body.role}. ${
+          isNew
+            ? 'Sign in with Google or Slack using this email — the invite will be waiting on the workspace switcher.'
+            : 'Sign in with this email and the invite will be waiting on the workspace switcher.'
+        }`,
+        '/conversations',
+      ).catch((err) => console.error('invite email failed:', err));
+
     const [existing] = await db.select().from(users).where(eq(users.email, body.email)).limit(1);
     if (existing) {
       const [mem] = await db
@@ -121,6 +141,7 @@ export function userRoutes(db: Db) {
         action: 'member.invite', targetType: 'user', targetId: existing.id,
         meta: { email: body.email, role: body.role },
       });
+      inviteEmail(false);
       return c.json(
         { user: { ...toWorkspaceUser(existing, body.role), status: 'invited' } },
         201,
@@ -142,6 +163,7 @@ export function userRoutes(db: Db) {
       action: 'member.invite', targetType: 'user', targetId: row.id,
       meta: { email: body.email, role: body.role },
     });
+    inviteEmail(true);
     return c.json({ user: { ...toWorkspaceUser(row, body.role), status: 'invited' } }, 201);
   });
 
@@ -166,6 +188,9 @@ export function userRoutes(db: Db) {
         password: z
           .object({ current: z.string().optional(), new: z.string().min(8) })
           .optional(),
+        // account display name (the signup/SSO-derived one) — distinct from
+        // display_name, which is the customer-facing operator override
+        name: z.string().trim().min(1).max(120).optional(),
         // customer-facing operator identity — shown on channels that enable
         // "show operator name"; empty string clears back to first name
         display_name: z.string().max(80).nullable().optional(),
@@ -180,10 +205,12 @@ export function userRoutes(db: Db) {
       const updates: {
         notifyPrefs?: object;
         passwordHash?: string;
+        name?: string;
         displayName?: string | null;
         avatarUrl?: string | null;
         showIdentity?: boolean;
       } = {};
+      if (body.name !== undefined) updates.name = body.name;
       if (body.notify) {
         const current = (me.notifyPrefs ?? {}) as {
           push?: boolean;

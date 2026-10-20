@@ -131,7 +131,7 @@ export default function AgentBuilder() {
       }),
     onSuccess: (r) => {
       setDraft(r.draft ?? null);
-      setLastAgent(r.agent.id);
+      if (me?.workspace?.id) setLastAgent(r.agent.id, me.workspace.id);
       void qc.invalidateQueries({ queryKey: ['agents'] });
       if (!r.agent.hosted) {
         // External agent — the builder's teach/guide/abilities don't apply;

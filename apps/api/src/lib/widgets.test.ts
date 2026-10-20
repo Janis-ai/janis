@@ -53,6 +53,22 @@ describe('widgetFromToolResult', () => {
     });
   });
 
+  it('reorders rows by a sort path — Stripe newest-first buries old products', () => {
+    const w = widgetFromToolResult(
+      { type: 'cards', items: 'data', sort: 'created', map: { title: 'name' } },
+      JSON.stringify({
+        data: [
+          { name: 'Janis AI usage', created: 2000 },
+          { name: 'Janis Starter', created: 1000 },
+          { name: 'Janis Pro', created: 1500 },
+        ],
+      }),
+    );
+    expect(w?.type).toBe('cards');
+    if (w?.type !== 'cards') return;
+    expect(w.items.map((i) => i.title)).toEqual(['Janis Starter', 'Janis Pro', 'Janis AI usage']);
+  });
+
   it('finds the first array-valued property without an items path', () => {
     const w = widgetFromToolResult(
       { type: 'options', map: { label: 'name' } },
@@ -688,6 +704,39 @@ describe('extractWidgets', () => {
     expect(out.dropped).toBe(2);
   });
 
+  it('parses a pretty-printed multi-line WIDGET: block — no JSON leaks', async () => {
+    const { extractWidgets } = await import('./widgets.js');
+    // Real incident: the model pretty-printed the spec and the raw JSON
+    // rendered verbatim to the customer.
+    const out = extractWidgets(
+      'Here is the tracker:\nWIDGET: {\n "type": "status",\n "title": "Order #1001",\n "steps": [\n  { "label": "Paid", "state": "done" },\n  { "label": "Shipped", "state": "todo" }\n ]\n}\nAnything else?',
+    );
+    expect(out.text).toBe('Here is the tracker:\nAnything else?');
+    expect(out.widgets).toHaveLength(1);
+    expect(out.widgets[0]).toMatchObject({ type: 'status', title: 'Order #1001' });
+    expect(out.dropped).toBe(0);
+  });
+
+  it('drops an unterminated WIDGET: block whole — continuation never leaks', async () => {
+    const { extractWidgets } = await import('./widgets.js');
+    const out = extractWidgets(
+      'Here it is:\nWIDGET: {\n "type": "status",\n "steps": [ broken\n\nAll prose after a blank line stays.',
+    );
+    expect(out.widgets).toHaveLength(0);
+    expect(out.dropped).toBe(1);
+    // The unterminated block is consumed; prose after a blank line survives.
+    expect(out.text).toBe('Here it is:\n\nAll prose after a blank line stays.');
+  });
+
+  it('resolves a WIDGET_REF whose data object spans lines', async () => {
+    const { extractWidgets } = await import('./widgets.js');
+    const out = extractWidgets(
+      'WIDGET_REF: order-status {\n "order_id": "#1001"\n}\nDone.',
+    );
+    expect(out.refs).toEqual([{ name: 'order-status', data: { order_id: '#1001' } }]);
+    expect(out.text).toBe('Done.');
+  });
+
   it('accepts an itemless cart widget — and dedupe survives it', async () => {
     const { extractWidgets, dedupeToolWidgets } = await import('./widgets.js');
     const out = extractWidgets('Your cart:\nWIDGET: {"type":"cart","title":"Your cart"}');
@@ -819,6 +868,372 @@ describe('resolveWidgetRef', () => {
       new Set(),
     );
     expect(spec2).toMatchObject({ title: 'Order #1932 — delivered' });
+    vi.unstubAllGlobals();
+  });
+
+  it('fills a status tracker\'s steps from tool rows — :stepstate normalises statuses', async () => {
+    const { resolveWidgetRef } = await import('./hostedAgent.js');
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            events: [
+              { name: 'Ordered', status: 'confirmed', eta: 'Nov 2' },
+              { name: 'Shipped', status: 'in_transit' },
+              { name: 'Delivered', status: 'pending' },
+            ],
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const tool = {
+      name: 'get_order',
+      method: 'GET',
+      url: 'http://localhost/orders/{order_id}',
+      params: { order_id: 'order id' },
+    } as never;
+    const def = {
+      spec: {
+        type: 'status',
+        title: 'Order {order_id}',
+        steps: [{ label: 'template', state: 'todo' }],
+      },
+      tool: {
+        name: 'get_order',
+        props: { order_id: 'order.id' },
+        items: 'events',
+        item_map: { label: 'name', state: '{status:stepstate}', note: 'eta' },
+      },
+    } as never;
+    const cap: { args?: Record<string, unknown>; result?: string; error?: string } = {};
+    const spec = await resolveWidgetRef(def, {}, [tool], {}, ctx, new Set(), cap);
+    expect(spec).toMatchObject({
+      type: 'status',
+      steps: [
+        { label: 'Ordered', state: 'done', note: 'Nov 2' },
+        { label: 'Shipped', state: 'current' },
+        { label: 'Delivered', state: 'todo' },
+      ],
+    });
+    expect(cap.args).toEqual({});
+    expect(cap.result).toContain('in_transit');
+    vi.unstubAllGlobals();
+  });
+
+  it('fills a receipt\'s rows from tool rows', async () => {
+    const { resolveWidgetRef } = await import('./hostedAgent.js');
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            lines: [
+              { name: 'Board', amount: { amount: '499.00', currencyCode: 'USD' } },
+              { name: 'Bindings', amount: { amount: '129.00', currencyCode: 'USD' } },
+            ],
+            total: '628.00',
+          }),
+          { status: 200 },
+        ),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const tool = { name: 'get_order', method: 'GET', url: 'http://localhost/o' } as never;
+    const def = {
+      spec: {
+        type: 'receipt',
+        title: 'Order summary',
+        rows: [{ label: 'template', value: 'x' }],
+        total: { label: 'Total', value: '{total}' },
+      },
+      tool: {
+        name: 'get_order',
+        props: { total: 'total' },
+        items: 'lines',
+        item_map: { label: 'name', value: '{amount.amount:money}' },
+      },
+    } as never;
+    const spec = await resolveWidgetRef(def, {}, [tool], {}, ctx, new Set());
+    expect(spec).toMatchObject({
+      type: 'receipt',
+      rows: [
+        { label: 'Board', value: '$499.00' },
+        { label: 'Bindings', value: '$129.00' },
+      ],
+      total: { label: 'Total', value: '628.00' },
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it(':date and :pretty make raw API values readable', async () => {
+    const { propsFromResult } = await import('./widgets.js');
+    const props = propsFromResult(
+      {
+        when: '{createdAt:date}',
+        status: '{displayFulfillmentStatus:pretty}',
+        transit: '{trackingStatus:pretty}',
+        bad: '{missing:date}',
+      },
+      {
+        createdAt: '2026-10-16T23:20:13Z',
+        displayFulfillmentStatus: 'UNFULFILLED',
+        trackingStatus: 'out_for_delivery',
+      },
+    );
+    expect(props).toEqual({
+      when: 'Oct 16, 2026',
+      status: 'Unfulfilled',
+      transit: 'Out for delivery',
+    });
+  });
+
+  it(':trackstate picks cancelled/delivered/transit variants from the order node', async () => {
+    const { propsFromResult } = await import('./widgets.js');
+    const track = (node: unknown) =>
+      propsFromResult({ state: '{.:trackstate}' }, node as never).state;
+    const order = (over: Record<string, unknown>) => ({
+      displayFulfillmentStatus: 'UNFULFILLED',
+      fulfillments: [],
+      ...over,
+    });
+    expect(track(order({ cancelledAt: '2026-10-17T00:00:00Z' }))).toBe('cancelled');
+    expect(track(order({}))).toBe('unfulfilled');
+    expect(track(order({ displayFulfillmentStatus: 'FULFILLED' }))).toBe('shipped');
+    expect(
+      track(
+        order({
+          fulfillments: [{ events: { nodes: [{ status: 'delivered' }] } }],
+        }),
+      ),
+    ).toBe('delivered');
+    expect(
+      track(order({ fulfillments: [{ events: { nodes: [{ status: 'out_for_delivery' }] } }] })),
+    ).toBe('in_transit');
+    // a held order is not mid-shipment — its own variant
+    expect(track(order({ displayFulfillmentStatus: 'ON_HOLD' }))).toBe('on_hold');
+    // cancelled still outranks everything
+    expect(
+      track(order({ cancelledAt: 'x', displayFulfillmentStatus: 'ON_HOLD' })),
+    ).toBe('cancelled');
+    // digital orders never ship — no delivery pipeline
+    expect(track(order({ displayFulfillmentStatus: 'FULFILLMENT_NOT_REQUIRED' }))).toBe('no_shipping');
+    expect(
+      track(
+        order({
+          lineItems: { nodes: [{ requiresShipping: false }, { requiresShipping: false }] },
+        }),
+      ),
+    ).toBe('no_shipping');
+    // one shippable item keeps the pipeline
+    expect(
+      track(
+        order({
+          lineItems: { nodes: [{ requiresShipping: false }, { requiresShipping: true }] },
+        }),
+      ),
+    ).toBe('unfulfilled');
+    // pickup orders: a shipping line (the pickup point) but NO shipping
+    // address — nothing travels, so no Shipped→Delivered pipeline
+    expect(
+      track(order({ shippingAddress: null, shippingLine: { title: 'Front counter' } })),
+    ).toBe('pickup');
+    expect(
+      track(
+        order({
+          shippingAddress: null,
+          shippingLine: { title: 'Front counter' },
+          displayFulfillmentStatus: 'FULFILLED',
+        }),
+      ),
+    ).toBe('picked_up');
+    // a POS-style order (no address, no shipping line) is NOT pickup
+    expect(track(order({ shippingAddress: null }))).toBe('unfulfilled');
+    // a real shippable order keeps its pipeline even with fields present
+    expect(
+      track(
+        order({
+          shippingAddress: { city: 'Toronto' },
+          shippingLine: { title: 'Standard' },
+        }),
+      ),
+    ).toBe('unfulfilled');
+  });
+
+  it(':orderline gives cancelled/refunded orders an honest one-line status', async () => {
+    const { propsFromResult } = await import('./widgets.js');
+    const line = (node: unknown) =>
+      propsFromResult({ s: '{.:orderline}' }, node as never).s;
+    expect(line({ cancelledAt: 'x', displayFulfillmentStatus: 'FULFILLMENT_NOT_REQUIRED' })).toBe('Cancelled');
+    expect(line({ displayFinancialStatus: 'REFUNDED' })).toBe('Refunded');
+    expect(line({ displayFinancialStatus: 'PARTIALLY_REFUNDED' })).toBe('Partially refunded');
+    expect(line({ displayFulfillmentStatus: 'UNFULFILLED' })).toBe('Unfulfilled');
+    expect(line({ displayFulfillmentStatus: 'FULFILLMENT_NOT_REQUIRED' })).toBe('No shipping needed');
+    // pickup orders never ship — "Unfulfilled" undersells "waiting at the counter"
+    expect(
+      line({
+        displayFulfillmentStatus: 'UNFULFILLED',
+        shippingAddress: null,
+        shippingLine: { title: 'Front counter' },
+      }),
+    ).toBe('Awaiting pickup');
+    expect(
+      line({
+        displayFulfillmentStatus: 'FULFILLED',
+        shippingAddress: null,
+        shippingLine: { title: 'Front counter' },
+      }),
+    ).toBe('Picked up');
+  });
+
+  it(':nonzero drops zero money values and :paren wraps codes', async () => {
+    const { propsFromResult } = await import('./widgets.js');
+    const props = propsFromResult(
+      {
+        disc: '{o.totalDiscountsSet.shopMoney.amount:money:nonzero}',
+        ship: '{o.totalShippingPriceSet.shopMoney.amount:money:nonzero}',
+        code: '{o.discountCodes.0:paren}',
+        code2: '{o.discountCodes.1:paren}',
+      },
+      {
+        o: {
+          totalDiscountsSet: { shopMoney: { amount: '88.59', currencyCode: 'USD' } },
+          totalShippingPriceSet: { shopMoney: { amount: '0.00', currencyCode: 'USD' } },
+          discountCodes: ['TEST10'],
+        },
+      } as never,
+    );
+    expect(props.disc).toBe('$88.59');
+    expect(props.ship).toBeUndefined();
+    expect(props.code).toBe('(TEST10)');
+    expect(props.code2).toBeUndefined();
+  });
+
+  it('a cancelled order selects the cancelled tracker variant', async () => {
+    const { resolveWidgetRef } = await import('./hostedAgent.js');
+    vi.stubGlobal('fetch', vi.fn());
+    const tool = {
+      name: 'lookup_order',
+      method: 'POST',
+      url: 'http://localhost/graphql',
+      bodyTemplate: '{"email":{email},"order":{order_number}}',
+    } as never;
+    const def = {
+      spec: {
+        type: 'status',
+        title: 'Order {order_name}',
+        steps: [
+          { label: 'Ordered & paid', state: 'done', note: '{fin_status} {total}' },
+          { label: 'Shipped', state: 'todo' },
+          { label: 'Delivered', state: 'todo' },
+        ],
+      },
+      states: [
+        {
+          name: 'cancelled',
+          spec: {
+            type: 'status',
+            title: 'Order {order_name} — Cancelled',
+            steps: [
+              { label: 'Ordered', state: 'done', note: '{fin_status} {total}' },
+              { label: 'Cancelled', state: 'current', note: '{cancel_reason}' },
+            ],
+          },
+        },
+      ],
+      tool: {
+        name: 'lookup_order',
+        props: {
+          order_name: 'data.orders.nodes.0.name',
+          total: '{data.orders.nodes.0.totalPriceSet.shopMoney.amount:money}',
+          fin_status: '{data.orders.nodes.0.displayFinancialStatus:pretty}',
+          cancel_reason: '{data.orders.nodes.0.cancelReason:pretty}',
+          state: '{data.orders.nodes.0:trackstate}',
+        },
+      },
+    } as never;
+    const prior = JSON.stringify({
+      data: {
+        orders: {
+          nodes: [
+            {
+              name: '#1007',
+              cancelledAt: '2026-10-17T14:18:14Z',
+              cancelReason: 'CUSTOMER',
+              displayFinancialStatus: 'PAID',
+              displayFulfillmentStatus: 'FULFILLMENT_NOT_REQUIRED',
+              totalPriceSet: { shopMoney: { amount: '10.00' } },
+              fulfillments: [],
+            },
+          ],
+        },
+      },
+    });
+    const spec = await resolveWidgetRef(def, {}, [tool], {}, ctx, new Set(), undefined, prior);
+    expect(spec).toMatchObject({
+      title: 'Order #1007 — Cancelled',
+      steps: [
+        { label: 'Ordered', state: 'done', note: 'Paid $10.00' },
+        { label: 'Cancelled', state: 'current', note: 'Customer' },
+      ],
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it('a bare ref reuses the bound tool\'s earlier result instead of re-calling with empty args', async () => {
+    const { resolveWidgetRef } = await import('./hostedAgent.js');
+    // Real incident: the model ran shopify_lookup_order itself then emitted
+    // "WIDGET_REF: order-tracker" with no data — the resolver re-called the
+    // tool with empty args, hit "missing required args" and the component
+    // silently vanished, leaving a bare lead-in.
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const tool = {
+      name: 'lookup_order',
+      method: 'POST',
+      url: 'http://localhost/graphql',
+      bodyTemplate: '{"email":{email},"order":{order_number}}',
+    } as never;
+    const def = {
+      spec: {
+        type: 'status',
+        title: 'Order {order_name}',
+        steps: [{ label: 'Ordered', state: 'done', note: 'Paid {total}' }],
+      },
+      tool: {
+        name: 'lookup_order',
+        props: {
+          order_name: 'data.orders.nodes.0.name',
+          total: '{data.orders.nodes.0.totalPriceSet.shopMoney.amount:money}',
+        },
+      },
+    } as never;
+    const prior = JSON.stringify({
+      data: { orders: { nodes: [{ name: '#1001', totalPriceSet: { shopMoney: { amount: '949.95' } } }] } },
+    });
+    const spec = await resolveWidgetRef(def, {}, [tool], {}, ctx, new Set(), undefined, prior);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(spec).toMatchObject({
+      title: 'Order #1001',
+      steps: [{ label: 'Ordered', state: 'done', note: 'Paid $949.95' }],
+    });
+    // …but a ref carrying its own args still re-fetches (the data may ask
+    // for a different record than the earlier call).
+    fetchMock.mockImplementation(() =>
+      Promise.resolve(new Response('{"data":{"orders":{"nodes":[{"name":"#2000","totalPriceSet":{"shopMoney":{"amount":"10.00"}}}]}}}', { status: 200 })),
+    );
+    const spec2 = await resolveWidgetRef(
+      def,
+      { email: 'a@b.c', order_number: '#2000' },
+      [tool],
+      {},
+      ctx,
+      new Set(),
+      undefined,
+      prior,
+    );
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(spec2).toMatchObject({ title: 'Order #2000' });
     vi.unstubAllGlobals();
   });
 });

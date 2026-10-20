@@ -168,6 +168,9 @@ export function ChannelCard({
           </button>
         )}
       </div>
+      {remove.error && (
+        <div className="error" style={{ fontSize: 12, marginTop: 4 }}>{remove.error.message}</div>
+      )}
       <div className="muted" style={{ marginTop: 6 }}>
         Answered by {ch.agent_name}
         {dead && <span className="badge warn" style={{ marginLeft: 6 }}>agent unreachable</span>}
@@ -417,8 +420,19 @@ function EmailFromName({ channel }: { channel: Channel }) {
  *  feature is `answer_addresses`: mail To/Cc/Delivered-To'd to a listed
  *  address is ingested even when it's list-fanned — that's what makes a
  *  Google Group / alias / shared mailbox work. */
+/** Whether this deployment offers per-channel custom sending domains —
+ *  false when the platform Resend account's domain quota is spoken for. */
+function useEmailDomainEnabled() {
+  return useQuery({
+    queryKey: ['email-domain-enabled'],
+    queryFn: () => api<{ enabled: boolean }>('/api/channels/email-domain/status'),
+    staleTime: 5 * 60_000,
+  }).data?.enabled;
+}
+
 function EmailAnswerRules({ channel }: { channel: Channel }) {
   const qc = useQueryClient();
+  const domainEnabled = useEmailDomainEnabled();
   const f = channel.meta.email_filters ?? {};
   const [form, setForm] = useState({
     answer_addresses: (f.answer_addresses ?? []).join('\n'),
@@ -527,7 +541,7 @@ function EmailAnswerRules({ channel }: { channel: Channel }) {
             ? 'A send-as alias verified in Gmail settings (Settings → Accounts → Send mail as) — e.g. the group address.'
             : channel.kind === 'outlook'
               ? 'A shared mailbox or alias the account can Send As in Microsoft 365.'
-              : `On the inbound domain, replies send from the channel's own reply address (${channel.meta.reply_address ?? 'auto-generated'}). For a custom-domain From, verify a domain below — customer replies still route to the reply address.`}
+              : `On the inbound domain, replies send from the channel's own reply address (${channel.meta.reply_address ?? 'auto-generated'}).${domainEnabled !== false ? ' For a custom-domain From, verify a domain below — customer replies still route to the reply address.' : ''}`}
         </div>
       </div>
       {channel.kind === 'email' && (
@@ -1654,6 +1668,7 @@ type DomainResp = {
 
 function EmailDomainCard({ channel }: { channel: Channel }) {
   const qc = useQueryClient();
+  const enabled = useEmailDomainEnabled();
   const [domain, setDomain] = useState(channel.meta.email_domain ?? '');
   const [registered, setRegistered] = useState(channel.meta.email_domain ?? '');
   const [status, setStatus] = useState(channel.meta.email_domain_status ?? '');
@@ -1697,6 +1712,9 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
         setMsg(friendlyError(e instanceof Error ? e.message : 'failed').text);
         return false;
       });
+  // Feature off on this deployment (platform Resend quota) — hide the card
+  // entirely unless a domain is already registered, so Remove stays reachable.
+  if (enabled === false && !registered) return null;
   return (
     <div style={{ marginTop: 14 }}>
       <div style={{ fontSize: 13, fontWeight: 600 }}>

@@ -87,14 +87,16 @@ export async function dispatchAlert(
   agent: AgentRow,
   conv: ConvRow,
   alert: AlertRow,
-  opts: { userIds?: string[]; event?: NotifyEvent } = {},
+  opts: { userIds?: string[]; event?: NotifyEvent; notify?: 'workspace' | string[] } = {},
 ): Promise<void> {
   const n = await alertNotification(db, alert, conv, agent);
   bus.publish(agent.workspaceId, {
     type: 'alert',
     data: { ...toAlert(alert), notification: n },
   });
-  void postSlackAlert(db, agent.workspaceId, conv, agent, alert).catch(() => {});
+  void postSlackAlert(db, agent.workspaceId, conv, agent, alert, { notify: opts.notify }).catch(
+    () => {},
+  );
   void notifyWorkspace(db, agent.workspaceId, n, {
     agentId: agent.id,
     userIds: opts.userIds,

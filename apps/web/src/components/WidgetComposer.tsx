@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus, Trash2, X } from 'lucide-react';
 import { api } from '../api/client';
 import { Widgets, type ChatWidget } from './ChatWidgets';
 
@@ -12,10 +12,25 @@ interface WidgetToolBinding {
   item_map?: Record<string, string>;
 }
 
+/** The subset of a ToolDef the composer needs — name + declared params for
+ *  the args hint. */
+export interface WidgetTool {
+  name: string;
+  params?: Record<string, string>;
+}
+
+interface TestResult {
+  widget?: ChatWidget;
+  tool_args?: Record<string, unknown>;
+  tool_result?: string;
+  error?: string;
+}
+
 interface SavedWidget {
   id: string;
   agentId: string;
   name: string;
+  description?: string | null;
   spec: ChatWidget;
   states?: { name: string; spec: ChatWidget }[] | null;
   tool?: WidgetToolBinding | null;
@@ -52,7 +67,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
  *  when the agent emits "WIDGET_REF: <name>" — deterministic content, the
  *  model only chooses the moment. "Show when the chat opens" pins it under
  *  the greeting on an empty webchat thread. */
-export function SavedWidgets({ agentId, isAdmin, tools = [] }: { agentId: string; isAdmin: boolean; tools?: string[] }) {
+export function SavedWidgets({ agentId, isAdmin, tools = [] }: { agentId: string; isAdmin: boolean; tools?: WidgetTool[] }) {
   const qc = useQueryClient();
   const { data } = useQuery({
     queryKey: ['agent-widgets', agentId],
@@ -65,6 +80,7 @@ export function SavedWidgets({ agentId, isAdmin, tools = [] }: { agentId: string
     mutationFn: (w: {
       id?: string;
       name: string;
+      description?: string;
       spec: ChatWidget;
       states: { name: string; spec: ChatWidget }[];
       tool: WidgetToolBinding | null;
@@ -107,6 +123,7 @@ export function SavedWidgets({ agentId, isAdmin, tools = [] }: { agentId: string
         editing !== 'new' && editing?.id === w.id ? (
           <Composer
             key={w.id}
+            agentId={agentId}
             initial={w}
             tools={tools}
             saving={save.isPending}
@@ -118,6 +135,11 @@ export function SavedWidgets({ agentId, isAdmin, tools = [] }: { agentId: string
           <div key={w.id} className="card" style={{ background: 'var(--panel-2)', padding: 10 }}>
             <div className="row">
               <span className="mono grow" style={{ fontSize: 13 }}>{w.name}</span>
+              {w.description && (
+                <span className="muted" style={{ fontSize: 11.5 }} title={w.description}>
+                  {w.description}
+                </span>
+              )}
               <span className="badge">{w.spec.type}</span>
               {w.tool && <span className="badge" title={`Bound to ${w.tool.name}`}>⚡ {w.tool.name}</span>}
               {!!w.states?.length && (
@@ -160,6 +182,7 @@ export function SavedWidgets({ agentId, isAdmin, tools = [] }: { agentId: string
       )}
       {editing === 'new' && (
         <Composer
+          agentId={agentId}
           initial={null}
           tools={tools}
           saving={save.isPending}
@@ -178,6 +201,7 @@ const TYPES: { value: ChatWidget['type']; label: string }[] = [
   { value: 'form', label: 'Form — collects fields' },
   { value: 'status', label: 'Status — progress tracker' },
   { value: 'receipt', label: 'Receipt — line-item summary' },
+  { value: 'pricing', label: 'Pricing — plan cards with monthly/annual' },
 ];
 
 function emptySpec(type: ChatWidget['type']): ChatWidget {
@@ -192,14 +216,56 @@ function emptySpec(type: ChatWidget['type']): ChatWidget {
       return { type, title: 'Order #1234', steps: [{ label: 'Ordered', state: 'done' }, { label: 'Shipped', state: 'current' }, { label: 'Delivered', state: 'todo' }] };
     case 'receipt':
       return { type, title: 'Order summary', rows: [{ label: 'Widget', value: '$29.00' }], total: { label: 'Total', value: '$29.00' } };
+    case 'pricing':
+      return {
+        type,
+        items: [
+          { name: 'Starter', price: '$29/mo', price_alt: '$290/yr — pay 10, get 12', blurb: 'For growing teams', features: ['2,000 messages/mo'], select_label: 'Tell me about Starter' },
+          { name: 'Pro', price: '$99/mo', price_alt: '$990/yr — pay 10, get 12', highlight: true, features: ['20,000 messages/mo'], select_label: 'Tell me about Pro' },
+        ],
+      };
     // Not in TYPES — the agent emits cart widgets; it isn't authored here.
     case 'cart':
       return { type, title: 'Your cart' };
   }
 }
 
+/** Which spec array the bound tool's result rows fill — the composer tells
+ *  the builder where item_map lands instead of leaving them to guess. */
+const LIST_FIELD_LABEL: Record<string, string> = {
+  cards: 'items',
+  options: 'items',
+  pricing: 'items',
+  status: 'steps',
+  receipt: 'rows',
+};
+
+function mappingExample(type: string): string {
+  switch (type) {
+    case 'status':
+      return '{"items":"events","item_map":{"label":"name","state":"{status:stepstate}","note":"eta"}}';
+    case 'receipt':
+      return '{"items":"lines","item_map":{"label":"name","value":"{amount:money}"}}';
+    case 'options':
+      return '{"items":"rows","item_map":{"label":"name","description":"desc"}}';
+    case 'cards':
+      return '{"items":"products","item_map":{"title":"title","price":"{price:money}","cart_variant_id":"{id:gidnum}"}}';
+    default:
+      return '{"props":{"title":"result.title"}}';
+  }
+}
+
+function prettyJson(raw?: string): string {
+  try {
+    return JSON.stringify(JSON.parse(raw ?? ''), null, 2);
+  } catch {
+    return raw ?? '';
+  }
+}
+
 function Composer({
   initial,
+  agentId,
   tools,
   saving,
   error,
@@ -207,13 +273,15 @@ function Composer({
   onSave,
 }: {
   initial: SavedWidget | null;
-  tools: string[];
+  agentId: string;
+  tools: WidgetTool[];
   saving: boolean;
   error: string;
   onCancel: () => void;
   onSave: (w: {
     id?: string;
     name: string;
+    description?: string;
     spec: ChatWidget;
     states: { name: string; spec: ChatWidget }[];
     tool: WidgetToolBinding | null;
@@ -221,6 +289,7 @@ function Composer({
   }) => void;
 }) {
   const [name, setName] = useState(initial?.name ?? '');
+  const [description, setDescription] = useState(initial?.description ?? '');
   const [spec, setSpec] = useState<ChatWidget>(initial?.spec ?? emptySpec('cards'));
   const [states, setStates] = useState<{ name: string; spec: ChatWidget }[]>(initial?.states ?? []);
   const [toolName, setToolName] = useState(initial?.tool?.name ?? '');
@@ -233,26 +302,95 @@ function Composer({
   });
   const [autoGreet, setAutoGreet] = useState(initial?.autoGreet ?? false);
   const [jsonErr, setJsonErr] = useState('');
+  const [testData, setTestData] = useState('{}');
+  const [testBusy, setTestBusy] = useState(false);
+  const [testOut, setTestOut] = useState<TestResult | null>(null);
+  // States edit collapsed by default — a variant is a full spec, so showing
+  // every editor inline made the composer twice as tall as it is.
+  const [openStates, setOpenStates] = useState<Set<number>>(new Set());
+  const toggleState = (i: number) =>
+    setOpenStates((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  const removeState = (i: number) => {
+    setStates(states.filter((_, j) => j !== i));
+    setOpenStates((prev) => new Set([...prev].filter((j) => j !== i).map((j) => (j > i ? j - 1 : j))));
+  };
 
   const setType = (t: ChatWidget['type']) => {
     if (t !== spec.type) setSpec(emptySpec(t));
   };
   const nameOk = /^[a-z][a-z0-9_-]{0,39}$/.test(name.trim().toLowerCase());
-  const save = () => {
-    let tool: WidgetToolBinding | null = null;
-    if (toolName) {
-      let extra: Record<string, unknown> = {};
-      if (toolCfg.trim()) {
-        try {
-          const parsed: unknown = JSON.parse(toolCfg);
-          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
-          extra = parsed as Record<string, unknown>;
-        } catch {
-          setJsonErr('tool mapping is not valid JSON');
-          return;
-        }
+
+  /** toolName + the mapping textarea → binding object, or an error string. */
+  const buildTool = (): { tool: WidgetToolBinding | null; err?: string } => {
+    if (!toolName) return { tool: null };
+    let extra: Record<string, unknown> = {};
+    if (toolCfg.trim()) {
+      try {
+        const parsed: unknown = JSON.parse(toolCfg);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+        extra = parsed as Record<string, unknown>;
+      } catch {
+        return { tool: null, err: 'tool mapping is not valid JSON' };
       }
-      tool = { name: toolName, ...(extra as Omit<WidgetToolBinding, 'name'>) };
+    }
+    return { tool: { name: toolName, ...(extra as Omit<WidgetToolBinding, 'name'>) } };
+  };
+
+  const normStates = () =>
+    states.map((s) => ({
+      name: s.name.trim().toLowerCase().replace(/[\s_]+/g, '-'),
+      spec: s.spec,
+    }));
+
+  const runTest = async () => {
+    const { tool, err } = buildTool();
+    if (err) {
+      setJsonErr(err);
+      return;
+    }
+    if (states.some((s) => !s.name.trim())) {
+      setJsonErr('every state needs a name');
+      return;
+    }
+    let data: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(testData || '{}');
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+      data = parsed as Record<string, unknown>;
+    } catch {
+      setJsonErr('test data is not a JSON object');
+      return;
+    }
+    setJsonErr('');
+    setTestBusy(true);
+    try {
+      const out = await api<TestResult>(`/api/agents/${agentId}/widgets/test`, {
+        method: 'POST',
+        body: JSON.stringify({ spec, states: normStates(), tool, data }),
+      });
+      setTestOut(out);
+    } catch (e) {
+      setTestOut({
+        error:
+          e instanceof Error && e.message !== '[object Object]'
+            ? e.message
+            : 'test failed — check state names and the mapping',
+      });
+    } finally {
+      setTestBusy(false);
+    }
+  };
+
+  const save = () => {
+    const { tool, err } = buildTool();
+    if (err) {
+      setJsonErr(err);
+      return;
     }
     if (states.some((s) => !s.name.trim())) {
       setJsonErr('every state needs a name');
@@ -264,11 +402,9 @@ function Composer({
       onSave({
         id: initial?.id,
         name: name.trim().toLowerCase(),
+        description: description.trim() || undefined,
         spec,
-        states: states.map((s) => ({
-          name: s.name.trim().toLowerCase().replace(/[\s_]+/g, '-'),
-          spec: s.spec,
-        })),
+        states: normStates(),
         tool,
         auto_greet: autoGreet,
       });
@@ -297,6 +433,16 @@ function Composer({
           <select className="input" style={inputStyle} value={spec.type} onChange={(e) => setType(e.target.value as ChatWidget['type'])}>
             {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
           </select>
+        </Field>
+        <Field label="when to use — one line; the agent reads this to pick this component over prose or another widget">
+          <input
+            className="input"
+            style={{ ...inputStyle, minWidth: 220 }}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="customer asks where their order is"
+            maxLength={200}
+          />
         </Field>
       </div>
       {!nameOk && name && <div className="error">lowercase letters, numbers, - and _ — starts with a letter</div>}
@@ -328,38 +474,52 @@ function Composer({
           States — named variants the agent selects with {'{"state":"name"}'} (e.g. a
           &quot;not found&quot; state with different steps or no buttons)
         </div>
-        {states.map((st, i) => (
-          <div key={i} className="card" style={{ padding: 8, borderStyle: 'dashed' }}>
-            <div className="row" style={{ marginBottom: 2 }}>
-              <input
-                className="input grow"
-                style={inputStyle}
-                placeholder="state name (e.g. in_transit)"
-                value={st.name}
-                onChange={(e) =>
-                  setStates(states.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
-                }
-              />
-              <button
-                className="btn sm"
-                onClick={() => setStates(states.filter((_, j) => j !== i))}
-                aria-label={`Remove state ${i + 1}`}
-              >
-                <Trash2 size={12} />
-              </button>
+        {states.map((st, i) => {
+          const open = openStates.has(i);
+          return (
+            <div key={i} className="card" style={{ padding: 8, borderStyle: 'dashed' }}>
+              <div className="row" style={{ marginBottom: open ? 4 : 0 }}>
+                <button
+                  className="btn sm"
+                  onClick={() => toggleState(i)}
+                  aria-label={open ? `Collapse state ${i + 1}` : `Expand state ${i + 1}`}
+                  title={open ? 'Collapse' : 'Expand'}
+                >
+                  {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                </button>
+                <input
+                  className="input grow"
+                  style={inputStyle}
+                  placeholder="state name (e.g. in_transit)"
+                  value={st.name}
+                  onChange={(e) =>
+                    setStates(states.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
+                  }
+                />
+                <button
+                  className="btn sm"
+                  onClick={() => removeState(i)}
+                  aria-label={`Remove state ${i + 1}`}
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+              {open && (
+                <SpecEditor
+                  spec={st.spec}
+                  onChange={(s) => setStates(states.map((x, j) => (j === i ? { ...x, spec: s } : x)))}
+                />
+              )}
             </div>
-            <SpecEditor
-              spec={st.spec}
-              onChange={(s) => setStates(states.map((x, j) => (j === i ? { ...x, spec: s } : x)))}
-            />
-          </div>
-        ))}
+          );
+        })}
         <button
           className="btn sm"
           style={{ alignSelf: 'flex-start' }}
-          onClick={() =>
-            setStates([...states, { name: '', spec: JSON.parse(JSON.stringify(spec)) as ChatWidget }])
-          }
+          onClick={() => {
+            setStates([...states, { name: '', spec: JSON.parse(JSON.stringify(spec)) as ChatWidget }]);
+            setOpenStates((prev) => new Set(prev).add(states.length));
+          }}
         >
           <Plus size={12} /> Add state
         </button>
@@ -367,31 +527,84 @@ function Composer({
 
       {/* Tool binding — the component IS a tool invocation when bound. */}
       {tools.length > 0 && (
-        <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
-          <Field label="bound tool — runs when the component is referenced, fills {props} from its result">
-            <select
-              className="input"
-              style={inputStyle}
-              value={toolName}
-              onChange={(e) => setToolName(e.target.value)}
-            >
-              <option value="">none — static / prop-filled</option>
-              {tools.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
-            </select>
-          </Field>
-          {toolName && (
-            <Field label='mapping JSON — {"args":{"prop":"param"},"props":{"prop":"result.path"},"items":"rows.path","item_map":{"field":"row.path"}}'>
-              <textarea
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <Field label="bound tool — runs when the component is referenced, fills {props} and list rows from its result">
+              <select
                 className="input"
-                style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
-                rows={3}
-                value={toolCfg}
-                onChange={(e) => setToolCfg(e.target.value)}
-                placeholder='{"props":{"status":"order.status"},"items":"orders","item_map":{"title":"name","price":"total"}}'
-              />
+                style={inputStyle}
+                value={toolName}
+                onChange={(e) => {
+                  setToolName(e.target.value);
+                  setTestOut(null);
+                }}
+              >
+                <option value="">none — static / prop-filled</option>
+                {tools.map((t) => (
+                  <option key={t.name} value={t.name}>{t.name}</option>
+                ))}
+              </select>
             </Field>
+            {toolName && (
+              <Field label="mapping JSON">
+                <textarea
+                  className="input"
+                  style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
+                  rows={3}
+                  value={toolCfg}
+                  onChange={(e) => setToolCfg(e.target.value)}
+                  placeholder={mappingExample(spec.type)}
+                />
+              </Field>
+            )}
+          </div>
+          {toolName && (
+            <div className="muted mono" style={{ fontSize: 11 }}>
+              {'{"args":{},"props":{},"items":"rows.path","item_map":{}}'}
+              {LIST_FIELD_LABEL[spec.type] ? ` — rows fill ${LIST_FIELD_LABEL[spec.type]}` : ' — scalar props only'}
+            </div>
+          )}
+          {toolName &&
+            (() => {
+              const params = Object.keys(tools.find((t) => t.name === toolName)?.params ?? {});
+              return params.length ? (
+                <div className="muted" style={{ fontSize: 11.5 }}>
+                  takes args: <span className="mono">{params.join(', ')}</span> — the agent
+                  supplies them in the ref data (rename via {'"args"'} in the mapping)
+                </div>
+              ) : null;
+            })()}
+          {toolName && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div className="row" style={{ alignItems: 'flex-end' }}>
+                <Field label="test data — the ref JSON the agent would pass">
+                  <input
+                    className="input"
+                    style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
+                    value={testData}
+                    onChange={(e) => setTestData(e.target.value)}
+                    placeholder='{"order_id":"#1234"}'
+                  />
+                </Field>
+                <button className="btn" disabled={testBusy} onClick={runTest}>
+                  {testBusy ? 'Running…' : 'Run with real data'}
+                </button>
+              </div>
+              {testOut?.error && <div className="error">{testOut.error}</div>}
+              {testOut && !testOut.error && !testOut.widget && (
+                <div className="error">resolved to nothing — check the mapping and required props</div>
+              )}
+              {testOut?.tool_result !== undefined && (
+                <details>
+                  <summary className="muted" style={{ fontSize: 11.5, cursor: 'pointer' }}>
+                    raw tool result{testOut.tool_args ? ` — args ${JSON.stringify(testOut.tool_args)}` : ''}
+                  </summary>
+                  <pre className="card" style={{ padding: 8, fontSize: 11, overflow: 'auto', maxHeight: 220, whiteSpace: 'pre-wrap' }}>
+                    {prettyJson(testOut.tool_result)}
+                  </pre>
+                </details>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -401,10 +614,18 @@ function Composer({
         Show when the chat opens (under the greeting)
       </label>
 
-      <div className="muted" style={{ fontSize: 11.5 }}>Preview</div>
+      <div className="muted" style={{ fontSize: 11.5 }}>Preview{testOut?.widget ? ' — template' : ''}</div>
       <div className="card" style={{ padding: 10, maxWidth: 340, pointerEvents: 'none' }}>
         <Widgets widgets={[spec]} onSend={() => {}} />
       </div>
+      {testOut?.widget && (
+        <>
+          <div className="muted" style={{ fontSize: 11.5 }}>Preview — with live data</div>
+          <div className="card" style={{ padding: 10, maxWidth: 340, pointerEvents: 'none' }}>
+            <Widgets widgets={[testOut.widget]} onSend={() => {}} />
+          </div>
+        </>
+      )}
 
       {jsonErr && <div className="error">{jsonErr}</div>}
       {error && <div className="error">{error}</div>}
@@ -529,10 +750,66 @@ function SpecEditor({ spec, onChange }: { spec: ChatWidget; onChange: (s: ChatWi
               </>
             )}
           />
+          <div className="muted" style={{ fontSize: 11 }}>
+            Breakdown rows render after the items, above the total — bind tool props like {'{subtotal}'}; rows whose value resolves empty drop out.
+          </div>
+          <ItemsEditor
+            items={spec.summary ?? []}
+            empty={{ label: '', value: '' }}
+            addLabel="breakdown row"
+            onChange={(summary) => onChange({ ...spec, summary: summary.length ? summary : undefined })}
+            render={(r, set) => (
+              <>
+                <Field label="label"><input className="input" style={inputStyle} value={r.label} onChange={(e) => set({ ...r, label: e.target.value })} placeholder="Subtotal" /></Field>
+                <Field label="value"><input className="input" style={inputStyle} value={r.value} onChange={(e) => set({ ...r, value: e.target.value })} placeholder="{subtotal}" /></Field>
+              </>
+            )}
+          />
           <div className="row" style={rowStyle}>
             <Field label="total label"><input className="input" style={inputStyle} value={spec.total?.label ?? ''} onChange={(e) => onChange({ ...spec, total: e.target.value ? { label: e.target.value, value: spec.total?.value ?? '' } : undefined })} placeholder="Total" /></Field>
             <Field label="total value"><input className="input" style={inputStyle} value={spec.total?.value ?? ''} onChange={(e) => onChange({ ...spec, total: spec.total ? { ...spec.total, value: e.target.value } : e.target.value ? { label: 'Total', value: e.target.value } : undefined })} placeholder="$0.00" /></Field>
           </div>
+        </>
+      );
+    case 'pricing':
+      return (
+        <>
+          <Field label="heading"><input className="input" style={inputStyle} value={spec.title ?? ''} onChange={(e) => onChange({ ...spec, title: e.target.value || undefined })} /></Field>
+          <ItemsEditor
+            items={spec.items}
+            empty={{ name: '', price: '' }}
+            addLabel="plan"
+            onChange={(items) => onChange({ ...spec, items })}
+            render={(p, set) => (
+              <>
+                <div className="row" style={rowStyle}>
+                  <Field label="plan"><input className="input" style={inputStyle} value={p.name} onChange={(e) => set({ ...p, name: e.target.value })} /></Field>
+                  <Field label="price"><input className="input" style={inputStyle} value={p.price} onChange={(e) => set({ ...p, price: e.target.value })} placeholder="$29/mo" /></Field>
+                </div>
+                <Field label="alt price"><input className="input" style={inputStyle} value={p.price_alt ?? ''} onChange={(e) => set({ ...p, price_alt: e.target.value || undefined })} placeholder="$290/yr — pay 10, get 12" /></Field>
+                <Field label="blurb"><input className="input" style={inputStyle} value={p.blurb ?? ''} onChange={(e) => set({ ...p, blurb: e.target.value || undefined })} /></Field>
+                <Field label="features — one per line">
+                  <textarea
+                    className="input"
+                    style={inputStyle}
+                    rows={3}
+                    value={(p.features ?? []).join('\n')}
+                    onChange={(e) => {
+                      const features = e.target.value.split('\n').map((f) => f.trim()).filter(Boolean);
+                      set({ ...p, features: features.length ? features : undefined });
+                    }}
+                  />
+                </Field>
+                <Field label="select button"><input className="input" style={inputStyle} value={p.select_label ?? ''} onChange={(e) => set({ ...p, select_label: e.target.value || undefined })} placeholder="Tell me about this plan" /></Field>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
+                  <input type="checkbox" checked={!!p.highlight} onChange={(e) => set({ ...p, highlight: e.target.checked || undefined })} /> featured plan
+                </label>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
+                  <input type="checkbox" checked={!!p.current} onChange={(e) => set({ ...p, current: e.target.checked || undefined })} /> visitor's current plan
+                </label>
+              </>
+            )}
+          />
         </>
       );
   }

@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api, ApiError } from './api/client';
 import type { Channel } from '@janis/shared';
 import { useMe } from './api/hooks';
+import { captureUtm, fireUtmAttribution } from './lib/utm';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import ResetPassword from './pages/ResetPassword';
@@ -62,6 +63,9 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { error: Error | 
 function RequireAuth({ children }: { children: ReactElement }) {
   const { isLoading, error } = useMe();
   const location = useLocation();
+  useEffect(() => {
+    if (!isLoading && !error) fireUtmAttribution();
+  }, [isLoading, error]);
   if (isLoading) return <div className="login-wrap muted">Loading…</div>;
   if (error instanceof ApiError && error.status === 401) {
     // Stash the deep link (e.g. a push/toast target) so login can return
@@ -169,6 +173,9 @@ const isAppHost = () =>
   /\.(devin\.app|loca\.lt|ngrok[^.]*\.(io|dev|com))$/.test(window.location.hostname);
 
 export default function App() {
+  useEffect(() => {
+    captureUtm();
+  }, []);
   return (
     <BrowserRouter>
       <PushDeepLink />

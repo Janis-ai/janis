@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { and, eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, channelBindings, channels, conversations, messages } from '../db/schema.js';
@@ -10,6 +10,7 @@ import { isLegacyPaid, reportLegacyUsage } from '../lib/legacyBilling.js';
 import { detectIntentV1, type LegacyContext, type ServiceAccount } from '../lib/dialogflow.js';
 import { env } from '../env.js';
 import { loadSecretsMap } from '../lib/secrets.js';
+import { isUniqueViolation } from '../lib/errorReporting.js';
 import { processEvents } from '../services/ingest.js';
 
 type AgentRow = typeof agents.$inferSelect;
@@ -28,6 +29,34 @@ type ConversationRow = typeof conversations.$inferSelect;
  */
 
 const REFUSED = { error: 'no subscription found' };
+
+/**
+ * Legacy callers authenticate by client key but place it inconsistently:
+ * the npm SDK sends a `clientkey` header, while Chatfuel's JSON API blocks
+ * (which cannot set custom headers) carry `client_key` in the query string
+ * or the JSON/urlencoded body. Old api.janis.ai accepted all of these —
+ * so must we, or header-less callers get REFUSED and their escalation
+ * calls silently die.
+ */
+function clientKeyOf(c: Context, bodyText: string | null): string {
+  const fromHeader = c.req.header('clientkey');
+  if (fromHeader) return fromHeader;
+  const fromQuery =
+    c.req.query('clientkey') ?? c.req.query('client_key') ?? c.req.query('clientKey');
+  if (fromQuery) return fromQuery;
+  if (!bodyText) return '';
+  try {
+    const j = JSON.parse(bodyText) as Record<string, unknown> | null;
+    const v = j?.client_key ?? j?.clientkey ?? j?.clientKey;
+    if (v != null && v !== '') return String(v);
+  } catch {
+    const v =
+      new URLSearchParams(bodyText).get('client_key') ??
+      new URLSearchParams(bodyText).get('clientkey');
+    if (v) return v;
+  }
+  return '';
+}
 
 async function agentForKey(db: Db, key: string): Promise<AgentRow | null> {
   const [a] = await db
@@ -125,8 +154,7 @@ async function storeMessage(
       },
     ]);
   } catch (err) {
-    const e = err as { code?: string; constraint_name?: string };
-    if (e.code === '23505' && e.constraint_name === 'messages_in_mid') return;
+    if (isUniqueViolation(err, 'messages_in_mid')) return;
     throw err;
   }
 }
@@ -142,12 +170,19 @@ async function forwardToLegacy(
   method: string,
   reqHeaders: Headers,
   body: string | null,
+  clientKey?: string,
 ): Promise<Response | null> {
   if (!env.legacyApiUrl) return null;
   const headers = new Headers();
   reqHeaders.forEach((v, k) => {
     if (!/^(host|connection|content-length|cf-|x-forwarded)/i.test(k)) headers.set(k, v);
   });
+  // upstream middleware reads clientkey from the header — inject it when the
+  // original caller carried the key in body/query instead
+  if (clientKey && !headers.has('clientkey')) headers.set('clientkey', clientKey);
+  // tells wordhopapi the request is a mirror of one we already answered —
+  // agents flagged alert_dispatch_mirrored skip their own alert eval upstream
+  headers.set('x-janis-mirror', '1');
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), 8_000);
   try {
@@ -182,10 +217,23 @@ export function legacyApiRoutes(db: Db) {
   // and return the v1-shaped reply the SDK expects. Response is either
   // {paused, id} (channel state) or the message array with `reply`.
   app.post('/in', async (c) => {
-    const agent = await agentForKey(db, c.req.header('clientkey') ?? '');
-    if (!agent || !(await isLegacyPaid(agent))) return c.json(REFUSED);
-
     const rawBody = await c.req.text();
+    const key = clientKeyOf(c, rawBody);
+    const agent = key ? await agentForKey(db, key) : null;
+    if (!agent) {
+      // Not a migrated/new-Janis agent: old api.janis.ai served any valid
+      // Mongo client key, so hand the call to wordhopapi and relay its
+      // verdict verbatim rather than refusing outright.
+      if (!key || !env.legacyApiUrl) return c.json(REFUSED);
+      const proxied = await forwardToLegacy('/in', 'POST', c.req.raw.headers, rawBody, key);
+      if (!proxied) return c.json(REFUSED);
+      return new Response(proxied.body, {
+        status: proxied.status,
+        headers: { 'content-type': proxied.headers.get('content-type') ?? 'application/json' },
+      });
+    }
+    if (!(await isLegacyPaid(agent))) return c.json(REFUSED);
+
     const msg = (() => { try { return JSON.parse(rawBody); } catch { return null; } })() as Record<
       string,
       unknown
@@ -196,7 +244,7 @@ export function legacyApiRoutes(db: Db) {
     // Mirror into legacy in parallel — must be awaited: Cloud Run throttles
     // CPU between requests, so fire-and-forget fetches may never complete.
     const fwd = isLegacyAgent(agent)
-      ? forwardToLegacy('/in', 'POST', c.req.raw.headers, rawBody)
+      ? forwardToLegacy('/in', 'POST', c.req.raw.headers, rawBody, key)
       : null;
 
     const channel = await channelFor(db, agent, msg);
@@ -256,12 +304,22 @@ export function legacyApiRoutes(db: Db) {
   // POST /api/v1/out — log the bot's outbound reply. Legacy answered 'OK'
   // first and processed async; we just await the insert.
   app.post('/out', async (c) => {
-    const agent = await agentForKey(db, c.req.header('clientkey') ?? '');
-    if (!agent || !(await isLegacyPaid(agent))) return c.json(REFUSED);
-
     const rawBody = await c.req.text();
+    const key = clientKeyOf(c, rawBody);
+    const agent = key ? await agentForKey(db, key) : null;
+    if (!agent) {
+      if (!key || !env.legacyApiUrl) return c.json(REFUSED);
+      const proxied = await forwardToLegacy('/out', 'POST', c.req.raw.headers, rawBody, key);
+      if (!proxied) return c.json(REFUSED);
+      return new Response(proxied.body, {
+        status: proxied.status,
+        headers: { 'content-type': proxied.headers.get('content-type') ?? 'application/json' },
+      });
+    }
+    if (!(await isLegacyPaid(agent))) return c.json(REFUSED);
+
     const fwd = isLegacyAgent(agent)
-      ? forwardToLegacy('/out', 'POST', c.req.raw.headers, rawBody)
+      ? forwardToLegacy('/out', 'POST', c.req.raw.headers, rawBody, key)
       : null;
 
     const msg = (() => { try { return JSON.parse(rawBody); } catch { return null; } })() as Record<
@@ -283,10 +341,22 @@ export function legacyApiRoutes(db: Db) {
   // (from wordhop-socket-server) on connect/reconnect; we store it on the
   // agent so operator replies and channel updates can be pushed to the bot.
   app.post('/update_bot_socket_id', async (c) => {
-    const agent = await agentForKey(db, c.req.header('clientkey') ?? '');
-    if (!agent) return c.json(REFUSED);
+    const rawBody = await c.req.text();
+    const key = clientKeyOf(c, rawBody);
+    const agent = key ? await agentForKey(db, key) : null;
+    if (!agent) {
+      if (!key || !env.legacyApiUrl) return c.json(REFUSED);
+      const proxied = await forwardToLegacy('/update_bot_socket_id', 'POST', c.req.raw.headers, rawBody, key);
+      if (!proxied) return c.json(REFUSED);
+      return new Response(proxied.body, {
+        status: proxied.status,
+        headers: { 'content-type': proxied.headers.get('content-type') ?? 'application/json' },
+      });
+    }
 
-    const body = (await c.req.json().catch(() => null)) as { socket_id?: unknown } | null;
+    const body = (() => { try { return JSON.parse(rawBody); } catch { return null; } })() as {
+      socket_id?: unknown;
+    } | null;
     const socketId = typeof body?.socket_id === 'string' ? body.socket_id : null;
     if (!socketId) return c.json({ error: 'bad request' }, 400);
 
@@ -357,7 +427,9 @@ export function legacyApiRoutes(db: Db) {
   // to wordhopapi verbatim — those endpoints drive legacy alerts/takeovers
   // and have no Postgres-side equivalent yet.
   app.all('/*', async (c) => {
-    const key = c.req.header('clientkey');
+    const body =
+      c.req.raw.method === 'GET' || c.req.raw.method === 'HEAD' ? null : await c.req.text();
+    const key = clientKeyOf(c, body);
     if (!key || !env.legacyApiUrl) return c.json(REFUSED);
     const agent = await agentForKey(db, key);
     // Native (non-legacy) agents have no counterpart upstream.
@@ -365,9 +437,7 @@ export function legacyApiRoutes(db: Db) {
 
     const path =
       (c.req.path.replace(/^\/api\/v1/, '') || '/') + new URL(c.req.url).search;
-    const body =
-      c.req.raw.method === 'GET' || c.req.raw.method === 'HEAD' ? null : await c.req.text();
-    const res = await forwardToLegacy(path, c.req.raw.method, c.req.raw.headers, body);
+    const res = await forwardToLegacy(path, c.req.raw.method, c.req.raw.headers, body, key);
     if (!res) return c.json(REFUSED);
     return new Response(res.body, {
       status: res.status,

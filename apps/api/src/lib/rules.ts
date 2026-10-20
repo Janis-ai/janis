@@ -19,6 +19,12 @@ export type RuleConfig = {
   assignees?: string[];
   group_ids?: string[];
   next?: number;
+  /** Who gets PAGED when the rule fires — decoupled from who owns the
+   *  thread. 'workspace' pages everyone; 'pool' pages every routed
+   *  teammate (the whole rotation, not just the picked assignee); an id
+   *  list pages the assignee plus those members. Absent: assignee only
+   *  (or the whole workspace when the rule routes to nobody). */
+  notify?: 'workspace' | 'pool' | string[];
 };
 
 /** Effects a fired rule applies to the conversation. */
@@ -100,12 +106,18 @@ export function selfAssignOnly(prev: RuleConfig, next: RuleConfig, userId: strin
           )
         : v;
   const rest = (c: RuleConfig) => {
-    const { assign_to: _at, assignees: _as, ...r } = c;
-    return canon(r);
+    const { assign_to: _at, assignees: _as, notify: _n, ...r } = c;
+    // Literal notify modes ('workspace', 'pool') are admin-only routing; a
+    // member list is self-diffable like the assignment pool.
+    return canon(_n !== undefined && !Array.isArray(_n) ? { ...r, notify: _n } : r);
   };
   if (JSON.stringify(rest(prev)) !== JSON.stringify(rest(next))) return false;
   const ids = (c: RuleConfig) =>
-    new Set([c.assign_to, ...(c.assignees ?? [])].filter((x): x is string => Boolean(x)));
+    new Set(
+      [c.assign_to, ...(c.assignees ?? []), ...(Array.isArray(c.notify) ? c.notify : [])].filter(
+        (x): x is string => Boolean(x),
+      ),
+    );
   const before = ids(prev);
   const after = ids(next);
   for (const id of before) if (!after.has(id) && id !== userId) return false;

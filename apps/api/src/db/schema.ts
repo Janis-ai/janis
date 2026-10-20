@@ -284,6 +284,18 @@ export const conversations = pgTable(
   ],
 );
 
+/** Merge tombstones — when an anonymous visitor's conversation is adopted
+ * into a signed-in user's conversation (channelIngress adopt()), the anon
+ * row is deleted but its children repoint to the survivor. A tombstone
+ * records old-id → surviving-id so links minted pre-merge (alert emails,
+ * Slack threads, bookmarks) resolve to the surviving conversation instead
+ * of 404ing. Real deletes (manual, retention, GDPR purge) never tombstone. */
+export const convTombstones = pgTable('conv_tombstones', {
+  id: uuid('id').primaryKey(),
+  mergedIntoId: uuid('merged_into_id').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 /** Unified customer record — one row per real person across channels.
  * Identities (page PSID, phone number, email visitor id) attach via
  * contact_identities; conversations carry contact_id so "same person texted
@@ -614,8 +626,81 @@ export const slackInstallations = pgTable('slack_installations', {
   // true once a legacy wordhop-slack team is cut over: the token was imported
   // from Mongo and we own the team's Slack traffic — never fan out to legacy.
   migrated: boolean('migrated').notNull().default(false),
+  // Slack UX mode: 'new' renders Janis-native alerts/threads; 'classic'
+  // renders the verbatim legacy wordhop-slack experience (j-channel
+  // transcripts, DM fan-out alert cards, pause/transcribe commands).
+  mode: text('mode', { enum: ['new', 'classic'] }).notNull().default('new'),
+  // Classic-mode settings imported from the legacy slack_integrations doc:
+  // {pro, teamDomain, botUserId, userToken, subscriptions:[client_key], …}.
+  classicConfig: jsonb('classic_config').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
+
+// Classic mode: one Slack transcript channel ("j-channel") per customer
+// conversation — the Postgres equivalent of the Mongo channels doc where
+// is_wordhop_channel=true. Membership/naming/last-ts semantics match
+// wordhop-slack transcript_api.getTranscriptChannel.
+export const slackClassicChannels = pgTable(
+  'slack_classic_channels',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    installationId: uuid('installation_id')
+      .notNull()
+      .references(() => slackInstallations.id),
+    // The customer-facing source id (Messenger PSID etc.) — unique per team.
+    sourceChannel: text('source_channel').notNull(),
+    slackChannelId: text('slack_channel_id').notNull(),
+    name: text('name').notNull(),
+    clientKey: text('client_key'),
+    sourceUser: text('source_user'),
+    team: text('team'),
+    sourceTeam: text('source_team'),
+    lang: text('lang'),
+    isWordhopChannel: boolean('is_wordhop_channel').notNull().default(true),
+    isTrainingChannel: boolean('is_training_channel').notNull().default(false),
+    trainingEnabled: boolean('training_enabled').notNull().default(false),
+    lastMessageTs: text('last_message_ts'),
+    lastAgentTs: timestamp('last_agent_ts', { withTimezone: true }),
+    // Mirrors the legacy source-channel doc state that gates transcript
+    // display + pause/resume buttons (fed by update_channel / takeover).
+    paused: boolean('paused').notNull().default(false),
+    shouldProcessTranscript: boolean('should_process_transcript').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('slack_classic_channels_src').on(t.installationId, t.sourceChannel),
+    index('slack_classic_channels_slack').on(t.slackChannelId),
+  ],
+);
+
+// Classic mode: per-member alert prefs — the Postgres equivalent of the
+// per-DM channel doc's custom_alerts[] + severity fields. One row per
+// (installation, slack user, client_key); DM channel id is cached per member.
+export const slackClassicPrefs = pgTable(
+  'slack_classic_prefs',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    installationId: uuid('installation_id')
+      .notNull()
+      .references(() => slackInstallations.id),
+    slackUserId: text('slack_user_id').notNull(),
+    // Member's Janis DM channel (D…). Opened lazily via conversations.open.
+    dmChannelId: text('dm_channel_id'),
+    clientKey: text('client_key').notNull(),
+    // Verbatim legacy fields (see showJanisAlert gate):
+    // {logSeverityLevel, helpNeededSeverityLevel, userUpsetSeverityLevel,
+    //  errorWarningLevel, customAlertSeverityLevel, intents:[{id,…}]}
+    settings: jsonb('settings').notNull().default({}),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('slack_classic_prefs_member_bot').on(
+      t.installationId,
+      t.slackUserId,
+      t.clientKey,
+    ),
+  ],
+);
 
 // Slack OAuth grants that completed with no Janis session (the public
 // "Add to Slack" flow / Marketplace listing install). Held here until the
@@ -817,6 +902,10 @@ export const knowledgeFiles = pgTable(
     // URL sources — the row's text is re-crawled from source_url on a
     // refresh_hours cadence (null = manual only, like an uploaded file).
     sourceUrl: text('source_url'),
+    // Per-source request headers for authenticated sources (Notion tokens,
+    // private docs) — AES-256-GCM encrypted JSON like agent_secrets.
+    // Write-only: never projected to the console (has_headers signals it).
+    sourceHeadersEnc: text('source_headers_enc'),
     // Best image the crawled page advertises (og:/twitter:image, else first
     // content <img>) — htmlToText drops tags, so without this the model has
     // no real image URLs to put in cards and invents them.
@@ -830,6 +919,10 @@ export const knowledgeFiles = pgTable(
     refreshHours: integer('refresh_hours'),
     lastFetchedAt: timestamp('last_fetched_at', { withTimezone: true }),
     nextFetchAt: timestamp('next_fetch_at', { withTimezone: true }),
+    // Set when a re-crawl's text actually differs — lastFetchedAt alone
+    // can't distinguish "page changed yesterday" from "same page, 30
+    // no-op crawls".
+    textChangedAt: timestamp('text_changed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -978,6 +1071,10 @@ export const agentWidgets = pgTable(
       .notNull()
       .references(() => agents.id, { onDelete: 'cascade' }),
     name: text('name').notNull(),
+    // "When to use" — one line of builder intent ("show when a customer asks
+    // where their order is"). The model sees it in the component catalog and
+    // uses it to pick this ref over a hand-built widget or a different tool.
+    description: text('description'),
     spec: jsonb('spec').notNull(),
     // [{name, spec}] — variant specs picked by a "state" key in the ref data
     states: jsonb('states'),

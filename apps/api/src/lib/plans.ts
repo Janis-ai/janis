@@ -12,15 +12,19 @@ export interface Plan {
   // sell price per 1k messages beyond the included amount.
   // null = hard cap (free tier): inbound messages are dropped, not transcribed
   overagePer1kCents: number | null;
+  // Shopify rail only: the cappedAmount declared at subscription time — the
+  // most a merchant can be charged in usage per 30-day cycle. Unused on the
+  // Stripe rail (metered billing has no cap).
+  usageCapCents?: number;
   // never offered on the billing page — comped/internal accounts only
   hidden?: boolean;
 }
 
 export const PLANS: Record<string, Plan> = {
   free: { name: 'Free', baseCents: 0, includedMessages: 250, overagePer1kCents: null },
-  starter: { name: 'Starter', baseCents: 2900, includedMessages: 2_000, overagePer1kCents: 800 },
-  pro: { name: 'Pro', baseCents: 9900, includedMessages: 20_000, overagePer1kCents: 500 },
-  scale: { name: 'Scale', baseCents: 29900, includedMessages: 100_000, overagePer1kCents: 300 },
+  starter: { name: 'Starter', baseCents: 2900, includedMessages: 2_000, overagePer1kCents: 800, usageCapCents: 10_000 },
+  pro: { name: 'Pro', baseCents: 9900, includedMessages: 20_000, overagePer1kCents: 500, usageCapCents: 25_000 },
+  scale: { name: 'Scale', baseCents: 29900, includedMessages: 100_000, overagePer1kCents: 300, usageCapCents: 60_000 },
   // $0 forever, uncapped — internal accounts. No Stripe price, hidden from checkout.
   internal: {
     name: 'Internal',
@@ -71,6 +75,18 @@ export async function messagesInPeriod(
 ): Promise<number> {
   const start = new Date(`${period}-01T00:00:00Z`);
   const end = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() + 1, 1));
+  return messagesInRange(db, workspaceId, start, end, agentId);
+}
+
+/** Same count over explicit bounds — the Shopify billing cycle is 30 days
+ *  from activation, not a calendar month. */
+export async function messagesInRange(
+  db: Db,
+  workspaceId: string,
+  start: Date,
+  end: Date,
+  agentId?: string,
+): Promise<number> {
   const [row] = await db
     .select({ count: sql<number>`count(*)::int` })
     .from(messages)

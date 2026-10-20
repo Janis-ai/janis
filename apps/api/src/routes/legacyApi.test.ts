@@ -174,19 +174,34 @@ describe('legacy /api/v1 SDK endpoints', () => {
     expect(reply.result.metadata.intentName).toBe('welcome');
   });
 
-  it('refuses unknown client keys and stores nothing', async () => {
-    vi.stubGlobal('fetch', stubFetches());
+  it('proxies unknown client keys to wordhopapi and stores nothing locally', async () => {
+    const fetchMock = stubFetches();
+    vi.stubGlobal('fetch', fetchMock);
     const res = await app.request('/in', {
       method: 'POST',
       headers: { 'content-type': 'application/json', clientkey: 'bogus' },
       body: JSON.stringify({ text: 'x', channel: 'P9' }),
     });
-    expect(await res.json()).toEqual({ error: 'no subscription found' });
+    // upstream is the arbiter for non-migrated keys — relay its verdict
+    expect(res.status).toBe(404);
+    expect(
+      fetchMock.mock.calls.some((c) => String(c[0]) === 'https://legacy.test/api/v1/in'),
+    ).toBe(true);
     const [none] = await db
       .select()
       .from(conversations)
       .where(eq(conversations.externalId, 'messenger:P9'));
     expect(none).toBeUndefined();
+  });
+
+  it('still refuses /in when no client key is present anywhere', async () => {
+    vi.stubGlobal('fetch', stubFetches());
+    const res = await app.request('/in', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'x', channel: 'P9' }),
+    });
+    expect(await res.json()).toEqual({ error: 'no subscription found' });
   });
 
   it('reports paused when a human owns the conversation', async () => {
@@ -279,5 +294,96 @@ describe('legacy /api/v1 SDK endpoints', () => {
     expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('graph.facebook.com'))).toBe(
       false,
     );
+  });
+});
+
+describe('client key resolution (header → query → body)', () => {
+  const legacyOk = () =>
+    vi.fn().mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      if (u.startsWith('https://legacy.test/api/v1/'))
+        return new Response('OK', { status: 200 });
+      return stubFetches()(url, init);
+    });
+
+  it('/in accepts client_key inside the JSON body (Chatfuel-style)', async () => {
+    vi.stubGlobal('fetch', stubFetches());
+    const res = await app.request('/in', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        client_key: CLIENT_KEY,
+        text: 'body keyed',
+        channel: PSID,
+        user: PSID,
+        mid: 'mid.bodykey.1',
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ paused: expect.any(Boolean), id: PSID });
+  });
+
+  it('/in accepts client_key as a query param', async () => {
+    vi.stubGlobal('fetch', stubFetches());
+    const res = await app.request(`/in?client_key=${CLIENT_KEY}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text: 'query keyed', channel: PSID, user: PSID, mid: 'mid.q.1' }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('catch-all proxies when the key rides in the JSON body', async () => {
+    const fetchMock = legacyOk();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await app.request('/human', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ client_key: CLIENT_KEY, channel: PSID, text: 'help' }),
+    });
+    expect(res.status).toBe(200);
+    const fwd = fetchMock.mock.calls.find((c) => String(c[0]) === 'https://legacy.test/api/v1/human');
+    expect(fwd).toBeTruthy();
+    // upstream sees the key as the clientkey header it expects
+    expect((fwd![1]?.headers as Headers).get('clientkey')).toBe(CLIENT_KEY);
+    // body forwarded verbatim
+    expect(String(fwd![1]?.body)).toContain('help');
+  });
+
+  it('catch-all proxies when the key rides in the query string', async () => {
+    const fetchMock = legacyOk();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await app.request(`/human?client_key=${CLIENT_KEY}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: PSID, text: 'escalate' }),
+    });
+    expect(res.status).toBe(200);
+    expect(
+      fetchMock.mock.calls.some((c) =>
+        String(c[0]).startsWith('https://legacy.test/api/v1/human'),
+      ),
+    ).toBe(true);
+  });
+
+  it('catch-all resolves the key from urlencoded bodies', async () => {
+    const fetchMock = legacyOk();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await app.request('/channel_state', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: `client_key=${CLIENT_KEY}&channel=${PSID}`,
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('catch-all still refuses when no key is present anywhere', async () => {
+    vi.stubGlobal('fetch', legacyOk());
+    const res = await app.request('/human', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ channel: PSID, text: 'no key' }),
+    });
+    expect(await res.json()).toEqual({ error: 'no subscription found' });
   });
 });

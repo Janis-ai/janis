@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
@@ -602,5 +602,79 @@ describe('system notes', () => {
     // lastMessageDirection into a fake agent reply
     expect(notes.every((m) => m.direction === 'out' || m.direction === 'human')).toBe(true);
     expect(notes.every((m) => m.payload.internal === true)).toBe(true);
+  });
+});
+
+describe('operator inbounds skip classification', () => {
+  // Verified Janis users (Ask rail, copilot, Slack concierge DM) arrive with
+  // payload.operator — intent/sentiment classification is for customers, so
+  // their turns must not score, alert, or write internal notes.
+  let opAgent: typeof agents.$inferSelect;
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeAll(async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'Ops' }).returning();
+    const { hash, preview } = generateApiKey();
+    [opAgent] = await db
+      .insert(agents)
+      .values({
+        workspaceId: ws.id,
+        name: 'OpBot',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        // BYOK — skips the metered-rate check in llmFor; fetch is stubbed.
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    fetchMock = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'negative' } }] }),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  const convByExternal = async (externalId: string) =>
+    (await db
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.externalId, externalId), eq(conversations.agentId, opAgent.id))))[0];
+  const llmCalls = () =>
+    fetchMock.mock.calls.filter((c) => String(c[0]).includes('llm.test'));
+
+  it('skips the opener classify+score on operator turns', async () => {
+    await processEvents(db, opAgent, [
+      { type: 'message_in', conversation_id: 'op1', text: 'i do not need anyone anymore', payload: { operator: true } },
+    ]);
+    await new Promise((r) => setTimeout(r, 300));
+    const conv = await convByExternal('op1');
+    expect(conv.intent).toBeNull();
+    expect(conv.sentiment).toBeNull();
+    expect(llmCalls()).toHaveLength(0);
+    const notes = (await db.select().from(messages).where(eq(messages.conversationId, conv.id)))
+      .filter((m) => (m.payload as { internal?: boolean })?.internal);
+    expect(notes).toHaveLength(0);
+  });
+
+  it('skips the per-turn sentiment check on later operator turns', async () => {
+    await db.insert(conversations).values({
+      agentId: opAgent.id,
+      externalId: 'op2',
+      intent: 'support',
+      intentSource: 'ai',
+    });
+    await processEvents(db, opAgent, [
+      { type: 'message_in', conversation_id: 'op2', text: 'i do not need anyone anymore', payload: { operator: true } },
+    ]);
+    await new Promise((r) => setTimeout(r, 300));
+    const conv = await convByExternal('op2');
+    expect(conv.sentiment).toBeNull();
+    expect(llmCalls()).toHaveLength(0);
+  });
+
+  it('customer turns still get scored (control)', async () => {
+    await processEvents(db, opAgent, [
+      { type: 'message_in', conversation_id: 'cust1', text: 'this is outrageous' },
+    ]);
+    await new Promise((r) => setTimeout(r, 300));
+    expect((await convByExternal('cust1')).sentiment).toBe('negative');
+    expect(llmCalls().length).toBeGreaterThan(0);
   });
 });

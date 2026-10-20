@@ -9,6 +9,7 @@ import {
   campaignSends,
   channelBindings,
   channels,
+  convTombstones,
   conversations,
   messages,
   slackThreads,
@@ -30,6 +31,7 @@ import { systemNote } from '../lib/systemNote.js';
 import { groupsForRules } from '../lib/ruleAlerts.js';
 import { env } from '../env.js';
 import { deliverWebhook } from '../lib/webhooks.js';
+import { isUniqueViolation } from '../lib/errorReporting.js';
 import { processEvents } from './ingest.js';
 
 type ChannelRow = typeof channels.$inferSelect;
@@ -56,6 +58,10 @@ function baseProfile(channel: ChannelRow, msg: InboundMessage): UserProfile {
     // the field every avatar surface (console, Slack) already reads.
     ...(msg.user?.avatarUrl ? { picture_url: msg.user.avatarUrl } : {}),
     ...(msg.user ? { identity_verified: msg.user.verified === true } : {}),
+    // Storefront market the shopper is browsing — environment context, not
+    // a host claim: "sold out" on their screen can mean "not deliverable in
+    // this market", which is a different answer than out of stock.
+    ...(msg.market ? { market: msg.market } : {}),
     // metadata merges per-key on update — cart rides alongside identify
     // traits without touching identity_verified (an anonymous shopper is
     // not "unverified", they just have a cart).
@@ -78,10 +84,13 @@ async function refreshProfile(
 ): Promise<void> {
   const fetched = await fetchPlatformProfile(channel, String((conv.userProfile as UserProfile)?.id ?? ''));
   if (!Object.keys(defined(fetched)).length) return;
-  const merged = { ...(conv.userProfile as UserProfile), ...defined(fetched) };
+  // Key-level merge — a stale-snapshot replace can clobber verification state
+  // a concurrent run wrote between this read and the platform fetch.
   await db
     .update(conversations)
-    .set({ userProfile: merged })
+    .set({
+      userProfile: sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || ${JSON.stringify(defined(fetched))}::jsonb`,
+    })
     .where(eq(conversations.id, conv.id));
 }
 
@@ -195,6 +204,12 @@ export async function adoptVisitorConversation(
     // repoint every one of the anonymous visitor's threads onto the merged
     // user conversation so replies there keep routing.
     await db.update(slackThreads).set({ conversationId: uId }).where(eq(slackThreads.conversationId, vId));
+    // Tombstone the merge — links minted against the anon conv (alert
+    // emails, bookmarks) resolve to the survivor instead of 404ing.
+    await db
+      .insert(convTombstones)
+      .values({ id: vId, mergedIntoId: uId })
+      .onConflictDoNothing();
     await db.delete(channelBindings).where(eq(channelBindings.id, vb.binding.id));
     await db.delete(conversations).where(eq(conversations.id, vId));
 
@@ -629,13 +644,28 @@ export async function handleChannelMessage(
       ...updates,
       ...(mergedMeta ? { metadata: mergedMeta } : {}),
     };
-    const changed = Object.entries(nextProfile).some(
-      ([k, v]) => JSON.stringify((profile as Record<string, unknown>)[k]) !== JSON.stringify(v),
+    // Merge, never replace: this write runs on every inbound BEFORE the
+    // conversation lock — a blind overwrite of a stale snapshot erases keys
+    // a concurrent run just wrote (pending_verification, verified_emails).
+    // Concat-only patch of the keys this message actually changed, with
+    // metadata merged at the nested level for the same reason.
+    const { metadata: _m, ...topPatch } = Object.fromEntries(
+      Object.entries(nextProfile).filter(
+        ([k, v]) => JSON.stringify((profile as Record<string, unknown>)[k]) !== JSON.stringify(v),
+      ),
     );
-    if (changed) {
+    const metaPatch = (updates.metadata ?? {}) as Record<string, unknown>;
+    const metaChanged =
+      mergedMeta !== undefined &&
+      JSON.stringify(profile.metadata) !== JSON.stringify(mergedMeta) &&
+      Object.keys(metaPatch).length > 0;
+    if (Object.keys(topPatch).length || metaChanged) {
+      let merge = sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || ${JSON.stringify(topPatch)}::jsonb`;
+      if (metaChanged)
+        merge = sql`${merge} || jsonb_build_object('metadata', coalesce(${conversations.userProfile}->'metadata', '{}'::jsonb) || ${JSON.stringify(metaPatch)}::jsonb)`;
       await db
         .update(conversations)
-        .set({ userProfile: nextProfile })
+        .set({ userProfile: merge })
         .where(eq(conversations.id, conv.id));
       conv = { ...conv, userProfile: nextProfile };
     }
@@ -705,6 +735,12 @@ export async function handleChannelMessage(
           ...(msg.messageId ? { mid: msg.messageId } : {}),
           ...(hasFiles ? { attachments: msg.attachments } : {}),
           ...(msg.payload ?? {}),
+          // u:-bound participants are verified Janis users — the Ask rail,
+          // copilot threads, and the Slack concierge DM are operators
+          // exercising the product, not customers. Ingest uses this to skip
+          // intent/sentiment classification on their turns. Placed after
+          // msg.payload so a caller can't forge or clear it.
+          ...(participantId.startsWith('u:') ? { operator: true } : {}),
         },
         user: { id: msg.senderId },
       },
@@ -713,8 +749,7 @@ export async function handleChannelMessage(
     // The same Meta event delivered concurrently via webhook + relay races
     // the dedup select above — the mid unique index settles it: the loser
     // is a dup, not an error.
-    const e = err as { code?: string; constraint_name?: string };
-    if (e.code === '23505' && e.constraint_name === 'messages_in_mid') return;
+    if (isUniqueViolation(err, 'messages_in_mid')) return;
     throw err;
   }
 

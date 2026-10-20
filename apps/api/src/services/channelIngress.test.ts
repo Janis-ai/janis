@@ -10,6 +10,7 @@ import {
   channelBindings,
   channels,
   conversations,
+  convTombstones,
   messages,
   webhookDeliveries,
   workspaces,
@@ -764,6 +765,176 @@ describe('hosted handoff offers', () => {
     ]);
   });
 
+  it('strips unbacked "I\'ll connect you" promises from an offer, keeps the question', async () => {
+    // Prod incident: the offer reply carried "I'll connect you with a human
+    // teammate who can help you further" alongside "Want me to get a human
+    // teammate?" — a promise of escalation inside a question about whether
+    // to escalate. The claim strips; the offer stands.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          llmResponse(
+            "I'll connect you with a human teammate who can help you further. Want me to get a human teammate?\n[OFFER_HUMAN]",
+          ),
+        ),
+      ),
+    );
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'Hosted',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-offer-strip' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'hmm' });
+
+    await runHostedEvent(db, hosted, offerEvent(conv.id, 'ext-offer-strip'));
+
+    const outs = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    const visible = outs.filter(
+      (m) => m.direction === 'out' && !(m.flags as { handoff_offer?: boolean } | null)?.handoff_offer,
+    );
+    expect(visible).toHaveLength(1);
+    expect(visible[0].text).not.toMatch(/connect you with a human/i);
+    expect(visible[0].text).toMatch(/want me to get a human teammate\?/i);
+    expect((visible[0].payload as { quick_replies?: unknown[] }).quick_replies).toEqual([
+      'Yes, get a human',
+      'No thanks',
+    ]);
+    expect(
+      (visible[0].payload as { inspector?: { esc_claim_stripped?: number } }).inspector
+        ?.esc_claim_stripped,
+    ).toBe(1);
+  });
+
+  it('an [OFFER_HUMAN] after an explicit "human" ask upgrades to a real handoff', async () => {
+    // Prod incident: the customer typed "human" and the model promised AND
+    // offered in the same breath — "I'll connect you with a human
+    // teammate… Want me to get a human teammate?\n[OFFER_HUMAN]". Asking
+    // someone who already asked is the wrong rung: the offer upgrades to a
+    // real handoff and the redundant question never ships.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(
+          llmResponse(
+            "I understand—I'll connect you with a human teammate who can help you further. Want me to get a human teammate to take a look with you?\n[OFFER_HUMAN]",
+          ),
+        ),
+      ),
+    );
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'Hosted',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-offer-upg' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'human' });
+
+    await runHostedEvent(db, hosted, {
+      type: 'message.user',
+      conversation_id: 'ext-offer-upg',
+      janis_conversation_id: conv.id,
+      text: 'human',
+    } as Parameters<typeof runHostedEvent>[2]);
+
+    const rows = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    const reply = rows.find(
+      (m) => m.direction === 'out' && (m.payload as { via?: string })?.via === 'hosted',
+    );
+    // a real "human is coming" line — no redundant offer question
+    expect(reply?.text ?? '').not.toMatch(/want me to get/i);
+    expect(reply?.text ?? '').not.toMatch(/connect you with/i);
+    const types = (
+      await db.select().from(alerts).where(eq(alerts.conversationId, conv.id))
+    ).map((a) => a.type);
+    expect(types).toContain('help_request');
+    expect(types).not.toContain('handoff_offer');
+    const [updated] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(updated.state).toBe('needs_human');
+    expect(
+      (reply?.payload as { inspector?: { offer_upgraded?: boolean } }).inspector?.offer_upgraded,
+    ).toBe(true);
+  });
+
+  it('an untagged "want a human?" reply to an explicit ask still escalates', async () => {
+    // Same fumble without the tag: "Want me to get a human teammate?" as a
+    // plain reply to "human" is a redundant offer — the handoff is already
+    // earned, so the reply swaps for a truthful line and escalates.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(llmResponse('Want me to get a human teammate to take a look with you?')),
+      ),
+    );
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'Hosted',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-offer-salvage' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'human' });
+
+    await runHostedEvent(db, hosted, {
+      type: 'message.user',
+      conversation_id: 'ext-offer-salvage',
+      janis_conversation_id: conv.id,
+      text: 'human',
+    } as Parameters<typeof runHostedEvent>[2]);
+
+    const rows = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    const reply = rows.find(
+      (m) => m.direction === 'out' && (m.payload as { via?: string })?.via === 'hosted',
+    );
+    expect(reply?.text ?? '').not.toMatch(/want me to get/i);
+    const types = (
+      await db.select().from(alerts).where(eq(alerts.conversationId, conv.id))
+    ).map((a) => a.type);
+    expect(types).toContain('help_request');
+    const [updated] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(updated.state).toBe('needs_human');
+    expect(
+      (reply?.payload as { inspector?: { handoff_salvaged?: boolean } }).inspector
+        ?.handoff_salvaged,
+    ).toBe(true);
+  });
+
   it('a bare [HANDOFF] still tells the customer a human is coming', async () => {
     vi.stubGlobal(
       'fetch',
@@ -1213,6 +1384,12 @@ describe('cross-channel externalId collisions', () => {
     expect(folded.some((m) => m.text === 'anon question on B')).toBe(true);
     const gone = await db.select().from(conversations).where(eq(conversations.id, vConv.id));
     expect(gone).toHaveLength(0);
+    // Merge tombstone — stale links to the anon conv resolve to the survivor.
+    const [tomb] = await db
+      .select()
+      .from(convTombstones)
+      .where(eq(convTombstones.id, vConv.id));
+    expect(tomb?.mergedIntoId).toBe(uConv.id);
   });
 });
 

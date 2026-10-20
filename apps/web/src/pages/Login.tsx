@@ -41,9 +41,23 @@ export default function Login() {
   const qc = useQueryClient();
   const providers = useQuery({
     queryKey: ['auth-providers'],
-    queryFn: () => api<{ google: boolean; slack: boolean; password: boolean }>('/auth/providers'),
+    queryFn: () =>
+      api<{ google: boolean; slack: boolean; password: boolean; sso?: boolean }>(
+        '/auth/providers',
+      ),
     staleTime: Infinity,
   });
+  const [ssoDomain, setSsoDomain] = useState(() => params.get('sso_domain') ?? '');
+
+  // Enterprise SSO — domain-or-email input rides the SP-initiated flow at
+  // /auth/sso (plants the state cookie the callback verifies). Emails are
+  // reduced to their domain; a bare domain goes through as-is.
+  const startSso = () => {
+    const raw = ssoDomain.trim().toLowerCase();
+    if (!raw) return;
+    const domain = raw.includes('@') ? raw.split('@').pop()! : raw;
+    window.location.href = `/auth/sso?domain=${encodeURIComponent(domain)}`;
+  };
 
   const switchMode = (m: Mode) => {
     setMode(m);
@@ -263,7 +277,36 @@ export default function Login() {
             )}
           </div>
         )}
-        {providers.data && !anyProvider && !passwordLogin && (
+        {providers.data?.sso && mode !== 'forgot' && (
+          <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid var(--border)' }}>
+            <label htmlFor="sso-domain">Company SSO</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                id="sso-domain"
+                value={ssoDomain}
+                onChange={(e) => setSsoDomain(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    startSso();
+                  }
+                }}
+                placeholder="acme.com"
+                autoComplete="organization"
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                className="btn"
+                disabled={!ssoDomain.trim()}
+                onClick={startSso}
+              >
+                Continue
+              </button>
+            </div>
+          </div>
+        )}
+        {providers.data && !anyProvider && !passwordLogin && !providers.data.sso && (
           <div className="muted">Sign-in is not configured on this server.</div>
         )}
       </form>

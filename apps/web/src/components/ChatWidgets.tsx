@@ -20,6 +20,8 @@ export interface WidgetCardItem {
   link?: string;
   link_label?: string;
   select_label?: string;
+  /** Shorter button text — the message sent stays select_label. */
+  select_button?: string;
 }
 export interface WidgetOption {
   label: string;
@@ -46,7 +48,22 @@ export type ChatWidget =
       type: 'receipt';
       title?: string;
       rows: { label: string; value: string }[];
+      summary?: { label: string; value: string }[];
       total?: { label: string; value: string };
+    }
+  | {
+      type: 'pricing';
+      title?: string;
+      items: {
+        name: string;
+        price: string;
+        price_alt?: string;
+        blurb?: string;
+        features?: string[];
+        highlight?: boolean;
+        current?: boolean;
+        select_label?: string;
+      }[];
     }
   // Storefront cart — hydrates from the shop's /cart.js in widget.js; the
   // console renders a transcript placeholder since the operator has no
@@ -77,6 +94,7 @@ function Widget({ w, onSend }: { w: ChatWidget; onSend: (t: string, tap?: { of?:
       {w.type === 'form' && <WForm w={w} onSend={onSend} />}
       {w.type === 'status' && <Status w={w} />}
       {w.type === 'receipt' && <Receipt w={w} />}
+      {w.type === 'pricing' && <Pricing w={w} onSend={onSend} />}
       {w.type === 'cart' && <Cart w={w} />}
     </div>
   );
@@ -116,11 +134,25 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
     };
   }, [w.items.length]);
   const step = (dir: number) => rowRef.current?.scrollBy({ left: dir * 168, behavior: 'smooth' });
+  // Placeholder tiles exist to keep a mixed carousel uniform — when NO card
+  // has an image the whole slot is just a wall of broken icons; drop it.
+  const anyImage = w.items.some((i) => i.image);
   return (
     <div className="wgt-cards-wrap">
       <div className="wgt-cards" ref={rowRef} onScroll={sync}>
-      {w.items.map((item, i) => (
-        <div key={i} className="wgt-card">
+      {w.items.map((item, i) => {
+        // Whole-card tap is the fallback affordance — a link button keeps
+        // the background inert so clicks never double-fire; a select-only
+        // card's tap mirrors its button; a bare card asks for more.
+        const tapMsg = item.link ? undefined
+          : (item.select_label ?? (item.title ? `Tell me more about ${item.title}` : undefined));
+        return (
+        <div
+          key={i}
+          className={`wgt-card${tapMsg ? ' wgt-card-tap' : ''}`}
+          onClick={tapMsg ? () => onSend(tapMsg, { of: item.title }) : undefined}
+        >
+          {anyImage && (
           <div className="wgt-card-imgwrap">
             {item.image ? (
               <img src={item.image} alt="" loading="lazy" />
@@ -135,6 +167,7 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
             )}
             {item.compare_at && <span className="wgt-card-sale">Sale</span>}
           </div>
+          )}
           <div className="wgt-card-body">
             <div className="wgt-card-t">{item.title}</div>
             {item.subtitle && <div className="wgt-card-s">{item.subtitle}</div>}
@@ -156,7 +189,13 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
           {(item.link || item.select_label) && (
             <div className="wgt-card-btns">
               {item.link && (
-                <a className="wgt-btn" href={item.link} target="_blank" rel="noopener noreferrer">
+                <a
+                  className="wgt-btn"
+                  href={item.link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                >
                   {item.link_label || 'View'}
                 </a>
               )}
@@ -164,15 +203,19 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
                 <button
                   type="button"
                   className="wgt-btn wgt-btn-primary"
-                  onClick={() => onSend(item.select_label!, { of: item.title })}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onSend(item.select_label!, { of: item.title });
+                  }}
                 >
-                  {item.select_label}
+                  {item.select_button ?? item.select_label}
                 </button>
               )}
             </div>
           )}
         </div>
-      ))}
+        );
+      })}
       </div>
       {showArrows && (
         <>
@@ -315,12 +358,55 @@ function Receipt({ w }: { w: Extract<ChatWidget, { type: 'receipt' }> }) {
           <span className="wgt-v">{r.value}</span>
         </div>
       ))}
+      {w.summary?.map((r, i) => (
+        <div key={`s${i}`} className="wgt-row wgt-sumrow">
+          <span>{r.label}</span>
+          <span className="wgt-v">{r.value}</span>
+        </div>
+      ))}
       {w.total && (
         <div className="wgt-row wgt-total">
           <span>{w.total.label}</span>
           <span className="wgt-v">{w.total.value}</span>
         </div>
       )}
+    </div>
+  );
+}
+
+function Pricing({ w, onSend }: { w: Extract<ChatWidget, { type: 'pricing' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
+  return (
+    <div className="wgt-pricing">
+      {w.title && <div className="wgt-title">{w.title}</div>}
+      <div className="wgt-pricing-row">
+        {w.items.map((p, i) => (
+          <div key={i} className={`wgt-plan${p.highlight ? ' featured' : ''}`}>
+            <div className="wgt-plan-head">
+              <strong>{p.name}</strong>
+              {p.current && <span className="badge">current</span>}
+            </div>
+            <div className="wgt-plan-price">{p.price}</div>
+            {p.price_alt && <div className="wgt-plan-alt">{p.price_alt}</div>}
+            {p.blurb && <div className="wgt-plan-blurb">{p.blurb}</div>}
+            {p.features?.length ? (
+              <ul className="wgt-plan-feats">
+                {p.features.map((f, j) => (
+                  <li key={j}>{f}</li>
+                ))}
+              </ul>
+            ) : null}
+            {p.select_label && (
+              <button
+                type="button"
+                className="wgt-btn wgt-btn-primary"
+                onClick={() => onSend(p.select_label!, { of: p.name })}
+              >
+                {p.select_label}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

@@ -17,7 +17,9 @@ export interface KnowledgeFile {
   topic: string | null;
   enabled: boolean;
   refresh_hours: number | null;
+  has_headers?: boolean;
   last_fetched_at: string | null;
+  text_changed_at?: string | null;
   next_fetch_at: string | null;
   created_at: string;
 }
@@ -41,6 +43,33 @@ const looksLikeUrl = (s: string) =>
 
 const tok = (chars: number) =>
   chars >= 40_000 ? `${Math.round(chars / 4000)}k` : Math.round(chars / 4).toLocaleString();
+
+/** One row's stored text, fetched on first expand — the list endpoint
+ *  deliberately ships only metadata so a page of sources stays light. */
+function SourceText({ agentId, fileId }: { agentId: string; fileId: string }) {
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['knowledge-text', fileId],
+    queryFn: () => api<{ text: string }>(`/api/agents/${agentId}/knowledge/${fileId}`),
+  });
+  return (
+    <pre
+      className="muted"
+      style={{
+        marginTop: 8,
+        marginBottom: 0,
+        maxHeight: 260,
+        overflowY: 'auto',
+        whiteSpace: 'pre-wrap',
+        overflowWrap: 'anywhere',
+        fontSize: 12,
+        fontFamily: 'inherit',
+        lineHeight: 1.5,
+      }}
+    >
+      {isLoading ? 'Loading…' : isError ? 'Could not load this source.' : data?.text || '(empty)'}
+    </pre>
+  );
+}
 
 /** One list for every knowledge source — websites, uploaded files, the
  *  owner's notes (one expandable row; dozens of one-line facts shouldn't
@@ -93,6 +122,9 @@ export function SourceList({
   const drafts = articles.filter((a) => a.status !== 'published');
 
   const [input, setInput] = useState('');
+  // Optional auth for the next URL add (private docs/Notion) — sent as
+  // Authorization, stored encrypted server-side, never read back.
+  const [authHeader, setAuthHeader] = useState('');
   const [error, setError] = useState('');
   const [notesOpen, setNotesOpen] = useState(false);
   const [articlesOpen, setArticlesOpen] = useState(false);
@@ -105,6 +137,7 @@ export function SourceList({
   const [importMsg, setImportMsg] = useState('');
   const [importUrl, setImportUrl] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [openFiles, setOpenFiles] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -166,17 +199,19 @@ export function SourceList({
   };
 
   const addUrl = useMutation({
-    mutationFn: (url: string) =>
+    mutationFn: ({ url, auth }: { url: string; auth: string }) =>
       api(`/api/agents/${agentId}/knowledge-url`, {
         method: 'POST',
         body: JSON.stringify({
           url: /^https?:\/\//i.test(url) ? url : `https://${url}`,
           refresh_hours: 24,
           ...(forTopic ? { topic: forTopic.id } : {}),
+          ...(auth ? { headers: { Authorization: auth } } : {}),
         }),
       }),
     onSuccess: () => {
       setInput('');
+      setAuthHeader('');
       invalidate();
       if (forTopic) onTopicSettled?.();
     },
@@ -267,7 +302,7 @@ export function SourceList({
     const v = input.trim();
     if (!v) return;
     if (looksLikeUrl(v)) {
-      addUrl.mutate(v);
+      addUrl.mutate({ url: v, auth: authHeader.trim() });
     } else {
       void saveNotes([...notes, v]);
       setInput('');
@@ -338,6 +373,15 @@ export function SourceList({
                 void upload(e.target.files);
                 e.target.value = '';
               }}
+            />
+            <input
+              className="input"
+              style={{ fontSize: 12, maxWidth: 260 }}
+              type="password"
+              placeholder="Auth header (private links)"
+              title="Optional — sent as the Authorization header when the link is crawled; stored encrypted and never shown again"
+              value={authHeader}
+              onChange={(e) => setAuthHeader(e.target.value)}
             />
           </div>
           <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
@@ -584,6 +628,22 @@ export function SourceList({
             style={{ flex: 1, minWidth: 0, padding: 10, opacity: f.enabled ? 1 : 0.55 }}
           >
             <div className="row muted" style={{ fontSize: 13 }}>
+              <button
+                className="link small muted"
+                style={{ padding: 0 }}
+                aria-label={openFiles.has(f.id) ? `Hide ${f.name} contents` : `View ${f.name} contents`}
+                title={openFiles.has(f.id) ? 'Hide contents' : 'View contents'}
+                onClick={() =>
+                  setOpenFiles((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(f.id)) next.delete(f.id);
+                    else next.add(f.id);
+                    return next;
+                  })
+                }
+              >
+                {openFiles.has(f.id) ? '▾' : '▸'}
+              </button>
               {/* URLs-as-names are one long unbroken string — without a break
                   opportunity the text overflows its box and paints over the
                   row's buttons. */}
@@ -612,10 +672,18 @@ export function SourceList({
                 {f.enabled && data?.budget && f.chars > data.budget.limit && (
                   <span className="error"> · larger than the whole budget — always truncated</span>
                 )}
+                {f.has_headers && (
+                  <span className="badge" style={{ marginLeft: 6 }} title="Crawls with stored auth headers">
+                    auth
+                  </span>
+                )}
                 {f.source_url && (
                   <span className="muted">
                     {' '}· fetched {f.last_fetched_at ? timeAgo(f.last_fetched_at) : 'never'}
                   </span>
+                )}
+                {f.source_url && f.text_changed_at && (
+                  <span className="muted"> · updated {timeAgo(f.text_changed_at)}</span>
                 )}
                 {f.status === 'failed' && <span className="error"> {f.error}</span>}
                 {f.status === 'degraded' && <span className="error"> stale — {f.error}</span>}
@@ -683,6 +751,7 @@ export function SourceList({
                 )}
               </div>
             )}
+            {openFiles.has(f.id) && <SourceText agentId={agentId} fileId={f.id} />}
           </div>
         </div>
       ))}

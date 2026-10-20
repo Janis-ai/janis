@@ -238,6 +238,36 @@ export default function OperatorDocs() {
         it. The Shopify "Search products" template ships bound to cards out of
         the box.
       </p>
+      <h3>Saved components — Behavior → Chat components</h3>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        Reusable, named versions of every widget type. The agent calls one by
+        writing <span className="mono">WIDGET_REF: name</span> — you control the
+        content, it chooses the moment. The <strong>when to use</strong> line is
+        the agent's cue for picking it over prose or another component, so write
+        the trigger, not the content ("customer asks where their order is").{' '}
+        <strong>Show on open</strong> pins a component under the chat greeting.
+      </p>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        Any field can hold a <span className="mono">{'{prop}'}</span>{' '}
+        placeholder the agent fills with ref data
+        (<span className="mono">{'WIDGET_REF: plans {"plan":"pro"}'}</span>).
+        Bind a <strong>tool</strong> and the ref becomes that tool's call: the
+        agent supplies the args in the ref data, the JSON result fills{' '}
+        <span className="mono">{'{props}'}</span> and the list rows
+        (<span className="mono">items</span> for cards/options,{' '}
+        <span className="mono">steps</span> for status,{' '}
+        <span className="mono">rows</span> for receipts) through the mapping —{' '}
+        <span className="mono">{'{"items":"path.to.rows","item_map":{"title":"name"}}'}</span>{' '}
+        plus format modifiers like <span className="mono">{'{ts:date}'}</span>,{' '}
+        <span className="mono">{':money'}</span>,{' '}
+        <span className="mono">{':pretty'}</span> and{' '}
+        <span className="mono">{':stepstate'}</span>. Facts always come from the
+        tool — the model selects, it never invents prices or statuses. Named{' '}
+        <strong>states</strong> add variant layouts picked by{' '}
+        <span className="mono">{'{"state":"name"}'}</span>. Use{' '}
+        <strong>Run with real data</strong> in the editor to preview the exact
+        render with a live tool call before saving.
+      </p>
     </>
   );
 }

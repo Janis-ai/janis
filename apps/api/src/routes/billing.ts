@@ -6,6 +6,7 @@ import { agents, channels, usageEvents, workspaces } from '../db/schema.js';
 import { allRates, billingConfig, currentPeriod, rateFor } from '../lib/billing.js';
 import { effectivePlanKey, invalidateCapCache, messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
 import { ensureStripeCustomer, planForPrice, stripe } from '../lib/stripe.js';
+import { disableSsoIfUngated } from '../lib/workos.js';
 import { env } from '../env.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { audit } from '../lib/audit.js';
@@ -18,6 +19,26 @@ const planChanged = (wsId: string) => {
   invalidateCapCache(wsId);
   bus.publish(wsId, { type: 'workspace', data: { id: wsId } });
 };
+
+// Yearly price amounts for the plan cards — Stripe prices change rarely;
+// memoize per process so /summary doesn't hit the API per plan per load.
+const yearlyCentsCache = new Map<string, number | null>();
+export async function yearlyCents(plan: string): Promise<number | null> {
+  if (yearlyCentsCache.has(plan)) return yearlyCentsCache.get(plan)!;
+  let cents: number | null = null;
+  const priceId = env.stripeYearlyPrices[plan];
+  const s = stripe();
+  if (priceId && s) {
+    try {
+      const price = await s.prices.retrieve(priceId);
+      cents = price.unit_amount;
+    } catch {
+      cents = null;
+    }
+  }
+  yearlyCentsCache.set(plan, cents);
+  return cents;
+}
 
 export function billingRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
@@ -158,16 +179,17 @@ export function billingRoutes(db: Db) {
       period,
       stripe_enabled: Boolean(env.stripeSecret),
       has_billing_account: Boolean(ws?.stripeCustomerId),
-      plans: Object.entries(PLANS)
+      plans: await Promise.all(Object.entries(PLANS)
         .filter(([, p]) => !p.hidden)
-        .map(([key, p]) => ({
+        .map(async ([key, p]) => ({
         key,
         name: p.name,
         base_cents: p.baseCents,
         included_messages: p.includedMessages,
         overage_per_1k_cents: p.overagePer1kCents,
         purchasable: Boolean(env.stripePrices[key]),
-      })),
+        yearly_cents: await yearlyCents(key),
+      }))),
       plan: {
         key: ws?.stripeSubscriptionId ? (ws?.plan ?? 'free') : (planKey ?? 'free'),
         name: plan.name,
@@ -223,6 +245,7 @@ export function billingRoutes(db: Db) {
       .set({ plan })
       .where(eq(workspaces.id, c.get('workspaceId')));
     planChanged(c.get('workspaceId'));
+    await disableSsoIfUngated(db, c.get('workspaceId'));
     return c.json({ plan });
   });
 
@@ -408,6 +431,7 @@ export function billingRoutes(db: Db) {
       .set({ plan: 'free', stripeSubscriptionId: null, connectSubscriptionId: null })
       .where(eq(workspaces.id, workspaceId));
     planChanged(workspaceId);
+    await disableSsoIfUngated(db, workspaceId);
     await audit(db, {
       workspaceId, userId: c.get('user').id, userName: c.get('user').name,
       action: 'billing.downgrade', targetType: 'workspace', targetId: workspaceId,
@@ -655,6 +679,7 @@ export function stripeWebhookRoutes(db: Db) {
             .where(eq(workspaces.id, wsId));
         }
         planChanged(wsId);
+        await disableSsoIfUngated(db, wsId);
       }
     } else if (
       connectAccount &&
@@ -685,7 +710,10 @@ export function stripeWebhookRoutes(db: Db) {
                 .where(cond)
                 .returning({ id: workspaces.id })
             : [];
-      for (const ws of updated) planChanged(ws.id);
+      for (const ws of updated) {
+        planChanged(ws.id);
+        await disableSsoIfUngated(db, ws.id);
+      }
     } else if (
       event.type === 'customer.subscription.created' ||
       event.type === 'customer.subscription.updated'
@@ -705,7 +733,10 @@ export function stripeWebhookRoutes(db: Db) {
             ),
           )
           .returning({ id: workspaces.id });
-        for (const ws of updated) planChanged(ws.id);
+        for (const ws of updated) {
+          planChanged(ws.id);
+          await disableSsoIfUngated(db, ws.id);
+        }
       }
     } else if (event.type === 'customer.subscription.deleted') {
       const sub = event.data.object;
@@ -720,7 +751,10 @@ export function stripeWebhookRoutes(db: Db) {
           ),
         )
         .returning({ id: workspaces.id });
-      for (const ws of updated) planChanged(ws.id);
+      for (const ws of updated) {
+        planChanged(ws.id);
+        await disableSsoIfUngated(db, ws.id);
+      }
     }
 
     return c.json({ received: true });

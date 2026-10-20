@@ -233,6 +233,11 @@ export interface InboundMessage {
    *  user_profile.metadata.cart so "what's in my cart" answers from the
    *  shopper's real cart, not the catalog. */
   cart?: string;
+  /** Shopper's resolved Shopify market (webchat on a Shopify storefront only)
+   *  — the widget reads Shopify.country and passes the two-letter code;
+   *  lands on user_profile.market so the agent can narrate market-scoped
+   *  availability ("sold out for your market" vs "out of stock"). */
+  market?: string;
   /** Identity asserted by the embedding host (webchat): session-authenticated
    *  or HMAC-signed payloads carry verified=true; anything else is a claim.
    *  `via` marks where the identity came from. `janisUser` is set when a
@@ -555,6 +560,11 @@ export interface SendOptions {
   /** Operator avatar — Personas require a profile picture URL; without one
    * the message falls back to the inline name prefix. */
   senderAvatar?: string | null;
+  /** Live human-operator reply — Meta/IG sends it tagged HUMAN_AGENT so the
+   * 24h window doesn't reject a late operator response (7-day window; the
+   * app holds the Human Agent permission). Bot replies must never carry the
+   * tag — it's a human-only allowance, and tagging automation is misuse. */
+  humanAgent?: boolean;
   /** Email subject for a fresh outbound thread — replies still derive the
    * subject from the customer's last inbound. */
   subject?: string;
@@ -858,6 +868,7 @@ export async function sendChannelMessage(
           recipient: { id: platformUserId },
           message,
           ...(personaId ? { persona_id: personaId } : {}),
+          ...(opts?.humanAgent ? { messaging_type: 'MESSAGE_TAG', tag: 'HUMAN_AGENT' } : {}),
         }),
         signal: AbortSignal.timeout(15_000),
       });
@@ -1102,11 +1113,14 @@ async function emailThreadContext(
   channel: ChannelRow,
   platformUserId: string,
   opts?: SendOptions,
-): Promise<{ subject: string; refs: string[]; threadId?: string }> {
+): Promise<{ subject: string; refs: string[]; threadId?: string; graphId?: string }> {
   // Fresh outbound thread — the caller's subject instead of a fake "Re:".
   let subject = opts?.subject?.trim() || `Re: ${channel.name}`;
   const refs: string[] = [];
   let threadId: string | undefined;
+  // Outlook: the inbound's Graph message id — replies use /messages/{id}/reply
+  // since sendMail can't set threading headers.
+  let graphId: string | undefined;
   if (db) {
     const [binding] = await db
       .select({ conversationId: channelBindings.conversationId })
@@ -1131,14 +1145,16 @@ async function emailThreadContext(
           .orderBy(desc(messages.createdAt))
           .limit(1)
       : [];
-    const em = ((lastIn?.payload as { email?: EmailMeta } | null)?.email) ?? {};
+    const em = ((lastIn?.payload as { email?: EmailMeta; mid?: string } | null)?.email) ?? {};
     threadId = em.thread_id;
     if (em.subject) {
       subject = /^re:/i.test(em.subject.trim()) ? em.subject : `Re: ${em.subject}`;
     }
     if (em.message_id) refs.push(...(em.references ?? []), em.message_id);
+    const mid = (lastIn?.payload as { mid?: string } | null)?.mid;
+    if (mid?.startsWith('outlook:')) graphId = mid.slice(8);
   }
-  return { subject, refs, threadId };
+  return { subject, refs, threadId, graphId };
 }
 
 /** From display name — operator identity rides the name field; an inline
@@ -1302,8 +1318,9 @@ async function sendGmailReply(
   }
 }
 
-/** Outlook channel (Microsoft Graph): /me/sendMail with Re: subject +
- * In-Reply-To/References for threading — attachments as hosted links. */
+/** Outlook channel (Microsoft Graph): /me/messages/{id}/reply when a stored
+ * inbound carries the Graph id (native threading — sendMail can't set
+ * In-Reply-To), /me/sendMail for fresh threads. Attachments ride as links. */
 async function sendOutlookReply(
   db: Db | undefined,
   channel: ChannelRow,
@@ -1321,21 +1338,32 @@ async function sendOutlookReply(
     };
   }
   try {
-    const { ensureMsToken, sendMail } = await import('./outlook.js');
+    const { ensureMsToken, sendMail, replyMail } = await import('./outlook.js');
     const token = await ensureMsToken(db, channel);
-    const { subject, refs } = await emailThreadContext(db, channel, platformUserId, opts);
-    await sendMail(token, {
-      from: creds.from_address,
-      to: platformUserId,
-      subject,
-      text: emailBody(text, opts),
-      inReplyTo: refs[refs.length - 1],
-      references: refs,
-      attachmentLinks: attachments?.map((a) => ({
-        name: a.name,
-        url: absoluteAttachmentUrl(a),
-      })),
-    });
+    const { subject, graphId } = await emailThreadContext(db, channel, platformUserId, opts);
+    const body = emailBody(text, opts);
+    const attachmentLinks = attachments?.map((a) => ({
+      name: a.name,
+      url: absoluteAttachmentUrl(a),
+    }));
+    if (graphId) {
+      await replyMail(token, graphId, {
+        from: creds.from_address,
+        fromName: emailDisplayName(channel, creds, opts),
+        to: platformUserId,
+        text: body,
+        attachmentLinks,
+      });
+    } else {
+      await sendMail(token, {
+        from: creds.from_address,
+        fromName: emailDisplayName(channel, creds, opts),
+        to: platformUserId,
+        subject,
+        text: body,
+        attachmentLinks,
+      });
+    }
     return { mid: null, error: null, retryable: true };
   } catch (e) {
     return {

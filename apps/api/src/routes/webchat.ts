@@ -666,6 +666,7 @@ export function webchatRoutes(db: Db) {
       name: resolved?.name ?? name,
       user: resolved,
       cart,
+      market: market?.toUpperCase(),
       thread: threadKey,
       attachments,
       payload: {
@@ -705,20 +706,21 @@ export function webchatRoutes(db: Db) {
         participantFor(resolved, visitor_id, threadFor(thread)),
       );
       if (!resolved || !conv) return c.json({ ok: true }); // attaches on first message anyway
-      const profile = (conv.userProfile ?? {}) as Record<string, unknown>;
       const patch = {
         ...(resolved.name ? { name: resolved.name } : {}),
         ...(resolved.email ? { email: resolved.email } : {}),
         ...(resolved.avatarUrl ? { picture_url: resolved.avatarUrl } : {}),
         ...(resolved.verified && resolved.id ? { external_id: resolved.id } : {}),
         identity_verified: resolved.verified === true,
-        ...(resolved.traits
-          ? { metadata: { ...((profile.metadata as object) ?? {}), ...resolved.traits } }
-          : {}),
       };
+      // Per-key merge — a stale read-modify-write would clobber concurrent
+      // verification/profile keys (pending_verification, verified_emails).
+      let profileMerge = sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`;
+      if (resolved.traits)
+        profileMerge = sql`${profileMerge} || jsonb_build_object('metadata', coalesce(${conversations.userProfile}->'metadata', '{}'::jsonb) || ${JSON.stringify(resolved.traits)}::jsonb)`;
       await db
         .update(conversations)
-        .set({ userProfile: { ...profile, ...patch } })
+        .set({ userProfile: profileMerge })
         .where(eq(conversations.id, conv.id));
       return c.json({ ok: true });
     },

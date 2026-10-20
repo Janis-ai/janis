@@ -17,6 +17,7 @@ interface BillingSummary {
     included_messages: number;
     overage_per_1k_cents: number | null;
     purchasable: boolean;
+    yearly_cents: number | null;
   }[];
   plan: {
     key: string;
@@ -58,6 +59,7 @@ export default function Billing() {
   const [confirmEl, confirm] = useConfirm();
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [interval, setInterval_] = useState<'month' | 'year'>('month');
   const qc = useQueryClient();
   const [upgraded, setUpgraded] = useState(
     () => new URLSearchParams(window.location.search).has('upgraded'),
@@ -98,7 +100,7 @@ export default function Billing() {
       }
       const r = await api<{ url: string }>('/api/billing/checkout', {
         method: 'POST',
-        body: JSON.stringify({ plan }),
+        body: JSON.stringify({ plan, interval }),
       });
       window.location.href = r.url;
     } catch (e) {
@@ -175,10 +177,28 @@ export default function Billing() {
       {data && (
         <>
           <div className="card">
-            <h3 style={{ marginTop: 0 }}>Plan</h3>
+            <div className="row" style={{ alignItems: 'baseline' }}>
+              <h3 className="grow" style={{ marginTop: 0 }}>Plan</h3>
+              {data.plans.some((p) => p.yearly_cents) && (
+                <div className="row" style={{ gap: 4 }}>
+                  {(['month', 'year'] as const).map((i) => (
+                    <button
+                      key={i}
+                      className={`btn ${interval === i ? 'primary' : ''}`}
+                      style={{ padding: '4px 12px' }}
+                      onClick={() => setInterval_(i)}
+                    >
+                      {i === 'month' ? 'Monthly' : 'Annual'}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <div className="plan-grid">
               {data.plans.map((p) => {
                 const current = p.key === data.plan.key;
+                const yearly = interval === 'year';
+                const priceCents = yearly ? p.yearly_cents : p.base_cents;
                 return (
                   <div
                     key={p.key}
@@ -190,8 +210,20 @@ export default function Billing() {
                   >
                     <div style={{ fontWeight: 700 }}>{p.name}</div>
                     <div className="mono" style={{ fontSize: 20, margin: '4px 0' }}>
-                      {usd(p.base_cents)}<span className="muted" style={{ fontSize: 12 }}>/mo</span>
+                      {priceCents != null ? (
+                        <>
+                          {usd(priceCents)}
+                          <span className="muted" style={{ fontSize: 12 }}>{yearly ? '/yr' : '/mo'}</span>
+                        </>
+                      ) : (
+                        <span className="muted" style={{ fontSize: 13 }}>monthly only</span>
+                      )}
                     </div>
+                    {yearly && priceCents != null && (
+                      <div className="muted" style={{ fontSize: 12 }}>
+                        {usd(p.base_cents)}/mo equivalent — pay 10 months, get 12
+                      </div>
+                    )}
                     <div className="muted" style={{ fontSize: 13 }}>
                       {p.included_messages.toLocaleString()} messages included / month
                       <br />
@@ -205,13 +237,14 @@ export default function Billing() {
                       <button className="btn" style={{ marginTop: 10 }} onClick={() => void downgrade()}>
                         Downgrade
                       </button>
-                    ) : p.purchasable ? (
+                    ) : p.purchasable && (!yearly || p.yearly_cents != null) ? (
                       <button
                         className="btn primary"
                         style={{ marginTop: 10 }}
                         onClick={() => void checkout(p.key)}
                       >
                         {data.plan.base_cents < p.base_cents ? 'Upgrade' : 'Switch'}
+                        {yearly ? ' annually' : ''}
                       </button>
                     ) : (
                       <div className="muted" style={{ marginTop: 10 }}>Contact us</div>

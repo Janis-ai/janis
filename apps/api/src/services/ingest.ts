@@ -1,5 +1,5 @@
 import type { IngestEvent, IngestResult, QuickReply } from '@janis/shared';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -126,7 +126,15 @@ export async function processEvents(
           void mirrorToSlack(db, conv.id, icon, `_${message.text}_`);
         } else {
           const label = message.direction === 'in' ? ':busts_in_silhouette: *user:*' : ':robot_face: *agent:*';
-          void mirrorToSlack(db, conv.id, label, message.text, { direction: message.direction });
+          const mp = (message.payload ?? {}) as {
+            widgets?: WidgetComponent[];
+            quick_replies?: QuickReply[];
+          };
+          void mirrorToSlack(db, conv.id, label, message.text, {
+            direction: message.direction,
+            widgets: mp.widgets,
+            quickReplies: mp.quick_replies,
+          });
         }
         // hosted channels: agent replies go straight to the end user —
         // never internal notes (failures/handoffs/alerts), which are also 'out'.
@@ -154,14 +162,22 @@ export async function processEvents(
     // Intent classification — once per conversation, off the hot path. BYO
     // agents can stamp payload.intent and skip the LLM entirely. Later
     // inbounds feed the drift re-check (throttled in recheckIntent) plus a
-    // per-message sentiment read when a sentiment rule opted in.
-    if (event.type === 'message_in' && conv.intent == null) {
-      const payloadIntent =
-        typeof event.payload?.intent === 'string' ? event.payload.intent : null;
-      void classifyAndRoute(db, agent, conv, event.text, payloadIntent).catch(() => {});
-    } else if (event.type === 'message_in') {
-      void recheckIntent(db, agent, conv).catch(() => {});
-      void checkInboundSentiment(db, agent, conv, event.text, rules).catch(() => {});
+    // per-message sentiment read when a sentiment rule opted in. Operator
+    // turns (Ask rail, copilot, Slack concierge — any u:-bound participant)
+    // skip all of it: scoring a teammate's mood against "customer sentiment"
+    // produces noise alerts and internal notes on internal surfaces.
+    const operatorInbound =
+      'payload' in event &&
+      (event.payload as { operator?: boolean } | undefined)?.operator === true;
+    if (event.type === 'message_in' && !operatorInbound) {
+      if (conv.intent == null) {
+        const payloadIntent =
+          typeof event.payload?.intent === 'string' ? event.payload.intent : null;
+        void classifyAndRoute(db, agent, conv, event.text, payloadIntent).catch(() => {});
+      } else {
+        void recheckIntent(db, agent, conv).catch(() => {});
+        void checkInboundSentiment(db, agent, conv, event.text, rules).catch(() => {});
+      }
     }
 
     // Workspace event export — Zapier/Make catch hooks see inbound traffic
@@ -299,10 +315,10 @@ export async function processEvents(
     if (event.type === 'resolve' && (state === 'active' || state === 'needs_human'))
       state = 'archived';
 
-    // A customer who replies past a handoff offer didn't take it — the
-    // "awaiting customer" window is over, so the offer alert is stale. If
-    // they accepted, this same event fires handoff_request → help_request,
-    // which opens its own alert and escalates — nothing real is hidden.
+    // A customer reply past a handoff offer closes the "awaiting customer"
+    // window, so the offer alert is stale. Whether they accepted or moved
+    // on, the reply itself decides what happens next — an accepted offer
+    // fires handoff_request → help_request on the same turn.
     if (event.type === 'message_in' && !newAlertTypes.includes('help_request')) {
       const staleOffers = await resolveOpenAlerts(db, agent.workspaceId, conv.id, 'handoff_offer');
       if (staleOffers.length) {
@@ -310,7 +326,7 @@ export async function processEvents(
           db,
           agent.workspaceId,
           conv.id,
-          'Handoff offer expired — the customer replied instead of accepting',
+          'Handoff offer closed — the customer replied',
           'alert_status',
         );
       }
@@ -332,6 +348,20 @@ export async function processEvents(
       : conv.tags;
 
     const preview = eventText(event);
+    // Per-key merge, never stale-snapshot replace — verification and ingress
+    // writes elsewhere land on this row between the conv read and here.
+    const profileDefined = event.user
+      ? Object.fromEntries(Object.entries(event.user).filter(([, v]) => v != null && v !== ''))
+      : null;
+    let profileMerge: SQL | undefined;
+    if (profileDefined && Object.keys(profileDefined).length) {
+      const { metadata: metaPatch, ...topPatch } = profileDefined as Record<string, unknown> & {
+        metadata?: Record<string, unknown>;
+      };
+      profileMerge = sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || ${JSON.stringify(topPatch)}::jsonb`;
+      if (metaPatch && Object.keys(metaPatch).length)
+        profileMerge = sql`${profileMerge} || jsonb_build_object('metadata', coalesce(${conversations.userProfile}->'metadata', '{}'::jsonb) || ${JSON.stringify(metaPatch)}::jsonb)`;
+    }
     const [updated] = await db
       .update(conversations)
       .set({
@@ -352,7 +382,7 @@ export async function processEvents(
         // Merge, not replace — later events only overwrite the fields they
         // actually carry, so a profile fetched earlier (or an email the
         // customer shared) survives sparse updates
-        ...(event.user ? { userProfile: mergeProfile(conv.userProfile, event.user) } : {}),
+        ...(profileMerge ? { userProfile: profileMerge } : {}),
       })
       .where(eq(conversations.id, conv.id))
       .returning();
@@ -513,26 +543,6 @@ async function insertEventMessage(db: Db, conversationId: string, event: IngestE
   // message_out / message_in / human-bearing events all produce a message row
   const [message] = await db.insert(messages).values(row).returning();
   return message;
-}
-
-/** Overlay defined values from `update` onto the stored profile. `metadata`
- *  merges key-wise so a later partial trait set can't erase earlier keys. */
-function mergeProfile(
-  existing: unknown,
-  update: Record<string, unknown>,
-): Record<string, unknown> {
-  const base = (existing ?? {}) as Record<string, unknown>;
-  const defined = Object.fromEntries(
-    Object.entries(update).filter(([, v]) => v != null && v !== ''),
-  );
-  const out = { ...base, ...defined };
-  if (defined.metadata || base.metadata) {
-    out.metadata = {
-      ...((base.metadata as Record<string, unknown>) ?? {}),
-      ...((defined.metadata as Record<string, unknown>) ?? {}),
-    };
-  }
-  return out;
 }
 
 function directionFor(event: IngestEvent): 'in' | 'out' | 'human' {

@@ -48,8 +48,8 @@ import { useConfirm } from '../components/Prompt';
 import { FlaskConical, Pencil, Trash2, Upload, X } from 'lucide-react';
 
 type RuleKind = AlertRule['kind'];
-/** `defaultOn` kinds page the workspace even with zero rules — a rule exists
- *  to route or mute them, not to turn them on (mirrors evaluateEvent's
+/** `defaultOn` kinds ping the workspace even with zero rules — a rule exists
+ *  to assign or mute them, not to turn them on (mirrors evaluateEvent's
  *  fires(): no rule of the kind = on). */
 const RULE_KINDS: { key: RuleKind; label: string; hint: string; defaultOn?: boolean }[] = [
   { key: 'handoff_request', label: 'Handoff request', hint: 'the agent asks for a human', defaultOn: true },
@@ -64,6 +64,21 @@ const RULE_KINDS: { key: RuleKind; label: string; hint: string; defaultOn?: bool
   { key: 'auto_assign', label: 'Auto-assign', hint: 'every new conversation goes to the next pool member' },
 ];
 const kindMeta = (k: RuleKind) => RULE_KINDS.find((x) => x.key === k);
+/** Kinds with no filter params — a second rule of the same kind can never
+ *  fire (first match wins the per-conversation alert). inactivity joins
+ *  them despite its minutes param: the sweeper collapses an agent's
+ *  inactivity rules to the smallest threshold, so tiers can't work.
+ *  keyword/intent/csat stay multi — different filters match disjoint
+ *  events. */
+const SINGLE_RULE_KINDS = new Set<RuleKind>([
+  'handoff_request',
+  'sentiment',
+  'error',
+  'failure',
+  'custom_alert',
+  'auto_assign',
+  'inactivity',
+]);
 const TEMPLATE_WEBHOOK = 'http://localhost:9798/webhook';
 
 /** Agent config sections — one per sidebar entry. `hosted` sections are
@@ -420,7 +435,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
           home is now the Behavior → Chat components sub-tab. */}
       {(section === 'components' || (section === 'behavior' && sub === 'components')) &&
         janisBrain(agent) && (
-        <SavedWidgets agentId={agent.id} isAdmin={isAdmin} tools={(cfg.tools ?? []).map((t) => t.name)} />
+        <SavedWidgets agentId={agent.id} isAdmin={isAdmin} tools={cfg.tools ?? []} />
       )}
       {section === 'tests' && janisBrain(agent) && <TestsTab agentId={agent.id} agent={agent} isAdmin={isAdmin} />}
       {section === 'behavior' && (
@@ -1440,6 +1455,9 @@ function EscalationTab({
 }) {
   const [kind, setKind] = useState<RuleKind>('handoff_request');
   const [editing, setEditing] = useState<AlertRule | null>(null);
+  // The builder stays collapsed behind "Create rule" — an always-open form
+  // reads like a rule that already exists.
+  const [builderOpen, setBuilderOpen] = useState(false);
   const [keywords, setKeywords] = useState('');
   const [intents, setIntents] = useState<string[]>([]);
   const [topicDraft, setTopicDraft] = useState('');
@@ -1449,6 +1467,11 @@ function EscalationTab({
   const [ruleTag, setRuleTag] = useState('');
   const [pool, setPool] = useState<string[]>([]);
   const [groupIds, setGroupIds] = useState<string[]>([]);
+  // Who the alert PINGS — decoupled from who owns the thread. 'assignee'
+  // pings the picked assignee; 'pool' everyone in the rotation; 'workspace'
+  // everybody. Only meaningful on routed rules — just-alert always pings
+  // the workspace.
+  const [notifyMode, setNotifyMode] = useState<'assignee' | 'pool' | 'workspace'>('assignee');
   const { data: members } = useAgentMembers(agent.id);
   const { data: groupsData } = useGroups();
   const { data: users } = useUsers();
@@ -1504,6 +1527,16 @@ function EscalationTab({
       c.assign_to ? `assign ${teammateName(c.assign_to)}` : null,
       roster.length ? `rotate ${roster.join(', ')}` : null,
       c.tag ? `tag "${c.tag}"` : null,
+      c.notify === 'workspace'
+        ? 'ping the whole workspace'
+        : c.notify === 'pool'
+          ? 'ping everyone in the rotation'
+          : Array.isArray(c.notify)
+            ? `ping ${(c.notify as string[]).map(teammateName).join(', ')}`
+            : null,
+      // Unrouted alerts ping the whole workspace — surface the default so
+      // a bare rule doesn't read like it notifies nobody.
+      roster.length || c.assign_to ? null : 'ping the whole workspace',
     ].filter(Boolean);
     return `${when}${then.length ? ` → ${then.join(' + ')}` : ''}`;
   };
@@ -1511,40 +1544,27 @@ function EscalationTab({
   const toggleRule = (r: AlertRule) =>
     onUpdateRule(r.id, { ...r.config, enabled: r.config.enabled === false });
 
-  const { data: meData } = useMe();
-  const meId = meData?.user.id;
-  // Members can route a rule's alerts to themselves (or back out) without
-  // admin help — the API enforces that the diff touches only their own id.
-  const selfAssigned = (r: AlertRule) =>
-    !!meId && (r.config.assign_to === meId || (r.config.assignees ?? []).includes(meId));
-  const toggleSelfAssign = (r: AlertRule) => {
-    if (!meId) return;
-    const c = { ...r.config } as {
-      assign_to?: string;
-      assignees?: string[];
-      [k: string]: unknown;
-    };
-    if (selfAssigned(r)) {
-      if (c.assign_to === meId) delete c.assign_to;
-      const rest = (c.assignees ?? []).filter((id) => id !== meId);
-      if (rest.length) c.assignees = rest;
-      else delete c.assignees;
-    } else {
-      // Join the rotation — self-assigning a fixed-owner rule rotates with them.
-      const ids = [...new Set([c.assign_to, ...(c.assignees ?? []), meId].filter(Boolean))] as string[];
-      delete c.assign_to;
-      c.assignees = ids;
-    }
-    onUpdateRule(r.id, c);
-  };
-
   const toggle = (list: string[], id: string, set: (v: string[]) => void) =>
     set(list.includes(id) ? list.filter((x) => x !== id) : [...list, id]);
 
+  // A filterless kind that already has a rule can't be picked — keep Add
+  // disabled too in case the select is sitting on a disabled option.
+  const kindTaken =
+    !editing && SINGLE_RULE_KINDS.has(kind) && rules.some((r) => r.kind === kind);
   const canAdd =
+    !kindTaken &&
     (kind !== 'keyword' || keywords.trim().length > 0) &&
     (kind !== 'intent' || intents.length > 0) &&
     (route !== 'route' || pool.length + groupIds.length > 0);
+  const openBuilder = () => {
+    // Default the trigger to the first kind that can still take a rule.
+    setKind(
+      RULE_KINDS.find(
+        (k) => !(SINGLE_RULE_KINDS.has(k.key) && rules.some((r) => r.kind === k.key)),
+      )?.key ?? 'handoff_request',
+    );
+    setBuilderOpen(true);
+  };
 
   // Editing an existing rule: "Save changes" grays out while the form still
   // holds the stored values — mirrors the unpacking in editRule. String
@@ -1571,9 +1591,14 @@ function EscalationTab({
       sameList(groupIds, c.group_ids) &&
       ruleTag.trim() === (c.tag ?? '') &&
       (c.assign_to ?? '') ===
-        (route === 'route' && pool.length === 1 && groupIds.length === 0 ? pool[0] : '')
+        (route === 'route' && pool.length === 1 && groupIds.length === 0 ? pool[0] : '') &&
+      // Legacy member-list notify is API-only — the builder can only
+      // reproduce the literal modes or unset, so anything else reads as
+      // changed.
+      notifyMode ===
+        (c.notify === 'pool' ? 'pool' : c.notify === 'workspace' ? 'workspace' : c.notify === undefined ? 'assignee' : 'other')
     );
-  }, [editing, keywords, intents, minutes, maxScore, route, ruleTag, pool, groupIds]);
+  }, [editing, keywords, intents, minutes, maxScore, route, ruleTag, pool, groupIds, notifyMode]);
 
   const buildConfig = (enabled: boolean) => ({
     enabled,
@@ -1589,10 +1614,12 @@ function EscalationTab({
         : { assignees: pool, group_ids: groupIds, next: editing ? ((editing.config as { next?: number }).next ?? 0) : 0 }
       : {}),
     ...(ruleTag.trim() ? { tag: ruleTag.trim() } : {}),
+    ...(route === 'route' && notifyMode !== 'assignee' ? { notify: notifyMode } : {}),
   });
 
   const resetBuilder = () => {
     setEditing(null);
+    setBuilderOpen(false);
     setKeywords('');
     setIntents([]);
     setTopicDraft('');
@@ -1600,6 +1627,7 @@ function EscalationTab({
     setRuleTag('');
     setPool([]);
     setGroupIds([]);
+    setNotifyMode('assignee');
   };
 
   const submitRule = () => {
@@ -1615,6 +1643,7 @@ function EscalationTab({
   const editRule = (r: AlertRule) => {
     const c = r.config;
     setEditing(r);
+    setBuilderOpen(true);
     setKind(r.kind);
     setKeywords((c.keywords ?? []).join(', '));
     setIntents(c.intents ?? []);
@@ -1624,6 +1653,7 @@ function EscalationTab({
     setRuleTag(c.tag ?? '');
     setPool([...(c.assignees ?? []), ...(c.assign_to ? [c.assign_to] : [])]);
     setGroupIds(c.group_ids ?? []);
+    setNotifyMode(c.notify === 'pool' ? 'pool' : c.notify === 'workspace' ? 'workspace' : 'assignee');
   };
 
   // A custom topic typed into a rule only fires if the classifier can emit
@@ -1647,8 +1677,9 @@ function EscalationTab({
       <div className="card" style={{ marginTop: 12 }}>
         <strong>Alert &amp; routing rules</strong>
         <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
-          When a trigger fires, the alert pages the routed teammate (or the whole workspace
-          when nobody is routed). Routing fills an unassigned thread — it never steals.
+          When a trigger fires, Janis opens an alert and pings the whole workspace — nobody is
+          assigned. Assigning a teammate or rotation makes them the thread owner (only when
+          unassigned — it never steals) and pings them; Ping widens who else hears about it.
         </div>
         {rules.map((r) => (
           <div key={r.id} className="row" style={{ marginTop: 8 }}>
@@ -1664,9 +1695,6 @@ function EscalationTab({
               <strong>{kindMeta(r.kind)?.label ?? r.kind}</strong>
               <span className="muted"> — {describeRule(r)}</span>
             </span>
-            <button className="btn" onClick={() => toggleSelfAssign(r)} title={selfAssigned(r) ? 'Stop routing this alert to me' : 'Route this alert to me'}>
-              {selfAssigned(r) ? 'unassign me' : 'assign me'}
-            </button>
             {isAdmin && (
               <>
                 <button className="btn" onClick={() => editRule(r)} aria-label="Edit rule"><Pencil size={14} /></button>
@@ -1677,17 +1705,22 @@ function EscalationTab({
         ))}
         {rules.length === 0 && (
           <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-            No rules yet — handoffs, failures, and custom alerts still page the workspace by
+            No rules yet — handoffs, failures, and custom alerts still ping the workspace by
             default.
           </div>
         )}
         {!isAdmin && (
           <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-            You can assign or unassign yourself on a rule; an admin manages everything else.
+            Rules are managed by workspace admins.
           </div>
         )}
 
-        {isAdmin && (
+        {isAdmin && !builderOpen && (
+          <div style={{ borderTop: '1px solid var(--line)', marginTop: 12, paddingTop: 10 }}>
+            <button className="btn" onClick={openBuilder}>Create rule</button>
+          </div>
+        )}
+        {isAdmin && builderOpen && (
         <div style={{ borderTop: '1px solid var(--line)', marginTop: 12, paddingTop: 10 }}>
           {editing && (
             <div className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
@@ -1701,16 +1734,25 @@ function EscalationTab({
               disabled={!!editing}
               onChange={(e) => setKind(e.target.value as RuleKind)}
             >
-              {RULE_KINDS.map((k) => (
-                <option key={k.key} value={k.key}>{k.label}</option>
-              ))}
+              {RULE_KINDS.map((k) => {
+                // Filterless kinds fire once per trigger — a second copy
+                // would sit dead. Gray the option out instead of letting a
+                // do-nothing rule get created.
+                const taken =
+                  !editing && SINGLE_RULE_KINDS.has(k.key) && rules.some((r) => r.kind === k.key);
+                return (
+                  <option key={k.key} value={k.key} disabled={taken}>
+                    {k.label}{taken ? ' — already has a rule' : ''}
+                  </option>
+                );
+              })}
             </select>
             <span className="muted" style={{ fontSize: 12 }}>
               {editing
                 ? 'kind is fixed once created'
                 : `${kindMeta(kind)?.hint ?? ''}${
                     kindMeta(kind)?.defaultOn
-                      ? ' — already pages the workspace by default; a rule routes or mutes it'
+                      ? ' — already pings the workspace by default; a rule assigns or mutes it'
                       : ''
                   }`}
             </span>
@@ -1787,9 +1829,17 @@ function EscalationTab({
 
           <div className="row" style={{ marginTop: 8 }}>
             <label className="muted" style={{ fontSize: 12 }}>Then</label>
-            <select value={route} onChange={(e) => setRoute(e.target.value as typeof route)}>
+            <select
+              value={route}
+              onChange={(e) => {
+                const v = e.target.value as typeof route;
+                setRoute(v);
+                // ping choice is meaningless with nobody assigned — reset.
+                if (v !== 'route') setNotifyMode('assignee');
+              }}
+            >
               <option value="none">just alert</option>
-              <option value="route">route to teammates…</option>
+              <option value="route">assign to teammates…</option>
             </select>
             <input
               style={{ width: 130 }}
@@ -1798,6 +1848,11 @@ function EscalationTab({
               onChange={(e) => setRuleTag(e.target.value)}
             />
           </div>
+          {route !== 'route' && (
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              Pings the whole workspace — nobody is assigned.
+            </div>
+          )}
           {route === 'route' && (
             <>
             <div className="row" style={{ marginTop: 8, flexWrap: 'wrap' }}>
@@ -1831,15 +1886,24 @@ function EscalationTab({
               One teammate becomes the fixed owner; more than one rotates between them.
               Groups join the rotation by roster.
             </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <label className="muted" style={{ fontSize: 12 }}>Ping</label>
+              <select
+                value={notifyMode}
+                onChange={(e) => setNotifyMode(e.target.value as typeof notifyMode)}
+              >
+                <option value="assignee">whoever's assigned</option>
+                <option value="pool">everyone in the rotation</option>
+                <option value="workspace">the whole workspace</option>
+              </select>
+            </div>
             </>
           )}
           <div className="row" style={{ marginTop: 10 }}>
             <button className="btn" disabled={!canAdd || ruleUnchanged} onClick={submitRule}>
               {editing ? 'Save changes' : 'Add rule'}
             </button>
-            {editing && (
-              <button className="btn" onClick={resetBuilder}>Cancel</button>
-            )}
+            <button className="btn" onClick={resetBuilder}>Cancel</button>
           </div>
           {kind === 'intent' && (
             <>
@@ -2815,6 +2879,30 @@ function IntegrationCards({
     queryFn: () => api<{ templates: ToolTemplateInfo[] }>('/api/tool-templates'),
     staleTime: 300_000,
   });
+  // Platform tools — in-process builtins on Janis infrastructure (web
+  // search today). No credentials; toggles write config.builtin_tools.
+  const { data: builtin } = useQuery({
+    queryKey: ['builtin-tools', agentId],
+    queryFn: () =>
+      api<{ plan: string; tools: { name: string; description: string; enabled: boolean }[] }>(
+        `/api/agents/${agentId}/builtin-tools`,
+      ),
+  });
+  const [builtinErr, setBuiltinErr] = useState('');
+  const toggleBuiltin = useMutation({
+    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
+      api<{ agent: Agent }>(`/api/agents/${agentId}/builtin-tools`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name, enabled }),
+      }),
+    onSuccess: (r) => {
+      setCfg({ ...cfg, builtin_tools: r.agent.config?.builtin_tools });
+      setBuiltinErr('');
+      void qc.invalidateQueries({ queryKey: ['builtin-tools', agentId] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
+    },
+    onError: (e) => setBuiltinErr(e.message),
+  });
   const [openId, setOpenId] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, string>>({});
   const [err, setErr] = useState('');
@@ -2868,11 +2956,15 @@ function IntegrationCards({
     onError: (e) => setErr(e.message),
   });
 
-  const setApprovals = useMutation({
-    mutationFn: ({ t, approvals }: { t: ToolTemplateInfo; approvals: Record<string, boolean> }) =>
+  const setToolFlags = useMutation({
+    mutationFn: ({ t, ...patch }: {
+      t: ToolTemplateInfo;
+      approvals?: Record<string, boolean>;
+      disabled?: Record<string, boolean>;
+    }) =>
       api<{ agent: Agent }>(`/api/agents/${agentId}/tools/${t.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ approvals }),
+        body: JSON.stringify(patch),
       }),
     onSuccess: (r) => {
       syncTools(r.agent.config?.tools);
@@ -2881,9 +2973,18 @@ function IntegrationCards({
     onError: (e) => setErr(e.message),
   });
 
-  const installed = (t: ToolTemplateInfo) => {
+  const installedCount = (t: ToolTemplateInfo) => {
     const names = new Set((cfg.tools ?? []).map((x) => x.name));
-    return t.tools.every((x) => names.has(x.name));
+    return t.tools.filter((x) => names.has(x.name)).length;
+  };
+  const installed = (t: ToolTemplateInfo) => installedCount(t) === t.tools.length;
+  // Drifted installs — the template gained actions after connect, or a
+  // deliberate subset was kept. Counts as connected, flagged as partial,
+  // and "Update credentials"/re-install completes the set (install merges
+  // by name, it never duplicates).
+  const partial = (t: ToolTemplateInfo) => {
+    const n = installedCount(t);
+    return n > 0 && n < t.tools.length;
   };
 
   // Brief-derived suggestions (stored on config.builder) float their
@@ -2900,7 +3001,7 @@ function IntegrationCards({
   // Progressive disclosure — suggested-for-this-agent (plus anything
   // already installed) leads; the rest of the catalog is one click away
   // under "Browse all", not a wall of irrelevant cards.
-  const shown = templates.filter((t) => sugOrder.has(t.id) || installed(t));
+  const shown = templates.filter((t) => sugOrder.has(t.id) || installedCount(t) > 0);
   const rest = templates.filter((t) => !shown.includes(t));
   const grid = (list: ToolTemplateInfo[]) => (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
@@ -2949,26 +3050,46 @@ function IntegrationCards({
               {t.tools.map((x) => {
                 const live = (cfg.tools ?? []).find((o) => o.name === x.name);
                 const gated = live ? !!live.approval : !!x.approval;
+                const off = !!live?.disabled;
                 return (
-                  <label
+                  <div
                     key={x.name}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 6 }}
                   >
-                    <input
-                      type="checkbox"
-                      checked={gated}
-                      disabled={setApprovals.isPending}
-                      onChange={(e) =>
-                        setApprovals.mutate({ t, approvals: { [x.name]: e.target.checked } })
-                      }
-                    />
-                    <span>{x.label ?? x.name}</span>
-                    {gated && <span className="badge">needs approval</span>}
-                  </label>
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        cursor: off ? 'default' : 'pointer',
+                        opacity: off ? 0.5 : 1,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={gated}
+                        disabled={setToolFlags.isPending || off}
+                        onChange={(e) =>
+                          setToolFlags.mutate({ t, approvals: { [x.name]: e.target.checked } })
+                        }
+                      />
+                      <span>{x.label ?? x.name}</span>
+                      {gated && !off && <span className="badge">needs approval</span>}
+                    </label>
+                    {off && <span className="badge">off</span>}
+                    <button
+                      className="btn sm"
+                      style={{ marginLeft: 'auto', padding: '1px 8px', fontSize: 11 }}
+                      disabled={setToolFlags.isPending}
+                      onClick={() => setToolFlags.mutate({ t, disabled: { [x.name]: !off } })}
+                    >
+                      {off ? 'Enable' : 'Disable'}
+                    </button>
+                  </div>
                 );
               })}
               <div style={{ fontSize: 11, marginTop: 4 }}>
-                Unticked actions run on their own.
+                Unticked actions run on their own. Disabled actions aren't offered to the agent at all.
               </div>
             </div>
           ) : null}
@@ -3026,14 +3147,24 @@ function IntegrationCards({
                     t.fields.length ? (setOpenId(t.id), setErr(''), setFields({})) : install.mutate(t)
                   }
                 >
-                  {installed(t) ? 'Update credentials' : t.fields.length ? 'Connect' : 'Add'}
+                  {partial(t)
+                    ? 'Complete setup'
+                    : installed(t)
+                      ? 'Update credentials'
+                      : t.fields.length
+                        ? 'Connect'
+                        : 'Add'}
                 </button>
               )}
-              {installed(t) && (
+              {installedCount(t) > 0 && (
                 <>
                   {/* 'connected' overstates a credential-less add — 'enabled' */}
-                  <span className="badge active">
-                    {t.fields.length || t.oauth_connect ? 'connected' : 'enabled'}
+                  <span className={`badge${installed(t) ? ' active' : ''}`}>
+                    {partial(t)
+                      ? `partial — ${installedCount(t)}/${t.tools.length} actions`
+                      : t.fields.length || t.oauth_connect
+                        ? 'connected'
+                        : 'enabled'}
                   </span>
                   <button className="btn" onClick={() => remove.mutate(t)}>Remove</button>
                 </>
@@ -3054,6 +3185,39 @@ function IntegrationCards({
           {flash.msg}
         </div>
       )}
+      {builtin?.tools.length ? (
+        <div className="card" style={{ padding: 14, marginBottom: 14 }}>
+          <div className="row" style={{ alignItems: 'center' }}>
+            <strong>Platform tools</strong>
+            <span className="badge">included</span>
+            {builtin.plan === 'free' && <span className="badge human">paid plan</span>}
+          </div>
+          {builtin.tools.map((t) => (
+            <div key={t.name} style={{ marginTop: 10 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={t.enabled}
+                  disabled={toggleBuiltin.isPending}
+                  onChange={(e) => toggleBuiltin.mutate({ name: t.name, enabled: e.target.checked })}
+                />
+                <span>{t.name.replace(/_/g, ' ')}</span>
+                {t.enabled && <span className="badge active">on</span>}
+              </label>
+              <div className="muted" style={{ fontSize: 12, margin: '2px 0 0 24px' }}>
+                {t.description}
+              </div>
+            </div>
+          ))}
+          {builtin.plan === 'free' && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+              Platform tools run on Janis infrastructure — they need a paid plan.{' '}
+              <a href="/billing">Upgrade</a>
+            </div>
+          )}
+          {builtinErr && <div className="error" style={{ marginTop: 8 }}>{builtinErr}</div>}
+        </div>
+      ) : null}
       {shown.length ? (
         <>
           {grid(shown)}

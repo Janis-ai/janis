@@ -757,3 +757,43 @@ describe('attention-count', () => {
     expect(after.attention).toBe(before.attention + 1);
   });
 });
+
+describe('merge tombstones', () => {
+  it('a tombstoned id resolves to the surviving conversation with merged_from', async () => {
+    const { convTombstones } = await import('../db/schema.js');
+    const survivor = await makeConversation(`webchat:tomb_${Date.now()}`);
+    await db.insert(messages).values({
+      conversationId: survivor.id,
+      direction: 'in',
+      text: 'pre-merge hello',
+    });
+    const deadId = crypto.randomUUID();
+    await db.insert(convTombstones).values({ id: deadId, mergedIntoId: survivor.id });
+
+    const res = await app.request(`/api/conversations/${deadId}`, {
+      headers: { cookie: adminCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      conversation: { id: string };
+      merged_from?: string;
+      messages: { text: string | null }[];
+    };
+    expect(body.conversation.id).toBe(survivor.id);
+    expect(body.merged_from).toBe(deadId);
+    expect(body.messages.some((m) => m.text === 'pre-merge hello')).toBe(true);
+
+    // Message pagination resolves the same way.
+    const paged = await app.request(`/api/conversations/${deadId}/messages`, {
+      headers: { cookie: adminCookie },
+    });
+    expect(paged.status).toBe(200);
+  });
+
+  it('an un-tombstoned missing id still 404s', async () => {
+    const res = await app.request(`/api/conversations/${crypto.randomUUID()}`, {
+      headers: { cookie: adminCookie },
+    });
+    expect(res.status).toBe(404);
+  });
+});

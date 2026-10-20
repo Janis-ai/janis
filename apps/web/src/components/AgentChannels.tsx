@@ -101,6 +101,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       dropParams('meta_connect');
       void qc.invalidateQueries({ queryKey: ['meta-session'] });
     },
+    onError: (e) => setError(e.message),
   });
   const pending = useQuery({
     queryKey: ['meta-pending', connectId],
@@ -348,6 +349,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   const removeChannel = useMutation({
     mutationFn: (channelId: string) => api(`/api/channels/${channelId}`, { method: 'DELETE' }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
+    onError: (e) => setError(e.message),
   });
   const [confirmEl, confirm] = useConfirm();
   const disconnectChannel = async (ch: Channel) => {

@@ -216,4 +216,15 @@ describe('selfAssignOnly', () => {
     expect(selfAssignOnly({ enabled: true, next: 1 }, { enabled: true, next: 2, assign_to: 'me' }, 'me')).toBe(false);
     expect(selfAssignOnly({ enabled: true }, { enabled: true, group_ids: ['g1'], assign_to: 'me' }, 'me')).toBe(false);
   });
+  it('allows joining/leaving a notify member list, nothing else', () => {
+    // notify arrays self-diff like the assignment pool
+    expect(selfAssignOnly({ enabled: true, notify: ['u1'] }, { enabled: true, notify: ['u1', 'me'] }, 'me')).toBe(true);
+    expect(selfAssignOnly({ enabled: true, notify: ['u1', 'me'] }, { enabled: true, notify: ['u1'] }, 'me')).toBe(true);
+    // ...but a literal mode is admin-only routing, not a self-diff
+    expect(selfAssignOnly({ enabled: true, notify: 'workspace' }, { enabled: true }, 'me')).toBe(false);
+    expect(selfAssignOnly({ enabled: true }, { enabled: true, notify: 'workspace' }, 'me')).toBe(false);
+    expect(selfAssignOnly({ enabled: true, notify: ['u1'] }, { enabled: true, notify: 'workspace' }, 'me')).toBe(false);
+    // ...and removing someone else's id still fails
+    expect(selfAssignOnly({ enabled: true, notify: ['u1', 'me'] }, { enabled: true, notify: ['me'] }, 'me')).toBe(false);
+  });
 });

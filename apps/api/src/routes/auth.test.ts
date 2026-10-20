@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { emailVerificationTokens, passwordResetTokens, sessions, users } from '../db/schema.js';
+import { emailVerificationTokens, passwordResetTokens, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken, sha256 } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { authRoutes } from './auth.js';
@@ -185,5 +185,94 @@ describe('forgot/reset', () => {
     const [after] = await db.select().from(users).where(eq(users.id, u.id)).limit(1);
     expect(after.passwordHash).toBeTruthy();
     expect(after.emailVerifiedAt).toBeTruthy();
+  });
+});
+
+describe('OAuth begin redirects', () => {
+  it('replies no-store with a fresh state per attempt — a cached 302 replays a dead state', async () => {
+    const { vi } = await import('vitest');
+    vi.stubEnv('WORKOS_CLIENT_ID', 'client_t');
+    vi.stubEnv('WORKOS_API_KEY', 'sk_t');
+    vi.resetModules();
+    const { authRoutes: freshRoutes } = await import('./auth.js');
+    const a = new Hono();
+    a.route('/auth', freshRoutes(db));
+    const r1 = await a.request('/auth/sso?connection=conn_1');
+    const r2 = await a.request('/auth/sso?connection=conn_1');
+    expect(r1.status).toBe(302);
+    expect(r1.headers.get('cache-control')).toContain('no-store');
+    const s1 = new URL(r1.headers.get('location')!).searchParams.get('state');
+    const s2 = new URL(r2.headers.get('location')!).searchParams.get('state');
+    expect(s1).toBeTruthy();
+    expect(s1).not.toBe(s2);
+    vi.unstubAllEnvs();
+  });
+
+  const freshSso = async () => {
+    const { vi } = await import('vitest');
+    vi.stubEnv('WORKOS_CLIENT_ID', 'client_t');
+    vi.stubEnv('WORKOS_API_KEY', 'sk_t');
+    vi.resetModules();
+    const { authRoutes: freshRoutes } = await import('./auth.js');
+    const a = new Hono();
+    a.route('/auth', freshRoutes(db));
+    return { a, vi };
+  };
+
+  it('routes SAML selectors to sso/authorize with an sso_-prefixed state', async () => {
+    const { a, vi } = await freshSso();
+    const res = await a.request('/auth/sso?connection=conn_9');
+    expect(res.status).toBe(302);
+    const url = new URL(res.headers.get('location')!);
+    expect(url.origin + url.pathname).toBe('https://api.workos.com/sso/authorize');
+    expect(url.searchParams.get('connection')).toBe('conn_9');
+    expect(url.searchParams.get('state')).toMatch(/^sso_/);
+    vi.unstubAllEnvs();
+  });
+
+  it('routes provider selectors to user_management with an um_-prefixed state', async () => {
+    const { a, vi } = await freshSso();
+    const res = await a.request('/auth/sso?provider=GoogleOAuth');
+    const url = new URL(res.headers.get('location')!);
+    expect(url.origin + url.pathname).toBe(
+      'https://api.workos.com/user_management/authorize',
+    );
+    expect(url.searchParams.get('provider')).toBe('GoogleOAuth');
+    expect(url.searchParams.get('state')).toMatch(/^um_/);
+    vi.unstubAllEnvs();
+  });
+
+  it('translates ?domain to the organization selector via the claiming workspace', async () => {
+    const { a, vi } = await freshSso();
+    await db.insert(workspaces).values({
+      name: 'Acme',
+      config: { workos: { domain: 'acme.test', organization_id: 'org_acme' } },
+    });
+    const res = await a.request('/auth/sso?domain=acme.test');
+    const url = new URL(res.headers.get('location')!);
+    expect(url.origin + url.pathname).toBe('https://api.workos.com/sso/authorize');
+    expect(url.searchParams.get('organization')).toBe('org_acme');
+    expect(url.searchParams.get('domain')).toBeNull();
+    vi.unstubAllEnvs();
+  });
+
+  it('falls back to the WorkOS org registry for unclaimed domains, then errors cleanly', async () => {
+    const { a, vi } = await freshSso();
+    // registry hit → organization selector
+    vi.stubGlobal('fetch', async () =>
+      new Response(JSON.stringify({ data: [{ id: 'org_reg' }] })),
+    );
+    const hit = await a.request('/auth/sso?domain=claimed.test');
+    const url = new URL(hit.headers.get('location')!);
+    expect(url.searchParams.get('organization')).toBe('org_reg');
+
+    // registry miss → friendly login error, not a WorkOS dead-end
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ data: [] })));
+    const miss = await a.request('/auth/sso?domain=nothing.test');
+    const loc = new URL(miss.headers.get('location')!);
+    expect(loc.pathname).toBe('/login');
+    expect(loc.searchParams.get('error')).toContain('nothing.test');
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 });

@@ -5,7 +5,7 @@ import { agents, alertRules, conversations, memberGroups } from '../db/schema.js
 import { bus } from './bus.js';
 import { dispatchAlert, openAlertOnce } from './alerts.js';
 import { eventForAlertType } from './notify.js';
-import { pickRuleAssignee, type GroupRef, type RuleConfig, type RuleRow } from './rules.js';
+import { pickRuleAssignee, rulePool, type GroupRef, type RuleConfig, type RuleRow } from './rules.js';
 import { ALERT_LABEL, noteRuleRouting, systemNote } from './systemNote.js';
 
 type AgentRow = typeof agents.$inferSelect;
@@ -52,7 +52,7 @@ export async function resolveRuleRouting(
   db: Db,
   workspaceId: string,
   rules: RuleRow[],
-): Promise<{ assigneeId?: string; tags: string[] }> {
+): Promise<{ assigneeId?: string; tags: string[]; notify?: 'workspace' | string[] }> {
   const groups = await groupsForRules(db, workspaceId, rules);
   let assigneeId: string | undefined;
   const tags: string[] = [];
@@ -65,7 +65,38 @@ export async function resolveRuleRouting(
     assigneeId = pick.userId;
     if (pick.next !== undefined) await advanceRuleCursor(db, rule, pick.next);
   }
-  return { assigneeId, tags };
+  // Paging target — 'workspace' wins outright; 'pool' expands to that
+  // rule's routed teammates (assign_to ∪ assignees ∪ roster members);
+  // member lists union. Every resolved list includes the picked assignee —
+  // the owner must hear about it either way. No notify config anywhere →
+  // undefined, callers keep the legacy default.
+  let notify: 'workspace' | string[] | undefined;
+  const listed = new Set<string>();
+  let explicit = false;
+  for (const rule of rules) {
+    const cfg = rule.config as RuleConfig;
+    const n = cfg.notify;
+    if (n === 'workspace') {
+      notify = 'workspace';
+      break;
+    }
+    if (n === 'pool') {
+      const pool = [...(cfg.assign_to ? [cfg.assign_to] : []), ...rulePool(cfg, groups)];
+      if (pool.length) {
+        explicit = true;
+        for (const id of pool) listed.add(id);
+      }
+      continue;
+    }
+    if (Array.isArray(n)) {
+      explicit = true;
+      for (const id of n) listed.add(id);
+    }
+  }
+  if (notify !== 'workspace' && explicit) {
+    notify = [...new Set([...(assigneeId ? [assigneeId] : []), ...listed])];
+  }
+  return { assigneeId, tags, notify };
 }
 
 /**
@@ -84,9 +115,9 @@ export async function fireRuleAlert(
   // Routing applies on every fire — the alert row dedupes, the rule's
   // assign/tag doesn't (a repeat fire still rotates the pool).
   const fired = opts.rules ?? [];
-  const { assigneeId, tags } = fired.length
+  const { assigneeId, tags, notify } = fired.length
     ? await resolveRuleRouting(db, agent.workspaceId, fired)
-    : { assigneeId: undefined, tags: [] as string[] };
+    : { assigneeId: undefined, tags: [] as string[], notify: undefined };
 
   let updated = conv;
   const mergedTags = tags.length ? [...new Set([...conv.tags, ...tags])] : conv.tags;
@@ -131,8 +162,10 @@ export async function fireRuleAlert(
   if (!created) return;
 
   await dispatchAlert(db, agent, updated, alert, {
-    userIds: assigneeId ? [assigneeId] : undefined,
+    userIds:
+      notify === 'workspace' ? undefined : (notify ?? (assigneeId ? [assigneeId] : undefined)),
     event: eventForAlertType(alert.type),
+    notify,
   });
 }
 

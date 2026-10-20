@@ -9,6 +9,7 @@ import {
 } from './urlSource.js';
 import type { Db } from '../db/client.js';
 import type { knowledgeFiles } from '../db/schema.js';
+import { encryptSecret } from './secrets.js';
 
 const PAGE = 'https://agent.example/properties/42-oak-st';
 const PUBLIC_DNS = [{ address: '93.184.216.34', family: 4 }];
@@ -171,11 +172,34 @@ describe('SSRF guard', () => {
     expect(r.text).toContain('Moved body.');
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it('sends source auth headers only on same-host hops', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, { status: 302, headers: { location: '/authed' } }),
+      )
+      .mockResolvedValueOnce(
+        new Response(null, { status: 302, headers: { location: 'https://other.example/x' } }),
+      )
+      .mockResolvedValueOnce(
+        new Response('<html><body><p>Done.</p></body></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    await fetchUrlText(PAGE, { headers: { authorization: 'Bearer ntn_secret' } });
+    const sent = fetchMock.mock.calls.map((c) => (c[1]?.headers as Record<string, string>)?.authorization);
+    expect(sent[0]).toBe('Bearer ntn_secret'); // origin host
+    expect(sent[1]).toBe('Bearer ntn_secret'); // same-host redirect keeps auth
+    expect(sent[2]).toBeUndefined(); // cross-host hop drops the token
+  });
 });
 
 type FileRow = typeof knowledgeFiles.$inferSelect;
 
-function fakeDb() {
+function fakeDb(webhookUrl?: string) {
   const writes: Record<string, unknown>[] = [];
   const db = {
     update: () => ({
@@ -183,6 +207,15 @@ function fakeDb() {
         writes.push(v);
         return { where: async () => [] };
       },
+    }),
+    // fireEventWebhook reads the workspace's event_webhook_url.
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: async () =>
+            webhookUrl ? [{ config: { event_webhook_url: webhookUrl } }] : [],
+        }),
+      }),
     }),
   } as unknown as Db;
   return { db, writes };
@@ -251,5 +284,101 @@ describe('refreshKnowledgeSource last-good retention', () => {
     expect(ok).toBe(true);
     expect(writes[0].status).toBe('ready');
     expect(writes[0].text).toBe('Fresh content here.');
+    expect(writes[0].textChangedAt).toBeInstanceOf(Date);
+  });
+
+  it('skips the text rewrite on a no-change crawl', async () => {
+    stubPage('<html><body><p>Same page text.</p></body></html>');
+    const { db, writes } = fakeDb();
+    const ok = await refreshKnowledgeSource(
+      db,
+      fileRow({ text: 'Same page text.', status: 'ready' }),
+    );
+    expect(ok).toBe(true);
+    expect(writes[0].text).toBeUndefined();
+    expect(writes[0].textChangedAt).toBeUndefined();
+    expect(writes[0].status).toBe('ready');
+    expect(writes[0].lastFetchedAt).toBeInstanceOf(Date);
+  });
+
+  it('fires knowledge_source.degraded once on the ready→degraded transition', async () => {
+    const posts: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          posts.push(String(init.body));
+          return new Response('ok');
+        }
+        return Promise.reject(new Error('HTTP 500'));
+      }),
+    );
+    const { db } = fakeDb('https://hook.example/ingest');
+    const ok = await refreshKnowledgeSource(
+      db,
+      fileRow({ text: 'last good', status: 'ready', workspaceId: 'w1' }),
+    );
+    expect(ok).toBe(false);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain('knowledge_source.degraded');
+
+    // An already-degraded row failing again does not re-page.
+    posts.length = 0;
+    await refreshKnowledgeSource(
+      db,
+      fileRow({ text: 'last good', status: 'degraded', workspaceId: 'w1' }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(posts).toHaveLength(0);
+  });
+
+  it('decrypts stored source headers for the re-crawl', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response('<html><body><p>Private doc.</p></body></html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { db, writes } = fakeDb();
+    const ok = await refreshKnowledgeSource(
+      db,
+      fileRow({
+        text: 'old',
+        status: 'ready',
+        sourceHeadersEnc: encryptSecret(JSON.stringify({ authorization: 'Bearer ntn_x' })),
+      }),
+    );
+    expect(ok).toBe(true);
+    const sent = (fetchMock.mock.calls[0][1]?.headers as Record<string, string>) ?? {};
+    expect(sent.authorization).toBe('Bearer ntn_x');
+    expect(writes[0].status).toBe('ready');
+  });
+
+  it('fires knowledge_source.recovered when a degraded source crawls healthy', async () => {
+    const posts: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (_url: string, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          posts.push(String(init.body));
+          return new Response('ok');
+        }
+        return new Response('<html><body><p>Fresh content.</p></body></html>', {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      }),
+    );
+    const { db } = fakeDb('https://hook.example/ingest');
+    const ok = await refreshKnowledgeSource(
+      db,
+      fileRow({ text: 'last good', status: 'degraded', workspaceId: 'w1' }),
+    );
+    expect(ok).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(posts).toHaveLength(1);
+    expect(posts[0]).toContain('knowledge_source.recovered');
   });
 });

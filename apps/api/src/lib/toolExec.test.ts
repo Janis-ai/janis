@@ -338,3 +338,112 @@ describe('callTool bodyTemplate {key?} optional placeholders', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('callTool bodyTemplate {key:clause} search clauses', () => {
+  const orderTool: ToolDef = {
+    name: 'shopify_lookup_order',
+    description: 'd',
+    method: 'POST',
+    url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
+    headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+    bodyTemplate:
+      '{"query":"query($q:String!){orders(first:1,query:$q){nodes{id}}}","variables":{"q":"name:${order_number:text} (${email:clause=email:missing@identity.invalid} OR ${customer_id:clause=customer_id:0})"}}',
+    params: { order_number: 'n', 'email?': 'e' },
+  };
+  const secrets = { SHOPIFY_SHOP: 's.myshopify.com', SHOPIFY_TOKEN: 'shpat_x' };
+  const fetchMock = vi.fn();
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockImplementation(
+      () => Promise.resolve(new Response('{"data":{}}', { status: 200 })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  const sentQ = () =>
+    JSON.parse(fetchMock.mock.calls.at(-1)![1].body as string).variables.q;
+
+  it('emits key:value terms for present args, the never-match default for absent', async () => {
+    await callTool(orderTool, { order_number: '#1001', email: 'm@x.com' }, secrets);
+    expect(sentQ()).toBe(
+      'name:#1001 (email:m@x.com OR customer_id:0)',
+    );
+    await callTool(orderTool, { order_number: '#1001', customer_id: '9588398489777' }, secrets);
+    expect(sentQ()).toBe(
+      'name:#1001 (email:missing@identity.invalid OR customer_id:9588398489777)',
+    );
+  });
+
+  it('clause args are optional — both absent still emits a parseable query', async () => {
+    const out = await callTool(orderTool, { order_number: '#1001' }, secrets);
+    expect(out).toContain('"data"');
+    expect(sentQ()).toBe('name:#1001 (email:missing@identity.invalid OR customer_id:0)');
+  });
+
+  it('strips whitespace/quotes/parens — an arg cannot smuggle a second term', async () => {
+    await callTool(
+      orderTool,
+      { order_number: '#1', email: 'a@b.co OR name:#9999' },
+      secrets,
+    );
+    // Spaces and the would-be-injected term are stripped to a single value
+    expect(sentQ()).toBe('name:#1 (email:a@b.coORname:#9999 OR customer_id:0)');
+  });
+
+  it('escapes stray JSON metachars without breaking the body', async () => {
+    // backslash stripped, remaining text still lands inside the string
+    const out = await callTool(orderTool, { order_number: '#1', email: 'a\\"b@x.co' }, secrets);
+    expect(out).toContain('"data"');
+    expect(sentQ()).toContain('email:ab@x.co');
+  });
+});
+
+describe('identityBlockReason customer_id args', () => {
+  const VERIFIED_IDS = new Set(['9588398489777']);
+
+  it('anchors on a verified signed-claim customer id', () => {
+    expect(
+      identityBlockReason(
+        { order_number: '#1001', customer_id: '9588398489777' },
+        new Set(),
+        new Set(),
+        VERIFIED_IDS,
+      ),
+    ).toBeNull();
+  });
+
+  it('hard-blocks a customer_id that was neither produced nor verified', () => {
+    const r = identityBlockReason(
+      { order_number: '#1001', customer_id: '11111111' },
+      VERIFIED,
+      new Set(),
+      VERIFIED_IDS,
+    );
+    expect(r).toContain('11111111');
+    expect(r).toContain('verified customer id');
+  });
+
+  it('still accepts a produced customer id (chained lookups)', () => {
+    expect(
+      identityBlockReason(
+        { customer_id: '11111111' },
+        VERIFIED,
+        new Set(['11111111']),
+        new Set(),
+      ),
+    ).toBeNull();
+  });
+
+  it('does not weaken other numeric args — only customer_id keys gate', () => {
+    expect(
+      identityBlockReason(
+        { query: 'requester:me@example.com order:1234567890' },
+        VERIFIED,
+        new Set(),
+        VERIFIED_IDS,
+      ),
+    ).toBeNull();
+  });
+});

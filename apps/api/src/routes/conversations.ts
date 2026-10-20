@@ -8,6 +8,7 @@ import {
   alerts,
   channelBindings,
   conversations,
+  convTombstones,
   messages,
   slackThreads,
   suggestions,
@@ -40,9 +41,27 @@ import {
   sendChannelTyping,
   takeThreadControl,
   type AttachmentRef,
+  type SendOptions,
 } from '../lib/channels.js';
 
 const listQuery = convListQuery;
+
+/** Follow merge tombstones — a conversation id deleted by visitor adoption
+ *  resolves to the surviving conversation, so links minted pre-merge
+ *  (alert emails, bookmarks) keep working. Bounded chain for A→B→C merges. */
+async function resolveConvId(db: Db, id: string): Promise<string> {
+  let cur = id;
+  for (let i = 0; i < 3; i++) {
+    const [t] = await db
+      .select({ into: convTombstones.mergedIntoId })
+      .from(convTombstones)
+      .where(eq(convTombstones.id, cur))
+      .limit(1);
+    if (!t) return cur;
+    cur = t.into;
+  }
+  return cur;
+}
 
 const patchBody = z.object({
   tags: z.array(z.string()).optional(),
@@ -290,11 +309,12 @@ export function conversationRoutes(db: Db) {
 
   app.get('/:id', async (c) => {
     const workspaceId = c.get('workspaceId');
+    const convId = await resolveConvId(db, c.req.param('id'));
     const [row] = await db
       .select({ conversation: conversations })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(and(eq(conversations.id, c.req.param('id')), ...agentVis(workspaceId, c.get('agentScope'))))
+      .where(and(eq(conversations.id, convId), ...agentVis(workspaceId, c.get('agentScope'))))
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
 
@@ -337,6 +357,9 @@ export function conversationRoutes(db: Db) {
       messages_has_more: msgRows.length > PAGE,
       alerts: convAlerts.map(toAlert),
       suggestions: convSuggestions.map(toSuggestion),
+      // Set when the requested id was a merge tombstone — the caller's
+      // stale link resolved to this surviving conversation.
+      ...(convId !== c.req.param('id') ? { merged_from: c.req.param('id') } : {}),
     });
   });
 
@@ -344,11 +367,12 @@ export function conversationRoutes(db: Db) {
   // scrolling to the top fetches the next chunk with ?before=<oldest ts>.
   app.get('/:id/messages', async (c) => {
     const workspaceId = c.get('workspaceId');
+    const convId = await resolveConvId(db, c.req.param('id'));
     const [row] = await db
       .select({ conversation: conversations })
       .from(conversations)
       .innerJoin(agents, eq(conversations.agentId, agents.id))
-      .where(and(eq(conversations.id, c.req.param('id')), ...agentVis(workspaceId, c.get('agentScope'))))
+      .where(and(eq(conversations.id, convId), ...agentVis(workspaceId, c.get('agentScope'))))
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
 
@@ -572,11 +596,14 @@ export function conversationRoutes(db: Db) {
     await takeThreadControl(b.channel, b.platformUserId);
 
     // Preserve operator attribution on resend — same rules as humanReply.
-    const opts: { messageId: string; senderName?: string; senderId?: string; senderAvatar?: string | null } = {
+    const opts: SendOptions & { messageId: string } = {
       messageId: msg.id,
     };
-    if (msg.direction === 'human' && msg.authorId) {
-      const [u] = await db.select().from(users).where(eq(users.id, msg.authorId)).limit(1);
+    if (msg.direction === 'human') {
+      opts.humanAgent = true;
+      const [u] = msg.authorId
+        ? await db.select().from(users).where(eq(users.id, msg.authorId)).limit(1)
+        : [];
       if (u) {
         const ident = await operatorIdentity(db, u, owned.conversation.agentId);
         if (ident.name) {

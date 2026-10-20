@@ -1,8 +1,12 @@
 import { useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { useAgents } from '../api/hooks';
+import { useAgents, useMe } from '../api/hooks';
 
 const LAST_AGENT_KEY = 'janis:last-agent';
+const LAST_AGENTS_KEY = 'janis:last-agents';
+// Explicit "All agents" — distinguished from "never chose" so a single-agent
+// workspace auto-selects but can't trap a user who deliberately unscoped.
+const UNSCOPED = '__none__';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Concierge/copilot replies link to console pages by name-slug
@@ -54,6 +58,7 @@ export function useAgentContext() {
   const navigate = useNavigate();
   const param = agentPathParam(location.pathname);
   const { data } = useAgents();
+  const wsId = useMe().data?.workspace?.id;
   // A non-uuid param is a name-slug — resolve it and swap the URL for the
   // canonical /agents/<uuid>/… so every downstream ?agent_id= call works.
   const resolved =
@@ -61,7 +66,7 @@ export function useAgentContext() {
       ? data?.agents.find((a) => agentSlug(a.name) === param)?.id
       : param;
   useEffect(() => {
-    if (!param || !resolved) return;
+    if (!param || !resolved || !wsId) return;
     if (resolved !== param) {
       navigate(
         location.pathname.replace(`/agents/${param}`, `/agents/${resolved}`) +
@@ -72,8 +77,8 @@ export function useAgentContext() {
     }
     // Only real ids persist — a slug or typo stored here would poison the
     // workspace-wide badge/default until something else overwrote it.
-    setLastAgent(resolved);
-  }, [param, resolved]);
+    setLastAgent(resolved, wsId);
+  }, [param, resolved, wsId]);
   return resolved ?? param;
 }
 
@@ -91,41 +96,92 @@ export function contextAgentStale(
 }
 
 /** The effective context agent: the URL's when on an agent route, else the
- *  persisted last-visited agent, dropped (and cleared) when stale. */
+ *  persisted last-visited agent FOR THIS WORKSPACE (each workspace
+ *  remembers its own — switching back restores it), dropped when stale.
+ *  A single-agent workspace auto-selects that agent unless the user
+ *  explicitly chose the "All agents" scope. */
 export function useContextAgent(): string | null {
   const urlAgent = useAgentContext();
   const { data } = useAgents();
-  const stored = urlAgent ? null : lastAgentId();
+  const wsId = useMe().data?.workspace?.id;
+  const stored = urlAgent || !wsId ? null : lastAgentId(wsId);
   const stale = contextAgentStale(stored, data?.agents);
   useEffect(() => {
-    if (stale) clearLastAgent();
-  }, [stale]);
-  return urlAgent ?? (stale ? null : stored);
+    // Stale (deleted/foreign) isn't an explicit unscope — forget, don't mark.
+    if (stale && wsId) forgetLastAgent(wsId);
+  }, [stale, wsId]);
+  const solo =
+    !urlAgent && !stored && !stale && wsId && !agentUnscoped(wsId) && data?.agents.length === 1
+      ? data.agents[0].id
+      : null;
+  useEffect(() => {
+    if (solo && wsId) setLastAgent(solo, wsId);
+  }, [solo, wsId]);
+  return urlAgent ?? (stale ? null : stored) ?? solo;
 }
 
-export function lastAgentId(): string | null {
+function readAgentMap(): Record<string, string> {
   try {
-    const id = localStorage.getItem(LAST_AGENT_KEY);
-    // Slugs/typos that slipped in before the uuid gate must not keep
-    // poisoning ?agent_id= calls — drop them on read.
-    return id && UUID_RE.test(id) ? id : null;
+    const raw = localStorage.getItem(LAST_AGENTS_KEY);
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {};
   } catch {
-    return null;
+    return {};
   }
 }
 
-export function setLastAgent(id: string) {
+function writeAgentMap(m: Record<string, string>) {
   try {
-    localStorage.setItem(LAST_AGENT_KEY, id);
-  } catch {
-    /* private mode */
-  }
-}
-
-export function clearLastAgent() {
-  try {
-    localStorage.removeItem(LAST_AGENT_KEY);
+    localStorage.setItem(LAST_AGENTS_KEY, JSON.stringify(m));
   } catch {
     /* private mode */
   }
+}
+
+export function lastAgentId(workspaceId: string): string | null {
+  const map = readAgentMap();
+  let id = map[workspaceId];
+  // Migrate the pre-map single key into this workspace's slot on first read.
+  if (id === undefined) {
+    try {
+      const legacy = localStorage.getItem(LAST_AGENT_KEY);
+      if (legacy) {
+        id = legacy;
+        map[workspaceId] = legacy;
+        writeAgentMap(map);
+        localStorage.removeItem(LAST_AGENT_KEY);
+      }
+    } catch {
+      /* private mode */
+    }
+  }
+  // Slugs/typos that slipped in before the uuid gate must not keep
+  // poisoning ?agent_id= calls — drop them on read.
+  return id && UUID_RE.test(id) ? id : null;
+}
+
+/** True when the user deliberately chose "All agents" for this workspace —
+ *  blocks single-agent auto-select until they pick an agent again. */
+export function agentUnscoped(workspaceId: string): boolean {
+  return readAgentMap()[workspaceId] === UNSCOPED;
+}
+
+export function setLastAgent(id: string, workspaceId: string) {
+  const map = readAgentMap();
+  map[workspaceId] = id;
+  writeAgentMap(map);
+}
+
+/** Explicit unscope — remembers "All agents" per workspace. */
+export function clearLastAgent(workspaceId: string) {
+  const map = readAgentMap();
+  map[workspaceId] = UNSCOPED;
+  writeAgentMap(map);
+}
+
+/** Evict without intent — stale/deleted ids get removed, not marked
+ *  unscoped, so auto-select logic can still apply. */
+export function forgetLastAgent(workspaceId: string) {
+  const map = readAgentMap();
+  delete map[workspaceId];
+  writeAgentMap(map);
 }

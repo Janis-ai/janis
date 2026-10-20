@@ -316,6 +316,71 @@ describe('rule routing through groups', () => {
     expect((stored.config as { next?: number }).next).toBe(2);
   });
 
+  it('notify: member list unions the assignee; workspace wins outright', async () => {
+    const u2 = await makeUser('notify@x.test', wsId, 'member');
+    const [rule] = await db
+      .insert(alertRules)
+      .values({
+        agentId,
+        kind: 'keyword',
+        config: { enabled: true, keywords: ['x'], assign_to: memberId, notify: [u2.user.id] },
+      })
+      .returning();
+    const routed = await resolveRuleRouting(db, wsId, [rule]);
+    expect(routed.assigneeId).toBe(memberId);
+    expect(routed.notify).toEqual([memberId, u2.user.id]);
+
+    const [wsRule] = await db
+      .insert(alertRules)
+      .values({
+        agentId,
+        kind: 'keyword',
+        config: { enabled: true, keywords: ['x'], assign_to: memberId, notify: 'workspace' },
+      })
+      .returning();
+    const routed2 = await resolveRuleRouting(db, wsId, [wsRule]);
+    expect(routed2.notify).toBe('workspace');
+  });
+
+  it('no notify config → notify stays undefined (legacy assignee-only paging)', async () => {
+    const [rule] = await db
+      .insert(alertRules)
+      .values({
+        agentId,
+        kind: 'keyword',
+        config: { enabled: true, keywords: ['x'], assign_to: memberId },
+      })
+      .returning();
+    const routed = await resolveRuleRouting(db, wsId, [rule]);
+    expect(routed.notify).toBeUndefined();
+  });
+
+  it("notify 'pool' pages every routed teammate, not just the picked assignee", async () => {
+    const u2 = await makeUser('pool@x.test', wsId, 'member');
+    const [group] = await db
+      .insert(memberGroups)
+      .values({ workspaceId: wsId, name: 'Tier 1', memberIds: [u2.user.id] })
+      .returning();
+    const [rule] = await db
+      .insert(alertRules)
+      .values({
+        agentId,
+        kind: 'keyword',
+        config: {
+          enabled: true,
+          keywords: ['x'],
+          assignees: [memberId],
+          group_ids: [group.id],
+          next: 0,
+          notify: 'pool',
+        },
+      })
+      .returning();
+    const routed = await resolveRuleRouting(db, wsId, [rule]);
+    expect(routed.assigneeId).toBe(memberId);
+    expect(new Set(routed.notify as string[])).toEqual(new Set([memberId, u2.user.id]));
+  });
+
   it('fireRuleAlert opens one alert, assigns, and dedupes repeats', async () => {
     const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
     const [conv] = await db

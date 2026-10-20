@@ -30,6 +30,10 @@ export interface ToolDef {
   /** Mutating tools: the model proposes the call, a teammate approves or
    *  denies it in the console or Slack, and only then it executes. */
   approval?: boolean;
+  /** Installed but switched off — stays in config (credentials, approval
+   *  flags, template stamp all kept) but toolsFor never hands it to the
+   *  model. Toggled via PATCH /:id/tools/:template's `disabled` map. */
+  disabled?: boolean;
   /** Customer-record tool — reads or writes rows keyed to a specific
    *  customer (email lookups, charge/order history, free-text CRM search).
    *  Args must anchor to the conversation's VERIFIED identity: every email
@@ -47,7 +51,7 @@ export interface ToolDef {
 export function toolsFor(agent: AgentRow): ToolDef[] {
   const cfg = (agent.config ?? {}) as { tools?: ToolDef[] };
   return (cfg.tools ?? [])
-    .filter((t) => t.name && t.url)
+    .filter((t) => t.name && t.url && !t.disabled)
     // Retroactive catalog fields — tools installed before a flag/binding
     // existed serialize without it; the catalog is the source of truth.
     .map((t) => {
@@ -103,7 +107,11 @@ const NUMERIC_ID = /\b\d{8,}\b/g;
  *    addresses (a typed address is a claim, never proof);
  *  - any provider-id arg must have been produced by a tool result earlier
  *    in this run (so stripe_customer_charges only chains off a verified
- *    stripe_find_customer);
+ *    stripe_find_customer) — a *customer_id arg also anchors when it
+ *    matches a verified signed-claim id (Shopify app-proxy cid);
+ *  - an arg NAMED customer_id must be produced or verified outright —
+ *    inside an OR-composed search query a stray customer id widens scope
+ *    to someone else's orders, so it hard-blocks like a prefixed id;
  *  - at least one arg must anchor (verified email or produced id) —
  *    unanchored calls would return someone else's records.
  */
@@ -111,9 +119,24 @@ export function identityBlockReason(
   args: Record<string, unknown>,
   verifiedEmails: ReadonlySet<string>,
   producedIds: ReadonlySet<string>,
+  verifiedIds?: ReadonlySet<string>,
 ): string | null {
   const vals = Object.values(args).filter((v): v is string => typeof v === 'string');
   let anchored = false;
+  // customer_id-keyed args hard-block unless produced or claim-verified —
+  // in an OR-composed query a stray one widens scope to another customer.
+  for (const [k, v] of Object.entries(args ?? {})) {
+    if (!/customer_id/i.test(k)) continue;
+    const s = typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '';
+    for (const m of s.matchAll(NUMERIC_ID)) {
+      if (producedIds.has(m[0]) || verifiedIds?.has(m[0])) {
+        anchored = true;
+      } else {
+        return `identity check: customer id "${m[0]}" is not this conversation's verified customer id — ` +
+          'customer_id args only accept a signed-in customer\'s id or one produced by an earlier verified lookup';
+      }
+    }
+  }
   for (const v of vals) {
     for (const m of v.matchAll(EMAIL_IN_TEXT)) {
       const email = m[0].toLowerCase();
@@ -134,7 +157,9 @@ export function identityBlockReason(
       anchored = true;
     }
     for (const m of v.matchAll(NUMERIC_ID)) {
-      if (producedIds.has(m[0])) anchored = true;
+      // Produced ids anchor; so do verified signed-claim ids (a Shopify
+      // customer id from an app-proxy session is proof, not a claim).
+      if (producedIds.has(m[0]) || verifiedIds?.has(m[0])) anchored = true;
     }
   }
   if (!anchored) {
@@ -160,6 +185,31 @@ function jsonArg(v: string): unknown {
   } catch {
     return v;
   }
+}
+
+/** Required bodyTemplate placeholders an arg set doesn't satisfy — the
+ *  same check callTool runs, exported so WIDGET_REF resolution can tell a
+ *  bare ref ("render the lookup I just did") from a complete arg set. */
+export function missingTemplateArgs(
+  bodyTemplate: string,
+  args: Record<string, unknown>,
+): string[] {
+  // Two placeholder spellings: legacy {key} for braces-free bodies, and
+  // ${key} for bodies that carry literal braces (GraphQL selection sets).
+  // A template using any ${…} disables the legacy form so `{nodes{id}}`
+  // reads as data, not a placeholder.
+  const dollar = bodyTemplate.includes('${');
+  const PLACEHOLDER = dollar
+    ? /\$\{([A-Za-z_][A-Za-z0-9_]*)(\?)?(:(text|clause)(=[^}]*)?)?\}/g
+    : /\{([A-Za-z_][A-Za-z0-9_]*)(\?)?(:(text|clause)(=[^}]*)?)?\}/g;
+  const matches = [...bodyTemplate.matchAll(PLACEHOLDER)];
+  // :clause placeholders are always optional — they emit '' when absent.
+  const optional = new Set(
+    matches.filter((m) => m[2] === '?' || m[4] === 'clause').map((m) => m[1]),
+  );
+  return [...new Set(matches.map((m) => m[1]))].filter(
+    (k) => !optional.has(k) && (args[k] === undefined || args[k] === null),
+  );
 }
 
 export async function callTool(
@@ -201,34 +251,42 @@ export async function callTool(
   const canBody = tool.method !== 'GET' && tool.method !== 'DELETE';
   let templateBody: string | undefined;
   if (canBody && tool.bodyTemplate) {
-    // Two placeholder spellings: legacy {key} for braces-free bodies, and
-    // ${key} for bodies that carry literal braces (GraphQL selection sets).
-    // A template using any ${…} disables the legacy form so `{nodes{id}}`
-    // reads as data, not a placeholder.
-    const dollar = tool.bodyTemplate.includes('${');
-    const PLACEHOLDER = dollar
-      ? /\$\{([A-Za-z_][A-Za-z0-9_]*)(\?)?(:(text))?\}/g
-      : /\{([A-Za-z_][A-Za-z0-9_]*)(\?)?(:(text))?\}/g;
-    const matches = [...tool.bodyTemplate.matchAll(PLACEHOLDER)];
-    const placeholders = [...new Set(matches.map((m) => m[1]))];
-    const optional = new Set(matches.filter((m) => m[2] === '?').map((m) => m[1]));
-    const missingArgs = placeholders.filter(
-      (k) => !optional.has(k) && (args[k] === undefined || args[k] === null),
-    );
+    const missingArgs = missingTemplateArgs(tool.bodyTemplate, args);
     if (missingArgs.length) {
       return `error: missing required args: ${missingArgs.join(', ')}`;
     }
+    const dollar = tool.bodyTemplate.includes('${');
+    const PLACEHOLDER = dollar
+      ? /\$\{([A-Za-z_][A-Za-z0-9_]*)(\?)?(:(text|clause)(=[^}]*)?)?\}/g
+      : /\{([A-Za-z_][A-Za-z0-9_]*)(\?)?(:(text|clause)(=[^}]*)?)?\}/g;
+    const optional = new Set(
+      [...tool.bodyTemplate.matchAll(PLACEHOLDER)]
+        .filter((m) => m[2] === '?' || m[4] === 'clause')
+        .map((m) => m[1]),
+    );
     // {key} → arg as a JSON value (object/array strings parse first, same
     // as flat bodies). {key:text} → raw text escaped for a JSON string
     // context — builds compound values like GraphQL search clauses.
     // {key?} → optional: emits JSON null when the arg is absent, so
     // templates can offer params the model may legitimately omit
     // (GraphQL pagination cursors, filters).
+    // {key:clause} → a search-syntax `key:value` term emitted inside a query
+    // string, or '' when the arg is absent — lets a template offer
+    // alternative anchors (email OR customer_id) without composing clauses
+    // by hand. The value loses whitespace/quotes/parens so an arg can never
+    // smuggle a second term (OR / name:…) past the identity-scoped clause.
     const tpl = interpolateSecrets(tool.bodyTemplate, secrets).replace(
       PLACEHOLDER,
-      (_match, key: string, _q?: string, _colon?: string, mode?: string) => {
+      (_match, key: string, _q?: string, _colon?: string, mode?: string, clauseDefault?: string) => {
         const v = args[key];
         used.add(key);
+        if (mode === 'clause') {
+          const val = v === undefined || v === null ? '' : String(v).replace(/[\s"()\\]/g, '');
+          if (val) return `${key}:${JSON.stringify(val).slice(1, -1)}`;
+          // Absent arg inside an OR composition emits the literal default
+          // (a never-match term) so the surviving clause still parses.
+          return clauseDefault ? clauseDefault.slice(1) : '';
+        }
         if (v === undefined || v === null || (optional.has(key) && v === '')) return 'null';
         if (mode === 'text') return JSON.stringify(String(v)).slice(1, -1);
         return JSON.stringify(typeof v === 'string' ? jsonArg(v) : v);

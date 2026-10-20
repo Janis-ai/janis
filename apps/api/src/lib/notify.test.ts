@@ -193,6 +193,9 @@ describe('alertNotification', () => {
       agent,
       'aid reaches over $50% of families; tuition $\\$28,100$ and $x^2$',
     );
-    expect(n.body).toBe('Kai on Bubble: aid reaches over 50% of families; tuition $28,100 and x²');
+    expect(n.body).toContain('Kai on Bubble: aid reaches over 50% of families; tuition $28,100 and x²');
+    // context line carries agent/channel/customer for operator triage
+    expect(n.body).toContain('agent: ' + agent.name);
+    expect(n.body).toContain('customer: Kai');
   });
 });

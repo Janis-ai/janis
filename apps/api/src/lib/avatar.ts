@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { channelBindings, channels, conversations } from '../db/schema.js';
 import { fetchPlatformProfile } from './channels.js';
@@ -53,9 +53,13 @@ export async function fetchAvatar(
     if (bound && profile.id) {
       const fresh = await fetchPlatformProfile(bound.channel, profile.id);
       if (fresh.picture_url && fresh.picture_url !== profile.picture_url) {
+        // Per-key merge — a stale whole-object replace can clobber
+        // verification keys a concurrent run just wrote.
         await db
           .update(conversations)
-          .set({ userProfile: { ...profile, ...fresh } })
+          .set({
+            userProfile: sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || ${JSON.stringify(fresh)}::jsonb`,
+          })
           .where(eq(conversations.id, conv.id));
         res = await fetch(fresh.picture_url, {
           signal: AbortSignal.timeout(8_000),

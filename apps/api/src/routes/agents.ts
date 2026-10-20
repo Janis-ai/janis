@@ -33,7 +33,8 @@ import {
   recheckGaps,
 } from '../services/knowledgeGaps.js';
 import { encryptSecret, loadSecretsMap } from '../lib/secrets.js';
-import { llmFor, MAX_KNOWLEDGE_CHARS, MAX_NOTES_CHARS } from '../lib/hostedAgent.js';
+import { connectionSecrets } from '../lib/connections.js';
+import { llmFor, MAX_KNOWLEDGE_CHARS, MAX_NOTES_CHARS, resolveWidgetRef } from '../lib/hostedAgent.js';
 import {
   contextOf,
   contextScore,
@@ -57,8 +58,10 @@ import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { processEvents } from '../services/ingest.js';
 import { toAgent } from '../lib/serializers.js';
+import { sendEmail } from '../lib/notify.js';
 import { audit } from '../lib/audit.js';
 import { invalidateChannelCache } from '../lib/channels.js';
+import { builtinCatalog } from '../lib/builtinTools.js';
 import { TOOL_TEMPLATES } from '../lib/toolTemplates.js';
 import { generateDraft } from '../lib/agentBuilder.js';
 import { connectionSecretName, connectionToken } from '../lib/connections.js';
@@ -69,6 +72,32 @@ import {
   sanitizeChannelName,
   slackChannelInfo,
 } from '../lib/slack.js';
+
+// Per-source auth headers — token-syntax names only (RFC 9110 tchar),
+// hop-by-hop and framing headers denied so a pasted blob can't smuggle
+// request-smuggling or override fetch's own framing. Max 8 per source.
+const BLOCKED_SOURCE_HEADERS = new Set([
+  'host',
+  'content-length',
+  'connection',
+  'transfer-encoding',
+  'proxy-authorization',
+  'upgrade',
+  'te',
+  'trailer',
+]);
+const sourceHeadersSchema = z
+  .record(z.string().max(1000))
+  .refine((h) => Object.keys(h).length <= 8, 'at most 8 headers per source')
+  .refine(
+    (h) =>
+      Object.keys(h).every(
+        (k) =>
+          /^[!#$%&'*+\-.^_`|~0-9a-zA-Z]{1,64}$/.test(k) &&
+          !BLOCKED_SOURCE_HEADERS.has(k.toLowerCase()),
+      ),
+    'invalid or forbidden header name',
+  );
 
 const createAgent = z.object({
   name: z.string().min(1).max(120),
@@ -421,6 +450,36 @@ export function agentRoutes(db: Db) {
         }
       }
     }
+    // builtin_tools additions go through the same rules as the dedicated
+    // /builtin-tools endpoint — only platform-flagged catalog entries
+    // (customer-armable tools like web_search) may be added; operator-
+    // gated concierge builtins can't be smuggled onto regular agents on
+    // ANY workspace. A paid plan is required on customer workspaces.
+    if (configToSave?.builtin_tools !== undefined) {
+      const [cur] = await db
+        .select({ config: agents.config })
+        .from(agents)
+        .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, workspaceId)))
+        .limit(1);
+      const before = new Set(
+        ((cur?.config ?? {}) as { builtin_tools?: string[] }).builtin_tools ?? [],
+      );
+      const added = (configToSave.builtin_tools as string[]).filter((n) => !before.has(n));
+      if (added.length) {
+        const catalog = builtinCatalog(workspaceId);
+        const bad = added.find((n) => !catalog.find((t) => t.name === n && t.available && t.platform));
+        if (bad) return c.json({ error: `"${bad}" isn't an available platform tool` }, 400);
+        if (
+          workspaceId !== env.operatorWorkspaceId &&
+          (await effectivePlanKey(db, workspaceId)) === 'free'
+        ) {
+          return c.json(
+            { error: 'Platform tools require a paid plan — upgrade under Billing.', plan_required: true },
+            402,
+          );
+        }
+      }
+    }
     if (body.name !== undefined) {
       if (await groupNameTaken(db, workspaceId, body.name)) {
         return c.json({ error: `"${body.name}" is already a group's name` }, 409);
@@ -730,15 +789,44 @@ export function agentRoutes(db: Db) {
         topic: r.topic,
         enabled: r.enabled,
         refresh_hours: r.refreshHours,
+        has_headers: !!r.sourceHeadersEnc,
         last_fetched_at: r.lastFetchedAt?.toISOString() ?? null,
+        text_changed_at: r.textChangedAt?.toISOString() ?? null,
         next_fetch_at: r.nextFetchAt?.toISOString() ?? null,
         created_at: r.createdAt.toISOString(),
       })),
     });
   });
 
-  // Include/exclude (the over-budget escape that keeps the content) and the
-  // per-source re-crawl toggle — refresh_hours null = manual only.
+  // One source's full extracted text — the list projects only metadata;
+  // the console lazy-loads this on row expand (files run to tens of KB).
+  app.get('/:id/knowledge/:fileId', agentMember, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const [row] = await db
+      .select()
+      .from(knowledgeFiles)
+      .where(and(eq(knowledgeFiles.id, c.req.param('fileId')), eq(knowledgeFiles.agentId, agent.id)))
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({
+      id: row.id,
+      name: row.name,
+      mime_type: row.mimeType,
+      text: row.text,
+      chars: row.text.length,
+      status: row.status,
+      error: row.error,
+      source_url: row.sourceUrl,
+      last_fetched_at: row.lastFetchedAt?.toISOString() ?? null,
+      text_changed_at: row.textChangedAt?.toISOString() ?? null,
+    });
+  });
+
+  // Include/exclude (the over-budget escape that keeps the content), the
+  // per-source re-crawl toggle (refresh_hours null = manual only), and
+  // credential rotation — headers replaces the stored auth blob, null
+  // clears it, absent leaves it.
   app.patch(
     '/:id/knowledge/:fileId',
     agentAdmin,
@@ -747,14 +835,17 @@ export function agentRoutes(db: Db) {
       z.object({
         enabled: z.boolean().optional(),
         refresh_hours: z.number().int().min(1).max(24 * 30).nullable().optional(),
+        headers: sourceHeadersSchema.nullable().optional(),
       }),
     ),
     async (c) => {
       const agent = await ownedAgent(c);
       if (!agent) return c.json({ error: 'not found' }, 404);
-      const { enabled, refresh_hours } = c.req.valid('json');
+      const { enabled, refresh_hours, headers } = c.req.valid('json');
       const set: Partial<typeof knowledgeFiles.$inferInsert> = {};
       if (enabled !== undefined) set.enabled = enabled;
+      if (headers !== undefined)
+        set.sourceHeadersEnc = headers ? encryptSecret(JSON.stringify(headers)) : null;
       if (refresh_hours !== undefined) {
         set.refreshHours = refresh_hours;
         set.nextFetchAt = refresh_hours
@@ -1139,17 +1230,20 @@ export function agentRoutes(db: Db) {
 
   // URL knowledge sources — crawled on add and re-crawled by the sweeper on
   // the refresh cadence, so a stale FAQ page can't silently drift.
+  // `headers` authenticates private sources (Notion tokens, gated docs) —
+  // stored AES-256-GCM encrypted, never projected back (has_headers only).
   const urlBody = z.object({
     url: z.string().url().max(2000),
     refresh_hours: z.number().int().min(1).max(24 * 30).default(24),
     // Builder topic this source covers — the checklist tags rows so
     // "Covered · N sources" is provable, not a user claim.
     topic: z.string().max(80).optional(),
+    headers: sourceHeadersSchema.optional(),
   });
   app.post('/:id/knowledge-url', agentAdmin, zValidator('json', urlBody), async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
-    const { url, refresh_hours, topic } = c.req.valid('json');
+    const { url, refresh_hours, topic, headers } = c.req.valid('json');
     // Rewrite shapes that can't serve content directly — a Google Doc /edit
     // link yields the editor shell, github blob pages yield site chrome.
     // The pasted URL stays as the display name; the normalized form is what
@@ -1163,7 +1257,7 @@ export function agentRoutes(db: Db) {
       return c.json({ error: `knowledge file limit reached (${MAX_KNOWLEDGE_SOURCES})` }, 409);
     let fetched: { text: string; sizeBytes: number; imageUrl?: string };
     try {
-      fetched = await fetchUrlText(sourceUrl);
+      fetched = await fetchUrlText(sourceUrl, { headers });
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : 'fetch failed' }, 422);
     }
@@ -1180,6 +1274,7 @@ export function agentRoutes(db: Db) {
         sourceUrl,
         imageUrl: fetched.imageUrl ?? null,
         topic: topic ?? null,
+        ...(headers ? { sourceHeadersEnc: encryptSecret(JSON.stringify(headers)) } : {}),
         refreshHours: refresh_hours,
         lastFetchedAt: now,
         nextFetchAt: new Date(now.getTime() + refresh_hours * 3600_000),
@@ -1195,15 +1290,12 @@ export function agentRoutes(db: Db) {
   app.post('/:id/knowledge-import', agentAdmin, zValidator('json', urlBody), async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
-    const { url, refresh_hours } = c.req.valid('json');
+    const { url, refresh_hours, headers } = c.req.valid('json');
     try {
-      const result = await importHelpCentre(
-        db,
-        c.get('workspaceId'),
-        agent.id,
-        url,
-        refresh_hours,
-      );
+      const result = await importHelpCentre(db, c.get('workspaceId'), agent.id, url, refresh_hours, {
+        headers,
+        headersEnc: headers ? encryptSecret(JSON.stringify(headers)) : undefined,
+      });
       return c.json(result, 201);
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : 'import failed' }, 422);
@@ -1588,28 +1680,37 @@ export function agentRoutes(db: Db) {
     },
   );
 
-  // Per-tool approval gates on an installed template — the UI's checkboxes.
-  // Matches tools by name so installs predating the `template` marker still
-  // get managed (and get stamped on write).
+  // Per-tool approval gates + on/off toggles on an installed template — the
+  // UI's checkboxes. Matches tools by name so installs predating the
+  // `template` marker still get managed (and get stamped on write). A
+  // disabled tool stays in config — reinstall state intact — but toolsFor
+  // filters it before the model ever sees it.
   app.patch(
     '/:id/tools/:template', agentAdmin,
     zValidator(
       'json',
-      z.object({ approvals: z.record(z.string(), z.boolean()) }),
+      z.object({
+        approvals: z.record(z.string(), z.boolean()).optional(),
+        disabled: z.record(z.string(), z.boolean()).optional(),
+      }),
     ),
     async (c) => {
       const agent = await ownedAgent(c);
       if (!agent) return c.json({ error: 'not found' }, 404);
       const tpl = TOOL_TEMPLATES.find((t) => t.id === c.req.param('template'));
       if (!tpl) return c.json({ error: 'unknown template' }, 404);
-      const { approvals } = c.req.valid('json');
+      const { approvals = {}, disabled = {} } = c.req.valid('json');
       const names = new Set(tpl.tools.map((t) => t.name));
       const cfg = (agent.config ?? {}) as AgentConfig;
-      const tools = (cfg.tools ?? []).map((t) =>
-        names.has(t.name) && approvals[t.name] !== undefined
-          ? { ...t, template: tpl.id, approval: approvals[t.name] || undefined }
-          : t,
-      );
+      const tools = (cfg.tools ?? []).map((t) => {
+        if (!names.has(t.name)) return t;
+        const touched = approvals[t.name] !== undefined || disabled[t.name] !== undefined;
+        if (!touched) return t;
+        const next = { ...t, template: tpl.id };
+        if (approvals[t.name] !== undefined) next.approval = approvals[t.name] || undefined;
+        if (disabled[t.name] !== undefined) next.disabled = disabled[t.name] || undefined;
+        return next;
+      });
       const [updated] = await db
         .update(agents)
         .set({ config: { ...cfg, tools } })
@@ -1639,6 +1740,63 @@ export function agentRoutes(db: Db) {
     return c.json({ agent: toAgent(updated) });
   });
 
+  // Platform tools — in-process builtins that need no credentials: the UI
+  // toggle surface for config.builtin_tools. Only platform-flagged
+  // catalog entries available to this workspace are listed — concierge
+  // builtins (create_agent, teach_agent, …) never surface on a regular
+  // agent, operator workspace included. Enabling on a free plan is 402 —
+  // platform tools run on Janis infrastructure, not the customer's
+  // accounts (the operator workspace is exempt).
+  app.get('/:id/builtin-tools', agentMember, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const enabled = new Set(
+      ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools ?? [],
+    );
+    return c.json({
+      plan: await effectivePlanKey(db, agent.workspaceId),
+      tools: builtinCatalog(agent.workspaceId)
+        .filter((t) => t.available && t.platform)
+        .map((t) => ({ name: t.name, description: t.description, enabled: enabled.has(t.name) })),
+    });
+  });
+
+  app.patch(
+    '/:id/builtin-tools',
+    agentAdmin,
+    zValidator('json', z.object({ name: z.string(), enabled: z.boolean() })),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const { name, enabled } = c.req.valid('json');
+      const tool = builtinCatalog(agent.workspaceId).find(
+        (t) => t.name === name && t.available && t.platform,
+      );
+      if (!tool) return c.json({ error: 'unknown or unavailable platform tool' }, 404);
+      if (
+        enabled &&
+        agent.workspaceId !== env.operatorWorkspaceId &&
+        (await effectivePlanKey(db, agent.workspaceId)) === 'free'
+      ) {
+        return c.json(
+          { error: 'Platform tools require a paid plan — upgrade under Billing.', plan_required: true },
+          402,
+        );
+      }
+      const cfg = (agent.config ?? {}) as AgentConfig;
+      const set = new Set(cfg.builtin_tools ?? []);
+      if (enabled) set.add(name);
+      else set.delete(name);
+      const [updated] = await db
+        .update(agents)
+        .set({ config: { ...cfg, builtin_tools: [...set] } })
+        .where(eq(agents.id, agent.id))
+        .returning();
+      bus.publish(agent.workspaceId, { type: 'agent', data: { id: agent.id } });
+      return c.json({ agent: toAgent(updated) });
+    },
+  );
+
   // Saved in-conversation components — hand-built widgets the agent emits by
   // name ("WIDGET_REF: plans") so the content is deterministic, or pins to
   // the chat greeting (auto_greet). spec is a validated WidgetComponent.
@@ -1651,6 +1809,7 @@ export function agentRoutes(db: Db) {
     .regex(/^[a-z][a-z0-9_-]*$/, 'start with a letter; letters, numbers, - and _ only');
   const widgetBody = z.object({
     name: widgetName,
+    description: z.string().trim().max(200).optional().nullable(),
     spec: z.unknown(),
     states: z.array(WidgetState).max(12).optional(),
     tool: WidgetToolBinding.optional().nullable(),
@@ -1692,6 +1851,7 @@ export function agentRoutes(db: Db) {
       .values({
         agentId: agent.id,
         name: body.name,
+        description: body.description || null,
         spec: spec.data,
         states: body.states ?? null,
         tool: body.tool ?? null,
@@ -1700,6 +1860,7 @@ export function agentRoutes(db: Db) {
       .onConflictDoUpdate({
         target: [agentWidgets.agentId, agentWidgets.name],
         set: {
+          description: body.description || null,
           spec: spec.data,
           states: body.states ?? null,
           tool: body.tool ?? null,
@@ -1722,6 +1883,7 @@ export function agentRoutes(db: Db) {
       const body = c.req.valid('json');
       const patch: Record<string, unknown> = { updatedAt: new Date() };
       if (body.name !== undefined) patch.name = body.name;
+      if (body.description !== undefined) patch.description = body.description || null;
       if (body.spec !== undefined) {
         const spec = WidgetComponent.safeParse(body.spec);
         if (!spec.success) return c.json({ error: 'invalid spec', issues: spec.error.issues }, 400);
@@ -1755,6 +1917,58 @@ export function agentRoutes(db: Db) {
     if (!row) return c.json({ error: 'not found' }, 404);
     bus.publish(agent.workspaceId, { type: 'agent', data: { id: agent.id } });
     return c.json({ ok: true });
+  });
+
+  // POST /:id/widgets/test — resolve a component the same way a WIDGET_REF
+  // would at chat time: the bound tool runs FOR REAL with the given ref data
+  // (an admin preview, same trust as testing the tool itself), its result
+  // maps into props/steps/rows/items, and the filled spec comes back next to
+  // the raw result so the mapping can be written against the actual shape.
+  const widgetTestBody = z.object({
+    spec: z.unknown(),
+    states: z.array(WidgetState).max(12).optional(),
+    tool: WidgetToolBinding.nullish(),
+    data: z.record(z.unknown()).optional(),
+  });
+  app.post('/:id/widgets/test', agentAdmin, zValidator('json', widgetTestBody), async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const body = c.req.valid('json');
+    const spec = WidgetComponent.safeParse(body.spec);
+    if (!spec.success) return c.json({ error: 'invalid spec', issues: spec.error.issues }, 400);
+    const toolCheck = validToolBind(agent, body.tool ?? null);
+    if (!toolCheck.ok) return c.json({ error: toolCheck.error }, 400);
+    const cap: { args?: Record<string, unknown>; result?: string; error?: string } = {};
+    const widget = await resolveWidgetRef(
+      {
+        spec: spec.data,
+        states: body.states,
+        tool: body.tool ?? undefined,
+      },
+      body.data,
+      toolsFor(agent),
+      {
+        ...(await loadSecretsMap(db, agent.id)),
+        ...(await connectionSecrets(db, agent.id)),
+      },
+      // The previewer is a signed-in admin — operator context, same as the
+      // console's other operator surfaces.
+      {
+        db,
+        convId: '',
+        workspaceId: agent.workspaceId,
+        identity: { emails: new Set(), operator: true },
+      },
+      new Set(),
+      cap,
+    );
+    return c.json({
+      widget,
+      tool_args: cap.args,
+      // The raw result (capped) — mappings get written against this shape.
+      tool_result: cap.result?.slice(0, 8000),
+      error: cap.error,
+    });
   });
 
   app.delete('/:id/knowledge/:fileId', agentAdmin, async (c) => {
@@ -1909,6 +2123,13 @@ export function agentRoutes(db: Db) {
         .values({ email, name: b.name?.trim() || email.split('@')[0] })
         .returning();
     }
+    // A re-role upserts over an existing grant — only a genuinely new one
+    // gets the "you've been added" email.
+    const [prior] = await db
+      .select({ id: agentMembers.id })
+      .from(agentMembers)
+      .where(and(eq(agentMembers.agentId, c.req.param('id')), eq(agentMembers.userId, u.id)))
+      .limit(1);
     const [row] = await db
       .insert(agentMembers)
       .values({
@@ -1923,6 +2144,27 @@ export function agentRoutes(db: Db) {
         set: { role: b.role },
       })
       .returning();
+    if (!prior) {
+      const me = c.get('user');
+      const [agent] = await db
+        .select({ name: agents.name, workspaceId: agents.workspaceId })
+        .from(agents)
+        .where(eq(agents.id, c.req.param('id')))
+        .limit(1);
+      const [ws] = agent
+        ? await db
+            .select({ name: workspaces.name })
+            .from(workspaces)
+            .where(eq(workspaces.id, agent.workspaceId))
+            .limit(1)
+        : [undefined];
+      void sendEmail(
+        [email],
+        `${me.name} added you to ${agent?.name ?? 'an agent'} on Janis`,
+        `Hi — ${me.name} gave you ${b.role} access to the agent "${agent?.name ?? ''}" in the "${ws?.name ?? ''}" workspace on Janis. Sign in with this email to see it:`,
+        `/agents/${c.req.param('id')}`,
+      ).catch((err) => console.error('agent grant email failed:', err));
+    }
     return c.json({ member: toMember(row, u) }, 201);
   });
 

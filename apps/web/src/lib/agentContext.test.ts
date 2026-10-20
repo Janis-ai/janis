@@ -1,5 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { agentPathParam, agentSlug, contextAgentStale, janisBrain } from './agentContext';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  agentPathParam,
+  agentSlug,
+  agentUnscoped,
+  clearLastAgent,
+  contextAgentStale,
+  forgetLastAgent,
+  janisBrain,
+  lastAgentId,
+  setLastAgent,
+} from './agentContext';
 
 describe('agentSlug', () => {
   it('matches the slug shape concierge links emit', () => {
@@ -73,5 +83,54 @@ describe('janisBrain', () => {
     expect(janisBrain(agent(false, 'monitor'))).toBe(false);
     expect(janisBrain(null)).toBe(false);
     expect(janisBrain(undefined)).toBe(false);
+  });
+});
+
+describe('per-workspace agent memory', () => {
+  const store = new Map<string, string>();
+  vi.stubGlobal('localStorage', {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  });
+  beforeEach(() => store.clear());
+
+  const wsA = 'ws-aaa';
+  const wsB = 'ws-bbb';
+  const agent1 = '7b90d58b-2253-495e-bc61-a575bf958c5b';
+  const agent2 = 'a4b7f9cf-90b8-4e47-8d9f-d5ea4b6f1f9f';
+
+  it('remembers the agent per workspace — switching restores each side', () => {
+    setLastAgent(agent1, wsA);
+    setLastAgent(agent2, wsB);
+    expect(lastAgentId(wsA)).toBe(agent1);
+    expect(lastAgentId(wsB)).toBe(agent2);
+  });
+
+  it('explicit unscope blocks auto-select; evicting a stale id does not', () => {
+    clearLastAgent(wsA);
+    expect(agentUnscoped(wsA)).toBe(true);
+    expect(lastAgentId(wsA)).toBeNull();
+    forgetLastAgent(wsA);
+    expect(agentUnscoped(wsA)).toBe(false);
+  });
+
+  it('a fresh set overwrites the unscoped marker', () => {
+    clearLastAgent(wsA);
+    setLastAgent(agent1, wsA);
+    expect(agentUnscoped(wsA)).toBe(false);
+    expect(lastAgentId(wsA)).toBe(agent1);
+  });
+
+  it('migrates the legacy single key into the current workspace only', () => {
+    store.set('janis:last-agent', agent1);
+    expect(lastAgentId(wsA)).toBe(agent1);
+    expect(store.get('janis:last-agent')).toBeUndefined();
+    expect(lastAgentId(wsB)).toBeNull(); // not leaked to the other workspace
+  });
+
+  it('rejects non-uuid values regardless of source', () => {
+    setLastAgent('acme-returns', wsA);
+    expect(lastAgentId(wsA)).toBeNull();
   });
 });

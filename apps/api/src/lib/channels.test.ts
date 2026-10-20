@@ -986,3 +986,118 @@ describe('deliverToChannel on conversations without a binding', () => {
     expect(res.delivered).toBe(true);
   });
 });
+
+describe('outlook channel delivery', () => {
+  let db: Db;
+  let wsId: string;
+
+  beforeAll(async () => {
+    const client = new PGlite();
+    db = drizzle(client, { schema }) as unknown as Db;
+    await migrate(db as never, { migrationsFolder: './drizzle' });
+    const [ws] = await db.insert(workspaces).values({ name: 'Outlook WS' }).returning();
+    wsId = ws.id;
+  });
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** Agent + conversation + outlook channel bound to mike@x.com. An optional
+   * inbound message carries the Graph id in payload.mid like the sweep writes. */
+  const makeThread = async (inboundMid?: string) => {
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: wsId, name: 'George', hosted: true })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: `outlook:mike@x.com:${agent.id}` })
+      .returning();
+    const [ch] = await db
+      .insert(channelsTable)
+      .values({
+        workspaceId: wsId,
+        agentId: agent.id,
+        kind: 'outlook',
+        name: 'George Mailbox',
+        credentials: {
+          email_address: 'geo@contoso.onmicrosoft.com',
+          from_address: 'geo@contoso.onmicrosoft.com',
+          access_token: 'ms.tok',
+          token_expiry: Date.now() + 3_600_000,
+          refresh_token: 'rt',
+        },
+      })
+      .returning();
+    await db.insert(channelBindings).values({
+      channelId: ch.id,
+      conversationId: conv.id,
+      platformUserId: 'mike@x.com',
+    });
+    if (inboundMid !== undefined) {
+      await db.insert(messages).values({
+        conversationId: conv.id,
+        direction: 'in',
+        text: 'hi',
+        payload: {
+          mid: inboundMid,
+          email: { subject: 'hey', message_id: '<r@x.com>', thread_id: 'c1' },
+        },
+      });
+    }
+    return conv;
+  };
+
+  it('replies via /me/messages/{id}/reply when the inbound carries a Graph id', async () => {
+    const conv = await makeThread('outlook:GRAPHTHREADID');
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 202 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await deliverToChannel(db, conv.id, 'Hello back!');
+    expect(res.delivered).toBe(true);
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).includes('/me/messages/'));
+    expect(call).toBeTruthy();
+    expect(String(call![0])).toContain('/me/messages/GRAPHTHREADID/reply');
+    const body = JSON.parse(String(call![1]?.body));
+    expect(body.comment).toContain('Hello back!');
+    expect(body.message.toRecipients).toEqual([
+      { emailAddress: { address: 'mike@x.com' } },
+    ]);
+    // Reply action does the threading — sendMail must not be touched.
+    expect(fetchMock.mock.calls.some((c) => String(c[0]).includes('/me/sendMail'))).toBe(false);
+  });
+
+  it('falls back to /me/sendMail on a fresh thread — with no internetMessageHeaders', async () => {
+    const conv = await makeThread(); // no inbound → nothing to reply to
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 202 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await deliverToChannel(db, conv.id, 'Cold outreach');
+    expect(res.delivered).toBe(true);
+    const call = fetchMock.mock.calls.find((c) => String(c[0]).includes('/me/sendMail'));
+    expect(call).toBeTruthy();
+    const body = JSON.parse(String(call![1]?.body));
+    // Graph rejects non-x-* names here — In-Reply-To/References were the prod
+    // 400. Pin that the field stays out of the payload entirely.
+    expect(body.message.internetMessageHeaders).toBeUndefined();
+    expect(body.message.toRecipients).toEqual([
+      { emailAddress: { address: 'mike@x.com' } },
+    ]);
+  });
+
+  it('surfaces Graph errors as retryable delivery failures', async () => {
+    const conv = await makeThread('outlook:BADID');
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ error: { message: 'message not found' } }), {
+            status: 404,
+          }),
+        ),
+    );
+    const res = await deliverToChannel(db, conv.id, 'hi');
+    expect(res.delivered).toBe(false);
+    expect(res.error).toContain('Outlook send failed');
+    expect(res.error).toContain('message not found');
+    expect(res.retryable).toBe(true);
+  });
+});

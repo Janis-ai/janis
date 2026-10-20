@@ -17,6 +17,7 @@ import { runJobs, enqueueJob } from '../lib/jobs.js';
 import { sweepCampaigns } from '../lib/campaigns.js';
 import { sweepEvals } from '../lib/evalRuns.js';
 import { sweepEmailDomainStatus } from '../lib/resendDomains.js';
+import { sweepShopifyUsage } from '../lib/shopifyApp.js';
 
 /**
  * Claim or renew a named singleton lock. Only the holder (or anyone, once the
@@ -94,6 +95,7 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
         console.error('sweepEmailDomainStatus error:', err),
       );
       void sweepRetention(db).catch((err) => console.error('sweepRetention error:', err));
+      void sweepShopifyUsage(db).catch((err) => console.error('sweepShopifyUsage error:', err));
       void db
         .delete(busEvents)
         .where(lt(busEvents.createdAt, new Date(Date.now() - 10 * 60_000)))
@@ -434,7 +436,7 @@ export async function sweepRetention(db: Db, perWorkspace = 25): Promise<number>
           eq(agents.workspaceId, ws.id),
           lt(
             sql`coalesce(${conversations.lastMessageAt}, ${conversations.createdAt})`,
-            cutoff,
+            cutoff.toISOString(),
           ),
         ),
       )

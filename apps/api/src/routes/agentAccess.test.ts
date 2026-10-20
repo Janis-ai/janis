@@ -9,6 +9,7 @@ import * as schema from '../db/schema.js';
 import {
   agentMembers,
   agents,
+  conversations,
   crmConnections,
   memberships,
   savedReplies,
@@ -132,6 +133,46 @@ describe('agent-scoped access', () => {
       body: JSON.stringify({ name: 'A Renamed' }),
     });
     expect(res.status).toBe(200);
+  });
+
+  it('emails the grantee on a new agent grant — not on a re-role', async () => {
+    const calls: { to: string[]; subject: string }[] = [];
+    const origFetch = globalThis.fetch;
+    const resend = { key: env.resendApiKey, from: env.emailFrom, origin: env.webOrigin };
+    env.resendApiKey = 're_test';
+    env.emailFrom = 'alerts@test.dev';
+    env.webOrigin = 'https://app.test';
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes('api.resend.com/emails')) {
+        calls.push(JSON.parse(String(init?.body)));
+        return new Response('{}', { status: 200 });
+      }
+      return origFetch(url as never, init);
+    }) as typeof fetch;
+    const grantEmail = (role: string) =>
+      app.request(`/api/agents/${agentB}/members`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', cookie: adminCookie },
+        body: JSON.stringify({ email: 'grantee@x.test', role }),
+      });
+    try {
+      expect((await grantEmail('member')).status).toBe(201);
+      for (let i = 0; i < 20 && calls.length === 0; i++) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(calls).toHaveLength(1);
+      expect(calls[0].to).toEqual(['grantee@x.test']);
+      expect(calls[0].subject).toContain('Agent B');
+      // a re-role upserts over the same grant — no second email
+      expect((await grantEmail('admin')).status).toBe(201);
+      for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 10));
+      expect(calls).toHaveLength(1);
+    } finally {
+      globalThis.fetch = origFetch;
+      env.resendApiKey = resend.key;
+      env.emailFrom = resend.from;
+      env.webOrigin = resend.origin;
+    }
   });
 
   it('member without an override stays member (403)', async () => {
@@ -543,5 +584,99 @@ describe('agent-invite sign-in landing', () => {
     expect((await me2.json()).workspace?.id).toBe(ownWs.id);
     const back2 = await app.request('/api/agents', { headers: { cookie: dualCookie } });
     expect((await back2.json()).agents).toEqual([]);
+  });
+
+  it('/auth/switch for_conversation moves the session to the owning workspace', async () => {
+    const { authRoutes } = await import('./auth.js');
+    const authApp = new Hono().route('/auth', authRoutes(db));
+    const [otherWs] = await db.insert(workspaces).values({ name: 'DeepLink' }).returning();
+    const [otherAgent] = await db
+      .insert(agents)
+      .values({ workspaceId: otherWs.id, name: 'Elsewhere' })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: otherAgent.id, externalId: 'dl-1' })
+      .returning();
+
+    // Member of both workspaces, session pinned to this one
+    const { user: multi, cookie: multiCookie } = await makeUser('multi@x.test', wsId, 'member');
+    await db
+      .insert(memberships)
+      .values({ userId: multi.id, workspaceId: otherWs.id, role: 'member', acceptedAt: new Date() });
+
+    const res = await authApp.request('/auth/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: multiCookie },
+      body: JSON.stringify({ for_conversation: conv.id }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).workspace_id).toBe(otherWs.id);
+
+    // Session now serves the other workspace
+    const me = await authApp.request('/auth/me', { headers: { cookie: multiCookie } });
+    expect((await me.json()).workspace?.id).toBe(otherWs.id);
+
+    // Same call again: already there → unchanged, no-op (client must not reload-loop)
+    const again = await authApp.request('/auth/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: multiCookie },
+      body: JSON.stringify({ for_conversation: conv.id }),
+    });
+    expect((await again.json()).unchanged).toBe(true);
+  });
+
+  it('/auth/switch for_conversation follows an agent grant, not just membership', async () => {
+    const { authRoutes } = await import('./auth.js');
+    const authApp = new Hono().route('/auth', authRoutes(db));
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agentA, externalId: 'dl-2' })
+      .returning();
+    // scopedCookie holds a grant on agentA (granted above), no membership
+    const res = await authApp.request('/auth/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: scopedCookie },
+      body: JSON.stringify({ for_conversation: conv.id }),
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('/auth/switch for_conversation 404s for unreachable conversations', async () => {
+    const { authRoutes } = await import('./auth.js');
+    const authApp = new Hono().route('/auth', authRoutes(db));
+    const [convB] = await db
+      .insert(conversations)
+      .values({ agentId: agentB, externalId: 'dl-3' })
+      .returning();
+
+    // scoped user has a grant on agentA only — a conversation on agentB must
+    // not reveal its workspace
+    const denied = await authApp.request('/auth/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: scopedCookie },
+      body: JSON.stringify({ for_conversation: convB.id }),
+    });
+    expect(denied.status).toBe(404);
+
+    // a workspace member hidden from that agent also misses
+    const { user: hid, cookie: hidCookie } = await makeUser('hid@x.test', wsId, 'member');
+    await db
+      .insert(agentMembers)
+      .values({ userId: hid.id, agentId: agentB, role: 'hidden', acceptedAt: new Date() });
+    const hidRes = await authApp.request('/auth/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: hidCookie },
+      body: JSON.stringify({ for_conversation: convB.id }),
+    });
+    expect(hidRes.status).toBe(404);
+
+    // and a totally unknown conversation id 404s the same way
+    const missing = await authApp.request('/auth/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: memberCookie },
+      body: JSON.stringify({ for_conversation: '00000000-0000-0000-0000-000000000000' }),
+    });
+    expect(missing.status).toBe(404);
   });
 });

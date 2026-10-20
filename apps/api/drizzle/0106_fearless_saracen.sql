@@ -1,0 +1,1 @@
+ALTER TABLE "agent_widgets" ADD COLUMN "description" text;

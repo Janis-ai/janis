@@ -42,3 +42,18 @@ export function isPgInputSyntaxError(err: unknown): boolean {
   }
   return false;
 }
+
+/**
+ * True when the error is a Postgres unique-violation (SQLSTATE 23505),
+ * optionally narrowed to a named constraint. drizzle wraps driver errors as
+ * DrizzleQueryError, so walk the cause chain — a shallow `err.code` check
+ * always misses. Callers use it for expected races (e.g. the mid dedup
+ * index) where the constraint settling the race is the dedupe mechanism.
+ */
+export function isUniqueViolation(err: unknown, constraint?: string): boolean {
+  for (let e: unknown = err; e instanceof Error; e = e.cause) {
+    const pg = e as { code?: string; constraint_name?: string };
+    if (pg.code === '23505' && (!constraint || pg.constraint_name === constraint)) return true;
+  }
+  return false;
+}

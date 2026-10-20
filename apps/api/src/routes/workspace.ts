@@ -36,6 +36,15 @@ import {
   workspaces,
 } from '../db/schema.js';
 import { stripe } from '../lib/stripe.js';
+import {
+  listConnections,
+  listDirectories,
+  maybeDisableSso,
+  createOrganization,
+  portalLink,
+  readWorkosState,
+  SSO_PLANS,
+} from '../lib/workos.js';
 import { audit, auditLogFor } from '../lib/audit.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
@@ -121,7 +130,9 @@ async function workspaceView(db: Db, ws: WorkspaceRow) {
           eq(agents.workspaceId, ws.id),
           lt(
             sql`coalesce(${conversations.lastMessageAt}, ${conversations.createdAt})`,
-            cutoff,
+            // ISO string, not the Date — postgres-js can't serialize Date
+            // params inside raw sql`` fragments (ERR_INVALID_ARG_TYPE).
+            cutoff.toISOString(),
           ),
         ),
       );
@@ -344,6 +355,146 @@ export function workspaceRoutes(db: Db) {
   );
 
 
+  // ---- Enterprise SSO (WorkOS AuthKit) -----------------------------------
+  // Scale/internal plan-gated: each connection bills ~$125/mo against OUR
+  // WorkOS account, so only gated tiers may mint Admin Portal links. The
+  // workspace→WorkOS mapping lives in config.workos {organization_id,
+  // domain, connection_id}; the SCIM webhook resolves workspaces via
+  // config.workos_directory_id.
+  const ssoConfig = async (workspaceId: string) => {
+    const [ws] = await db
+      .select({ config: workspaces.config, name: workspaces.name })
+      .from(workspaces)
+      .where(eq(workspaces.id, workspaceId))
+      .limit(1);
+    return { ws, state: readWorkosState(ws?.config) };
+  };
+
+  // GET /api/workspace/sso — status for the Settings card. Polls WorkOS for
+  // connection/directory state and self-heals the stored ids (the portal
+  // flow happens entirely on WorkOS's side — this is how we learn it finished).
+  app.get('/sso', adminOnly, async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const { ws, state } = await ssoConfig(workspaceId);
+    if (!ws) return c.json({ error: 'not found' }, 404);
+    const plan = await effectivePlanKey(db, workspaceId);
+    const out: Record<string, unknown> = {
+      configured: Boolean(env.workosClientId && env.workosApiKey),
+      allowed: SSO_PLANS.has(plan),
+      plan,
+      domain: state.domain ?? null,
+      organization_id: state.organization_id ?? null,
+      connection_status: null,
+      directory_linked: false,
+      signin_url: state.domain
+        ? `${env.webOrigin.replace(/\/$/, '')}/login?sso_domain=${encodeURIComponent(state.domain)}`
+        : null,
+    };
+    if (!env.workosApiKey || !state.organization_id) return c.json({ sso: out });
+    try {
+      const [conns, dirs] = await Promise.all([
+        listConnections(state.organization_id),
+        listDirectories(state.organization_id),
+      ]);
+      const active = conns.find((x) => x.status === 'active');
+      const dir = dirs.find((d) => d.state !== 'unlinked' && d.state !== 'inactive') ?? dirs[0];
+      out.connection_status = active ? 'active' : (conns[0]?.status ?? 'pending_setup');
+      out.directory_linked = Boolean(dir);
+      const config = { ...((ws.config ?? {}) as Record<string, unknown>) };
+      let touched = false;
+      if (active && state.connection_id !== active.id) {
+        config.workos = { ...state, connection_id: active.id };
+        touched = true;
+      }
+      if (dir && config.workos_directory_id !== dir.id) {
+        config.workos_directory_id = dir.id;
+        touched = true;
+      }
+      if (touched) {
+        await db.update(workspaces).set({ config }).where(eq(workspaces.id, workspaceId));
+      }
+    } catch (e) {
+      out.workos_error = e instanceof Error ? e.message : String(e);
+    }
+    return c.json({ sso: out });
+  });
+
+  // POST /api/workspace/sso/setup {domain, intent} — create the WorkOS
+  // organization on first use and mint an Admin Portal link ('sso' for the
+  // SAML wizard, 'dsync' for directory provisioning). The customer completes
+  // setup on WorkOS's side; GET /sso picks the result up on next load.
+  app.post(
+    '/sso/setup',
+    adminOnly,
+    zValidator(
+      'json',
+      z.object({
+        domain: z
+          .string()
+          .trim()
+          .toLowerCase()
+          .regex(/^[a-z0-9.-]+\.[a-z]{2,}$/, 'enter a bare domain like acme.com'),
+        intent: z.enum(['sso', 'dsync']).default('sso'),
+      }),
+    ),
+    async (c) => {
+      if (!env.workosApiKey) return c.json({ error: 'SSO is not configured on this deployment' }, 400);
+      const workspaceId = c.get('workspaceId');
+      const plan = await effectivePlanKey(db, workspaceId);
+      if (!SSO_PLANS.has(plan)) {
+        return c.json({ error: 'SSO requires the Scale plan', plan }, 403);
+      }
+      const { domain, intent } = c.req.valid('json');
+      const { ws, state } = await ssoConfig(workspaceId);
+      if (!ws) return c.json({ error: 'not found' }, 404);
+      try {
+        let organizationId = state.organization_id;
+        if (!organizationId) {
+          const org = await createOrganization(ws.name || `Workspace ${workspaceId.slice(0, 8)}`, domain);
+          organizationId = org.id;
+          const config = { ...((ws.config ?? {}) as Record<string, unknown>) };
+          config.workos = { ...state, organization_id: organizationId, domain };
+          await db.update(workspaces).set({ config }).where(eq(workspaces.id, workspaceId));
+        } else if (domain !== state.domain) {
+          // Domain change mid-setup — the portal link still targets the org;
+          // the stored label follows what the admin last requested.
+          const config = { ...((ws.config ?? {}) as Record<string, unknown>) };
+          config.workos = { ...state, domain };
+          await db.update(workspaces).set({ config }).where(eq(workspaces.id, workspaceId));
+        }
+        const { link } = await portalLink(organizationId, intent);
+        await audit(db, {
+          workspaceId,
+          userId: c.get('user').id,
+          userName: c.get('user').name,
+          action: 'workspace.sso.portal_link',
+          targetType: 'workspace',
+          targetId: workspaceId,
+          meta: { domain, intent, organization_id: organizationId },
+        });
+        return c.json({ portal_url: link });
+      } catch (e) {
+        return c.json({ error: `WorkOS: ${e instanceof Error ? e.message : e}` }, 502);
+      }
+    },
+  );
+
+  // POST /api/workspace/sso/disable — delete the WorkOS connection (stops
+  // the per-connection meter) and clear the stored mapping.
+  app.post('/sso/disable', adminOnly, async (c) => {
+    const workspaceId = c.get('workspaceId');
+    await maybeDisableSso(db, workspaceId);
+    await audit(db, {
+      workspaceId,
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'workspace.sso.disable',
+      targetType: 'workspace',
+      targetId: workspaceId,
+    });
+    return c.json({ ok: true });
+  });
+
   // DELETE /api/workspace — permanently remove the workspace and every row
   // attached to it (no FK cascades, so children go first). Admin only.
   app.delete('/', adminOnly, async (c) => {
@@ -362,6 +513,8 @@ export function workspaceRoutes(db: Db) {
         }
       }
     }
+    // same for a WorkOS SSO connection — it bills $125/mo until deleted
+    await maybeDisableSso(db, workspaceId);
 
     const agentIds = (
       await db.select({ id: agents.id }).from(agents).where(eq(agents.workspaceId, workspaceId))

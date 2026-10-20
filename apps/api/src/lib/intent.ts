@@ -74,7 +74,8 @@ export async function classifySentiment(
   const raw = await llmClassify(
     llm,
     'Read the customer message and classify their sentiment as exactly one of: positive, neutral, negative. ' +
-      'Negative means frustrated, angry, or upset — not merely asking for help. ' +
+      'Negative means clearly frustrated, angry, or upset — not merely asking for help. ' +
+      'Polite dismissals, declining help, and brief answers are neutral, not negative. ' +
       'Reply with the label only — no punctuation, no explanation.',
     text,
   );

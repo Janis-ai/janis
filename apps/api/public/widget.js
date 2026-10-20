@@ -460,6 +460,8 @@
     '.janis-wscroll.janis-wprev{left:2px;padding-right:2px}.janis-wscroll.janis-wnext{right:2px;padding-left:2px}' +
     '.janis-wscroll[disabled]{opacity:0;pointer-events:none}' +
     '.janis-wcard{flex:0 0 150px;max-width:150px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;color:#1f2937;overflow:hidden;display:flex;flex-direction:column}' +
+    '.janis-wcard-tap{cursor:pointer}' +
+    '.janis-wcard-tap:hover{border-color:#94a3b8}' +
     '.janis-wcard img{width:100%;height:110px;object-fit:contain;display:block;margin:0!important;max-width:none!important;max-height:110px!important;border-radius:0;background:#f8fafc}' +
     // Missing product image — same slot kept so every card's title, price
     // and buttons line up across the row.
@@ -525,15 +527,27 @@
     '.janis-wsent{color:#059669;font-size:12.5px;font-weight:600;padding:4px 0}' +
     '.janis-wsteps{display:flex;flex-direction:column;gap:7px}' +
     '.janis-wstep{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:#1f2937}' +
-    '.janis-wdot{flex:0 0 10px;width:10px;height:10px;border-radius:50%;margin-top:4px;background:#d1d5db}' +
-    '.janis-wstep.done .janis-wdot{background:#059669}' +
-    '.janis-wstep.current .janis-wdot{background:var(--janis-accent);box-shadow:0 0 0 3px rgba(91,33,182,.2)}' +
+    '.janis-wdot{flex:0 0 10px;width:10px;height:10px;border-radius:50%;margin-top:4px;background:transparent;border:2px solid #d1d5db;box-sizing:border-box}' +
+    '.janis-wstep.done .janis-wdot{background:#059669;border-color:#059669}' +
+    '.janis-wstep.current .janis-wdot{background:transparent;border:2px solid var(--janis-accent);box-shadow:0 0 0 3px rgba(91,33,182,.2);width:10px;height:10px;box-sizing:border-box}' +
     '.janis-wstep.todo{color:#9ca3af}' +
     '.janis-wstep small{display:block;color:#6b7280;font-size:11.5px}' +
     '.janis-wreceipt{border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#fff;color:#1f2937}' +
     '.janis-wrow{display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:13px}' +
     '.janis-wrow .janis-wv{text-align:right;font-weight:500;white-space:pre-line}' +
     '.janis-wrow.janis-wtotal{border-top:1px solid #e5e7eb;margin-top:6px;padding-top:7px;font-weight:700}' +
+    '.janis-wrow.janis-wsumrow{color:#6b7280;font-size:12px}' +
+    // Pricing — plan cards mirroring the billing page; scrolls like cards.
+    '.janis-wpricing{display:flex;gap:8px;overflow-x:auto;padding:2px}' +
+    '.janis-wplan{flex:0 0 170px;border:1px solid #e5e7eb;border-radius:10px;background:#fff;color:#1f2937;padding:10px;display:flex;flex-direction:column}' +
+    '.janis-wplan.featured{border-color:var(--janis-accent)}' +
+    '.janis-wplan-head{display:flex;align-items:center;gap:6px}' +
+    '.janis-wplan-cur{font-size:10px;font-weight:600;border:1px solid #e5e7eb;border-radius:10px;padding:1px 6px;color:#6b7280}' +
+    '.janis-wplan-price{font-weight:700;font-size:17px;margin:4px 0 2px;font-family:ui-monospace,monospace}' +
+    '.janis-wplan-alt{color:#6b7280;font-size:11.5px;line-height:1.35}' +
+    '.janis-wplan-blurb{color:#6b7280;font-size:12px;margin-top:5px;line-height:1.35}' +
+    '.janis-wplan-feats{margin:6px 0 8px;padding-left:15px;color:#6b7280;font-size:11.5px;line-height:1.55}' +
+    '.janis-wplan .janis-wbtn{margin-top:auto;align-self:flex-start}' +
     '.janis-wcart{border:1px solid #e5e7eb;border-radius:10px;padding:10px;background:#fff;color:#1f2937}' +
     '.janis-cart-row{display:flex;gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid #f3f4f6}' +
     '.janis-cart-img{width:38px;height:38px;object-fit:cover;border-radius:6px;flex:none}' +
@@ -1084,19 +1098,38 @@
   function renderCards(box, w) {
     var wrap = el('div', {}, { class: 'janis-wcards-wrap' });
     var row = el('div', {}, { class: 'janis-wcards' });
+    // The placeholder tile keeps a MIXED carousel uniform — when no card
+    // has an image the whole slot is just a wall of broken icons; drop it.
+    var anyImage = (w.items || []).some(function (it) { return !!it.image; });
     var refs = [];
     (w.items || []).forEach(function (item) {
       var card = el('div', {}, { class: 'janis-wcard' });
+      // Whole-card tap is the fallback affordance: when the card renders a
+      // real button (link, add-to-cart, options sheet) the background stays
+      // inert so clicks never double-fire; a select-only card's tap mirrors
+      // its button, and a bare card's tap asks the agent for more.
+      var realBtn = item.link ||
+        (item.cart_variant_id && !item.stock && !item.options && SHOPIFY && !PREVIEW && !PAGE) ||
+        (item.options && SHOPIFY && !PREVIEW && !PAGE);
+      var tapMsg = realBtn ? null
+        : (item.select_label || (item.title ? 'Tell me more about ' + item.title : null));
+      if (tapMsg) {
+        card.className += ' janis-wcard-tap';
+        card.onclick = function () { sendText(tapMsg, { of: item.title }); };
+      }
       var ref = { item: item, card: card, body: null, priceEl: null, cartBtn: null, compareEl: null, saleEl: null, imgWrap: null };
       refs.push(ref);
-      var imgWrap = el('div', {}, { class: 'janis-wcard-imgwrap' });
-      ref.imgWrap = imgWrap;
-      if (item.image) {
-        imgWrap.appendChild(el('img', {}, { src: item.image, alt: '', loading: 'lazy' }));
-      } else {
-        imgWrap.appendChild(el('div', {}, { class: 'janis-wcard-imgph' }));
+      var imgWrap = null;
+      if (anyImage) {
+        imgWrap = el('div', {}, { class: 'janis-wcard-imgwrap' });
+        ref.imgWrap = imgWrap;
+        if (item.image) {
+          imgWrap.appendChild(el('img', {}, { src: item.image, alt: '', loading: 'lazy' }));
+        } else {
+          imgWrap.appendChild(el('div', {}, { class: 'janis-wcard-imgph' }));
+        }
+        card.appendChild(imgWrap);
       }
-      card.appendChild(imgWrap);
       var body = el('div', {}, { class: 'janis-wcard-body' });
       ref.body = body;
       var t = el('div', {}, { class: 'janis-wcard-t' });
@@ -1122,7 +1155,8 @@
           ref.compareEl = ca;
           var sale = el('span', {}, { class: 'janis-wcard-sale' });
           wtext(sale, 'Sale');
-          imgWrap.appendChild(sale);
+          // No image slot (image-less set) — the badge pins to the body.
+          (imgWrap || body).appendChild(sale);
           ref.saleEl = sale;
         }
         body.appendChild(p);
@@ -1148,7 +1182,8 @@
           var cartBtn = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
           ref.cartBtn = cartBtn;
           wtext(cartBtn, 'Add to cart');
-          cartBtn.onclick = function () {
+          cartBtn.onclick = function (e) {
+            e.stopPropagation();
             cartBtn.disabled = true;
             // textContent, not wtext — wtext appends; state labels replace.
             cartBtn.textContent = 'Adding…';
@@ -1178,11 +1213,15 @@
         if (item.options && SHOPIFY && !PREVIEW && !PAGE) {
           var optBtn = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
           wtext(optBtn, 'See options');
-          optBtn.onclick = function () { openOptionsSheet(item); };
+          optBtn.onclick = function (e) {
+            e.stopPropagation();
+            openOptionsSheet(item);
+          };
           btns.appendChild(optBtn);
         }
         if (item.link) {
           var a = el('a', {}, { class: 'janis-wbtn', href: item.link, target: '_blank', rel: 'noopener noreferrer' });
+          a.onclick = function (e) { e.stopPropagation(); };
           // A PDP link labelled "Add to cart" next to a REAL add button is a
           // fake — the link only navigates. Coerce the label to what it does.
           var linkLabel = item.link_label || 'View';
@@ -1196,8 +1235,11 @@
           var fakeCartAction = item.cart_variant_id && /add to cart|add to bag|buy now/i.test(item.select_label);
           if (!fakeCartAction) {
             var b = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
-            wtext(b, item.select_label);
-            b.onclick = function () { sendText(item.select_label, { of: item.title }); };
+            wtext(b, item.select_button || item.select_label);
+            b.onclick = function (e) {
+              e.stopPropagation();
+              sendText(item.select_label, { of: item.title });
+            };
             btns.appendChild(b);
           }
         }
@@ -1700,6 +1742,16 @@
       row.appendChild(v);
       card.appendChild(row);
     });
+    (w.summary || []).forEach(function (r) {
+      var srow = el('div', {}, { class: 'janis-wrow janis-wsumrow' });
+      var sl = el('span', {});
+      wtext(sl, r.label);
+      var sv = el('span', {}, { class: 'janis-wv' });
+      wtext(sv, r.value);
+      srow.appendChild(sl);
+      srow.appendChild(sv);
+      card.appendChild(srow);
+    });
     if (w.total) {
       var tr = el('div', {}, { class: 'janis-wrow janis-wtotal' });
       var tl = el('span', {});
@@ -1711,6 +1763,56 @@
       card.appendChild(tr);
     }
     box.appendChild(card);
+  }
+
+  // Plan/pricing table — billing-page style plan cards (price + annual
+  // line + feature bullets + select action), not product cards.
+  function renderPricing(box, w) {
+    wTitle(box, w.title);
+    var row = el('div', {}, { class: 'janis-wpricing' });
+    (w.items || []).forEach(function (p) {
+      var plan = el('div', {}, { class: 'janis-wplan' + (p.highlight ? ' featured' : '') });
+      var head = el('div', {}, { class: 'janis-wplan-head' });
+      var nm = el('strong', {});
+      wtext(nm, p.name);
+      head.appendChild(nm);
+      if (p.current) {
+        var cur = el('span', {}, { class: 'janis-wplan-cur' });
+        wtext(cur, 'current');
+        head.appendChild(cur);
+      }
+      plan.appendChild(head);
+      var pr = el('div', {}, { class: 'janis-wplan-price' });
+      wtext(pr, p.price);
+      plan.appendChild(pr);
+      if (p.price_alt) {
+        var alt = el('div', {}, { class: 'janis-wplan-alt' });
+        wtext(alt, p.price_alt);
+        plan.appendChild(alt);
+      }
+      if (p.blurb) {
+        var bl = el('div', {}, { class: 'janis-wplan-blurb' });
+        wtext(bl, p.blurb);
+        plan.appendChild(bl);
+      }
+      if (p.features && p.features.length) {
+        var ul = el('ul', {}, { class: 'janis-wplan-feats' });
+        p.features.forEach(function (f) {
+          var li = el('li', {});
+          wtext(li, f);
+          ul.appendChild(li);
+        });
+        plan.appendChild(ul);
+      }
+      if (p.select_label) {
+        var b = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });
+        wtext(b, p.select_label);
+        b.onclick = function () { sendText(p.select_label, { of: p.name }); };
+        plan.appendChild(b);
+      }
+      row.appendChild(plan);
+    });
+    box.appendChild(row);
   }
 
   // Live storefront cart — hydrates from the shop's same-origin Ajax API.
@@ -1801,6 +1903,7 @@
         else if (w.type === 'form') renderForm(box, w);
         else if (w.type === 'status') renderStatus(box, w);
         else if (w.type === 'receipt') renderReceipt(box, w);
+        else if (w.type === 'pricing') renderPricing(box, w);
         else if (w.type === 'cart') renderCart(box, w);
         else return;
         msgEl.classList.add('janis-hasw');

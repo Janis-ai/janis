@@ -1,0 +1,1 @@
+ALTER TABLE "knowledge_files" ADD COLUMN "source_headers_enc" text;

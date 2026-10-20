@@ -6,6 +6,7 @@ import {
   agentMembers,
   channelBindings,
   channels,
+  contacts,
   pushSubscriptions,
   sessions,
   users,
@@ -101,15 +102,16 @@ const CHANNEL_LABELS: Record<string, string> = {
 async function channelLabel(
   db: Db,
   conv: { id: string; userProfile?: unknown },
-): Promise<string | null> {
+): Promise<{ label: string | null; name: string | null }> {
   const [row] = await db
-    .select({ kind: channels.kind })
+    .select({ kind: channels.kind, name: channels.name })
     .from(channelBindings)
     .innerJoin(channels, eq(channelBindings.channelId, channels.id))
     .where(eq(channelBindings.conversationId, conv.id))
     .limit(1);
   const raw = row?.kind ?? ((conv.userProfile ?? {}) as { channel?: string }).channel;
-  return raw ? (CHANNEL_LABELS[raw] ?? raw.charAt(0).toUpperCase() + raw.slice(1)) : null;
+  const label = raw ? (CHANNEL_LABELS[raw] ?? raw.charAt(0).toUpperCase() + raw.slice(1)) : null;
+  return { label, name: row?.name ?? null };
 }
 
 /**
@@ -121,20 +123,49 @@ async function channelLabel(
 export async function alertNotification(
   db: Db,
   alert: { type: string; detail: string | null },
-  conv: { id: string; externalId: string; userProfile?: unknown },
+  conv: {
+    id: string;
+    externalId: string;
+    userProfile?: unknown;
+    contactId?: string | null;
+    lastMessagePreview?: string | null;
+    intent?: string | null;
+  },
   agent: { name: string },
   body?: string | null,
 ): Promise<{ title: string; body: string; url: string }> {
-  const profile = (conv.userProfile ?? {}) as { name?: string };
+  const profile = (conv.userProfile ?? {}) as { name?: string; email?: string };
   const customer = profile.name ?? friendlyName(conv.externalId);
   const channel = await channelLabel(db, conv);
+  // Contact identity — the email/name a signed-in or CRM-matched visitor
+  // carries, so an alert tells you WHO is waiting, not just a nickname.
+  let email = profile.email ?? null;
+  let contactName: string | null = null;
+  if (conv.contactId) {
+    const [ct] = await db
+      .select({ email: contacts.email, name: contacts.name })
+      .from(contacts)
+      .where(eq(contacts.id, conv.contactId))
+      .limit(1);
+    email ??= ct?.email ?? null;
+    contactName = ct?.name ?? null;
+  }
+  const ctx: string[] = [
+    `agent: ${agent.name}`,
+    `channel: ${channel.label ?? 'unknown'}${channel.name ? ` "${channel.name}"` : ''}`,
+    `customer: ${contactName ?? customer}${email ? ` <${email}>` : ''}`,
+  ];
+  if (conv.intent) ctx.push(`intent: ${conv.intent}`);
+  if (conv.lastMessagePreview) {
+    ctx.push(`last: "${conv.lastMessagePreview.slice(0, 90)}"`);
+  }
   return {
     title: `${ALERT_TITLES[alert.type] ?? 'Needs attention'} · ${agent.name}`,
-    body: `${customer}${channel ? ` on ${channel}` : ''}: ${
+    body: `${customer}${channel.label ? ` on ${channel.label}` : ''}: ${
       // Detail/summary text is model- or visitor-written — push, email and
       // Slack can't typeset $…$ math, so detex like the channel egress does.
       mathToUnicode(body ?? alert.detail ?? 'needs attention')
-    }`,
+    }\n${ctx.join(' · ')}`,
     url: `/conversations/${conv.id}`,
   };
 }
@@ -154,7 +185,13 @@ export async function sendPushToEndpoint(
 }
 
 /** Transactional email via Resend — no-op until RESEND_API_KEY is configured. */
-export async function sendEmail(to: string[], title: string, body: string, url?: string) {
+export async function sendEmail(
+  to: string[],
+  title: string,
+  body: string,
+  url?: string,
+  opts?: { attachments?: { filename: string; content: string }[] },
+) {
   if (!env.resendApiKey || to.length === 0) return;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -167,6 +204,7 @@ export async function sendEmail(to: string[], title: string, body: string, url?:
       to,
       subject: title,
       text: url ? `${body}\n\n${env.webOrigin}${url}` : body,
+      ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}),
       // marks our own sends — a notification landing in a connected mailbox
       // (operator hooked their Gmail/Outlook in as a channel) must not come
       // back in as a customer message; mailSkipReason drops it on this header

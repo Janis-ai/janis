@@ -132,6 +132,18 @@ button, input, select, textarea { font: inherit; }
    never disabled. Only the trailing + mark hints at it. */
 /* Rule separating the workspace layer from the Copilot toggle below it. */
 .sidebar .nav-divider { border-top: 1px solid var(--border); margin: 6px 0; }
+/* Skeleton rows for the agent subsection — shown while the agents list or
+   build status is still resolving, so nav never renders build steps only
+   to swap them for live sections a moment later. */
+@keyframes nav-skel-pulse { 50% { opacity: .4; } }
+.sidebar .nav-skel {
+  display: block; height: 12px; border-radius: 6px;
+  background: var(--border, #e5e7eb);
+  animation: nav-skel-pulse 1.4s ease-in-out infinite;
+}
+.sidebar .nav-skel-row { display: flex; align-items: center; padding: 9px 20px 9px 40px; }
+.sidebar .nav-skel-row .nav-skel { width: 55%; }
+.sidebar .nav-skel-row .nav-skel.short { width: 35%; }
 /* Step marks in the sidebar — the same ✓/◐/○ semantics as the builder
    rail, driven by the same build-status model. In expanded mode the mark
    sits at the row's right edge; collapsed it badges the icon (media rules
@@ -286,6 +298,8 @@ button, input, select, textarea { font: inherit; }
 .wgt-more { display: block; width: 100%; box-sizing: border-box; margin-top: 8px; padding: 9px; border: 1px dashed var(--border); border-radius: 10px; background: var(--panel); font-size: 12.5px; color: var(--accent); cursor: pointer; text-align: center; font-family: inherit; }
 .wgt-more:hover { background: var(--bg); }
 .wgt-card { flex: 0 0 150px; max-width: 150px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); overflow: hidden; display: flex; flex-direction: column; }
+.wgt-card-tap { cursor: pointer; }
+.wgt-card-tap:hover { border-color: var(--accent-dim, #7c9cff); }
 .wgt-card img { width: 100%; height: 110px; object-fit: contain; display: block; background: #f8fafc; }
 /* Mirrors .janis-wcard-imgph — keeps titles/buttons aligned across the
    row when a product has no image. */
@@ -318,17 +332,29 @@ button, input, select, textarea { font: inherit; }
 .wgt-form textarea { min-height: 56px; resize: vertical; }
 .wgt-form label { font-size: 12px; color: var(--muted); display: block; }
 .wgt-sent { color: var(--ok); font-size: 12.5px; font-weight: 600; padding: 4px 0; }
+/* Pricing — plan cards mirroring the billing page grid. Scrolls sideways
+   like .wgt-cards when the plans outgrow the rail. */
+.wgt-pricing-row { display: flex; gap: 8px; overflow-x: auto; padding: 2px; }
+.wgt-plan { flex: 0 0 170px; border: 1px solid var(--border); border-radius: 10px; background: var(--panel); padding: 10px; display: flex; flex-direction: column; }
+.wgt-plan.featured { border-color: var(--accent); }
+.wgt-plan-head { display: flex; align-items: center; gap: 6px; }
+.wgt-plan-price { font-weight: 700; font-size: 17px; margin: 4px 0 2px; font-family: var(--mono, ui-monospace, monospace); }
+.wgt-plan-alt { color: var(--muted); font-size: 11.5px; line-height: 1.35; }
+.wgt-plan-blurb { color: var(--muted); font-size: 12px; margin-top: 5px; line-height: 1.35; }
+.wgt-plan-feats { margin: 6px 0 8px; padding-left: 15px; color: var(--muted); font-size: 11.5px; line-height: 1.55; }
+.wgt-plan .wgt-btn { margin-top: auto; align-self: flex-start; }
 .wgt-steps { display: flex; flex-direction: column; gap: 7px; }
 .wgt-step { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; }
-.wgt-dot { flex: 0 0 10px; width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; background: var(--border); }
-.wgt-step.done .wgt-dot { background: var(--ok); }
-.wgt-step.current .wgt-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+.wgt-dot { flex: 0 0 10px; width: 10px; height: 10px; border-radius: 50%; margin-top: 4px; background: transparent; border: 2px solid var(--border); }
+.wgt-step.done .wgt-dot { background: var(--ok); border-color: var(--ok); }
+.wgt-step.current .wgt-dot { background: transparent; border: 2px solid var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 .wgt-step.todo { color: var(--muted); }
 .wgt-step small { display: block; color: var(--muted); font-size: 11.5px; }
 .wgt-receipt { border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: var(--panel); }
 .wgt-row { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; font-size: 13px; }
 .wgt-row .wgt-v { text-align: right; font-weight: 500; white-space: pre-line; }
 .wgt-row.wgt-total { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 7px; font-weight: 700; }
+.wgt-row.wgt-sumrow { color: var(--muted); font-size: 12px; }
 .builder-steps { display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap; container-type: inline-size; }
 .builder-step {
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px;

@@ -35,6 +35,7 @@ import { digestRoutes } from './routes/digests.js';
 import { reportRoutes } from './routes/reports.js';
 import { errorReportIngest, errorReportRoutes, recordApiError } from './routes/errorReports.js';
 import { slackApiRoutes, slackPublicRoutes } from './routes/slack.js';
+import { slackClassicRoutes } from './routes/slackClassic.js';
 import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 import { metaApiRoutes, metaPublicRoutes } from './routes/meta.js';
 import { gmailApiRoutes, gmailPublicRoutes } from './routes/gmail.js';
@@ -46,7 +47,7 @@ import { smsRoutes } from './routes/sms.js';
 import { articleRoutes, helpPublicRoutes } from './routes/helpCenter.js';
 import { onboardingRoutes } from './routes/onboarding.js';
 import { toolTemplateRoutes } from './routes/toolTemplates.js';
-import { billingRoutes, stripeWebhookRoutes } from './routes/billing.js';
+import { billingRoutes, stripeWebhookRoutes, yearlyCents } from './routes/billing.js';
 import { PLANS } from './lib/plans.js';
 import { workspaceRoutes } from './routes/workspace.js';
 import { workosRoutes } from './routes/workos.js';
@@ -115,18 +116,21 @@ export function createApp(db: Db) {
 
   // Public plan catalog — the landing page's pricing cards read this so the
   // site can never drift from what billing actually charges.
-  app.get('/api/plans', (c) => {
+  app.get('/api/plans', async (c) => {
     return c.json({
-      plans: Object.entries(PLANS)
-        .filter(([, p]) => !p.hidden)
-        .map(([key, p]) => ({
-          key,
-          name: p.name,
-          base_cents: p.baseCents,
-          included_messages: p.includedMessages,
-          overage_per_1k_cents: p.overagePer1kCents,
-          yearly_available: !!env.stripeYearlyPrices[key],
-        })),
+      plans: await Promise.all(
+        Object.entries(PLANS)
+          .filter(([, p]) => !p.hidden)
+          .map(async ([key, p]) => ({
+            key,
+            name: p.name,
+            base_cents: p.baseCents,
+            included_messages: p.includedMessages,
+            overage_per_1k_cents: p.overagePer1kCents,
+            yearly_available: !!env.stripeYearlyPrices[key],
+            yearly_cents: await yearlyCents(key),
+          })),
+      ),
       trial_days: env.trialDays,
     });
   });
@@ -185,6 +189,7 @@ export function createApp(db: Db) {
   app.route('/v1', v1Routes(db)); // agent-facing (server-to-server, no CORS)
   app.route('/auth', authRoutes(db));
   app.route('/slack', slackPublicRoutes(db)); // Slack-signed (oauth/events/interactions)
+  app.route('/slack/classic', slackClassicRoutes(db)); // legacy event mirror — shared-key authed
   app.route('/channels', channelWebhookRoutes(db)); // Meta webhooks (app-secret signed)
   app.route('/billing/stripe-webhook', stripeWebhookRoutes(db)); // Stripe-signed
   app.route('/chat', webchatRoutes(db)); // embeddable web-chat widget

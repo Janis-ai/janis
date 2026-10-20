@@ -26,6 +26,17 @@ const ruleConfig = z.object({
   group_ids: z.array(z.string().uuid()).optional(),
   tag: z.string().min(1).max(60).optional(),
   next: z.number().int().min(0).optional(),
+  /** Who gets PAGED, decoupled from who owns the thread — 'workspace' pages
+   *  everyone; 'pool' pages every routed teammate in the rotation; a member
+   *  list pages the assignee plus those people. Absent: assignee only
+   *  (whole workspace when nothing is routed). */
+  notify: z
+    .union([
+      z.literal('workspace'),
+      z.literal('pool'),
+      z.array(z.string().uuid()).min(1).max(20),
+    ])
+    .optional(),
 });
 
 const RULE_KINDS = [

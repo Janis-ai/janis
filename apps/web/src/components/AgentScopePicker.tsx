@@ -1,6 +1,6 @@
 import { Bot } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useAgents } from '../api/hooks';
+import { useAgents, useMe } from '../api/hooks';
 import { clearLastAgent, setLastAgent } from '../lib/agentContext';
 
 const WS_PATH: Record<string, string> = {
@@ -16,11 +16,12 @@ const WS_PATH: Record<string, string> = {
  *  scoping) and "All agents" clears it. */
 export function AgentScopePicker({ slug, value }: { slug: keyof typeof WS_PATH; value?: string }) {
   const { data } = useAgents();
+  const wsId = useMe().data?.workspace?.id;
   const navigate = useNavigate();
   const agents = [...(data?.agents ?? [])].sort((a, b) =>
     a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
   );
-  if (!agents.length) return null;
+  if (!agents.length || !wsId) return null;
   return (
     <div className="scope-picker" title="Agent context — applies across Inbox, Contacts, Campaigns, Reports and the sidebar">
       <Bot size={14} />
@@ -30,10 +31,10 @@ export function AgentScopePicker({ slug, value }: { slug: keyof typeof WS_PATH; 
         onChange={(e) => {
           const v = e.target.value;
           if (v) {
-            setLastAgent(v);
+            setLastAgent(v, wsId);
             navigate(`/agents/${v}/${slug}`);
           } else {
-            clearLastAgent();
+            clearLastAgent(wsId);
             navigate(`/${WS_PATH[slug]}`);
           }
         }}

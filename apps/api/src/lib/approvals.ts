@@ -313,7 +313,9 @@ export async function decidePendingAction(
   }
 
   const { resolveSlackActionCards } = await import('./slack.js');
-  await resolveSlackActionCards(db, updated, approve, decidedBy.name).catch(() => {});
+  await resolveSlackActionCards(db, updated, approve, decidedBy.name).catch((err) => {
+    console.error('resolveSlackActionCards failed for', updated.id, ':', err);
+  });
 
   // Nothing left awaiting a decision — close the approval alert. The
   // needs_human flag drops back to active only when no other open alert

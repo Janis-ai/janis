@@ -4,7 +4,7 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
 import { createHmac } from 'node:crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import * as schema from '../db/schema.js';
 import type { Db } from '../db/client.js';
 import {
@@ -41,6 +41,7 @@ let apiRoutes: typeof shopifyApiRoutes;
 let webhookRoutes: typeof shopifyWebhookRoutes;
 let signLinkCode: (shopId: string) => string;
 let signAccessCode: (shopId: string, email: string) => string;
+let sweepShopifyUsage: (db: Db) => Promise<void>;
 
 const SHOP = 'dev-store.myshopify.com';
 const KEY = 'shp_key';
@@ -102,6 +103,11 @@ const stubShopifyApi = (
     // Recovery-email send — 'ok' 200s, 'fail' 500s; captures the body.
     resend?: 'ok' | 'fail';
     onResend?: (body: Record<string, unknown>) => void;
+    // Every GraphQL body the code sends — lets tests assert on mutations.
+    onGraphql?: (query: string) => void;
+    // appSubscription(id:) reply — the billing cycle end the usage sweep
+    // computes overage against. Fixed per test so stored bookkeeping matches.
+    periodEnd?: string;
   } = {},
 ) =>
   vi.stubGlobal(
@@ -159,6 +165,7 @@ const stubShopifyApi = (
       }
       if (url.includes('graphql.json')) {
         const q = typeof init?.body === 'string' ? init.body : '';
+        opts.onGraphql?.(q);
         if (q.includes('appSubscriptionCreate')) {
           return Promise.resolve(
             Response.json({
@@ -168,9 +175,38 @@ const stubShopifyApi = (
                     ? { userErrors: [{ message: 'shop cannot be charged' }] }
                     : {
                         confirmationUrl: 'https://shop.example/admin/charges/confirm',
-                        appSubscription: { id: 'sub_1', status: 'PENDING' },
+                        appSubscription: {
+                          id: 'sub_1',
+                          status: 'PENDING',
+                          lineItems: [{ id: 'li_1' }],
+                        },
                         userErrors: [],
                       },
+              },
+            }),
+          );
+        }
+        if (q.includes('appUsageRecordCreate')) {
+          return Promise.resolve(
+            Response.json({
+              data: {
+                appUsageRecordCreate: {
+                  appUsageRecord: { id: 'ur_1' },
+                  userErrors: [],
+                },
+              },
+            }),
+          );
+        }
+        if (q.includes('appSubscription(id:')) {
+          return Promise.resolve(
+            Response.json({
+              data: {
+                appSubscription: {
+                  currentPeriodEnd:
+                    opts.periodEnd ?? new Date(Date.now() + 30 * 86_400_000).toISOString(),
+                  lineItems: [{ id: 'li_1' }],
+                },
               },
             }),
           );
@@ -206,6 +242,7 @@ beforeAll(async () => {
   webhookRoutes = mod.shopifyWebhookRoutes;
   signLinkCode = (await import('../lib/shopifyApp.js')).signLinkCode;
   signAccessCode = (await import('../lib/shopifyApp.js')).signAccessCode;
+  sweepShopifyUsage = (await import('../lib/shopifyApp.js')).sweepShopifyUsage;
 
   const client = new PGlite();
   db = drizzle(client, { schema }) as unknown as Db;
@@ -880,7 +917,8 @@ describe('shopify claim', () => {
 
 describe('shopify embedded billing + theme detection', () => {
   it('/plan returns a Shopify confirmation URL for a linked shop', async () => {
-    stubShopifyApi();
+    const queries: string[] = [];
+    stubShopifyApi({ onGraphql: (q) => queries.push(q) });
     await postSession(sessionJwt('billing-shop.myshopify.com'));
     const res = await app.request('/api/shopify/plan', {
       method: 'POST',
@@ -896,6 +934,12 @@ describe('shopify embedded billing + theme detection', () => {
       .from(shopifyShops)
       .where(eq(shopifyShops.shop, 'billing-shop.myshopify.com'));
     expect((row.billing as { subscriptionId?: string }).subscriptionId).toBe('sub_1');
+    // The usage line item is what makes the listing's overage rates real on
+    // the Shopify rail — without it a paid shop is unmetered.
+    const mutation = queries.find((q) => q.includes('appSubscriptionCreate'))!;
+    expect(mutation).toContain('appUsagePricingDetails');
+    expect(mutation).toContain('cappedAmount');
+    expect((row.billing as { usageLineItemId?: string }).usageLineItemId).toBe('li_1');
   });
 
   it('/plan refuses an unlinked shop and a forged token', async () => {
@@ -964,6 +1008,102 @@ describe('shopify embedded billing + theme detection', () => {
       .update(shopifyShops)
       .set({ workspaceId: null, agentId: null, state: 'unlinked', provisionedAt: new Date() })
       .where(eq(shopifyShops.id, row.id));
+  });
+});
+
+describe('shopify usage billing', () => {
+  /** Linked, provisioned shop with an ACTIVE Starter sub and `msgs` stored
+   *  messages. Each test uses its own shop — the sweep counts every message
+   *  in the workspace, so a shared shop would leak messages across tests. */
+  const provisionUsageShop = async (shop: string, msgs = 2200) => {
+    stubShopifyApi();
+    await postSession(sessionJwt(shop));
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, shop));
+    await db
+      .update(shopifyShops)
+      .set({
+        billing: { subscriptionId: 'sub_1', plan: 'starter', status: 'ACTIVE' },
+      })
+      .where(eq(shopifyShops.id, row.id));
+    await db
+      .update(workspaces)
+      .set({ plan: 'starter', billingProvider: 'shopify' })
+      .where(eq(workspaces.id, row.workspaceId!));
+    if (msgs > 0) {
+      const [conv] = await db
+        .insert(conversations)
+        .values({ agentId: row.agentId!, externalId: `webchat:v${msgs}-${Date.now()}` })
+        .returning();
+      await db.execute(
+        sql`insert into messages (conversation_id, direction, text)
+            select ${conv.id}, 'in', 'x' from generate_series(1, ${msgs})`,
+      );
+    }
+    return row;
+  };
+
+  it('posts an appUsageRecord for messages beyond the plan allowance', async () => {
+    const row = await provisionUsageShop('usage-shop.myshopify.com');
+    const queries: string[] = [];
+    // Mid-cycle: periodStart must precede the just-inserted messages — a
+    // periodEnd of now+30d would scope the count to messages after "now".
+    stubShopifyApi({
+      onGraphql: (q) => queries.push(q),
+      periodEnd: new Date(Date.now() + 15 * 86_400_000).toISOString(),
+    });
+    await sweepShopifyUsage(db);
+    const rec = queries.find((q) => q.includes('appUsageRecordCreate'))!;
+    expect(rec).toContain('li_1'); // the subscription's usage line item
+    expect(rec).toContain('1.60'); // 200 over × $8/1k
+    expect(rec).toContain('sub_1'); // cumulative idempotency key
+    const [after] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.id, row.id));
+    const b = after.billing as { usageBilledCents?: number; usageLineItemId?: string };
+    expect(b.usageBilledCents).toBe(160);
+    expect(b.usageLineItemId).toBe('li_1');
+  });
+
+  it('does not double-post when the billed total is already recorded', async () => {
+    const row = await provisionUsageShop('usage-shop2.myshopify.com');
+    // Mid-cycle so the messages are inside the window — delta is zero only
+    // because billing.usageBilledCents already covers the overage.
+    const periodEnd = new Date(Date.now() + 15 * 86_400_000).toISOString();
+    await db
+      .update(shopifyShops)
+      .set({
+        billing: {
+          subscriptionId: 'sub_1',
+          plan: 'starter',
+          status: 'ACTIVE',
+          usageBilledCents: 160,
+          usageLineItemId: 'li_1',
+          usagePeriodEnd: periodEnd,
+        },
+      })
+      .where(eq(shopifyShops.id, row.id));
+    const queries: string[] = [];
+    stubShopifyApi({ onGraphql: (q) => queries.push(q), periodEnd });
+    await sweepShopifyUsage(db);
+    expect(queries.find((q) => q.includes('appUsageRecordCreate'))).toBeUndefined();
+  });
+
+  it('skips a cancelled subscription entirely', async () => {
+    const row = await provisionUsageShop('usage-shop3.myshopify.com');
+    await db
+      .update(shopifyShops)
+      .set({
+        billing: { subscriptionId: 'sub_1', plan: 'starter', status: 'CANCELLED' },
+      })
+      .where(eq(shopifyShops.id, row.id));
+    const queries: string[] = [];
+    stubShopifyApi({ onGraphql: (q) => queries.push(q) });
+    await sweepShopifyUsage(db);
+    expect(queries.find((q) => q.includes('appUsageRecordCreate'))).toBeUndefined();
   });
 });
 
@@ -1199,6 +1339,54 @@ describe('shopify webhooks', () => {
     expect(
       (await db.select().from(messages).where(eq(messages.conversationId, conv.id))).length,
     ).toBe(0);
+  });
+
+  it('customers/data_request fulfils — the export bundle lands in the shop contact inbox', async () => {
+    const { env } = await import('../env.js');
+    const prev = env.resendApiKey;
+    env.resendApiKey = 'rk_test';
+    const sentBodies: Record<string, unknown>[] = [];
+    stubShopifyApi({ resend: 'ok', onResend: (b) => sentBodies.push(b) });
+    try {
+      const code = await linkCodeFor();
+      await app.request('/api/shopify/link', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie },
+        body: JSON.stringify({ code, agent_id: agentId }),
+      });
+      // contactEmail is what provision captured from the shop — set it
+      // explicitly so the test doesn't lean on provisioning order.
+      await db
+        .update(shopifyShops)
+        .set({ contactEmail: 'owner@test.dev' })
+        .where(eq(shopifyShops.shop, SHOP));
+      const [contact] = await db
+        .insert(contacts)
+        .values({ workspaceId, email: 'buyer@x.com', externalIds: { shopify: '999' } })
+        .returning();
+      const [conv] = await db
+        .insert(conversations)
+        .values({ agentId, externalId: 'chat:dr', contactId: contact.id })
+        .returning();
+      await db.insert(messages).values({ conversationId: conv.id, direction: 'in', text: 'hi' });
+
+      const res = await webhook('customers/data_request', {
+        customer: { id: 999, email: 'buyer@x.com' },
+      });
+      expect(res.status).toBe(200);
+      const req = sentBodies.find((b) => (b.attachments as unknown[])?.length);
+      expect(req).toBeTruthy();
+      const att = (req!.attachments as { filename: string; content: string }[])[0];
+      expect(att.filename).toContain('janis-data-request');
+      const bundle = JSON.parse(
+        Buffer.from(att.content, 'base64').toString(),
+      ) as { contact: { id: string }; conversations: unknown[] };
+      expect(bundle.contact.id).toBe(contact.id);
+      expect(bundle.conversations.length).toBe(1);
+      expect(req!.to).toEqual(['owner@test.dev']);
+    } finally {
+      env.resendApiKey = prev;
+    }
   });
 
   /** Link SHOP, then plant a contact + open thread — the order-event

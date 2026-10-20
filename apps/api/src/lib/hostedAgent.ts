@@ -1,5 +1,5 @@
 import { createHmac, randomInt } from 'node:crypto';
-import { and, asc, desc, eq, gt, inArray, isNotNull, lte, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, lte, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AgentConfig, OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
 
@@ -18,7 +18,7 @@ import { bus } from './bus.js';
 import { PLANS, planFor } from './plans.js';
 import type { AttachmentRef } from './channels.js';
 import { getUpload } from './uploads.js';
-import { callTool, harvestProducedIds, identityBlockReason, toolsFor, type ToolDef } from './toolExec.js';
+import { callTool, harvestProducedIds, identityBlockReason, missingTemplateArgs, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
@@ -176,7 +176,14 @@ export async function loadKnowledgeDocs(
   db: Db,
   agentId: string,
   query?: string,
-  opts: { includeDrafts?: boolean; reservedChars?: number } = {},
+  opts: {
+    includeDrafts?: boolean;
+    reservedChars?: number;
+    /** Out-param: receives the full ranked corpus (name+text, sanitized)
+     *  before the prompt budget truncates it — repair passes match card
+     *  titles/links against every doc, not just the few the model saw. */
+    allDocs?: { name: string; text: string }[];
+  } = {},
 ): Promise<{ name: string; text: string; truncated?: boolean }[]> {
   const rows = (
     await db
@@ -244,6 +251,10 @@ export async function loadKnowledgeDocs(
     }
   }
   const ordered = query ? rankDocs(rows, query) : rows;
+  if (opts.allDocs) {
+    for (const row of rows)
+      opts.allDocs.push({ name: sanitizeSourceText(row.name), text: sanitizeSourceText(row.text) });
+  }
   // Notes inject first, unranked — they draw from the same pool the meter
   // measures, so docs get what's left (never below the reserved share).
   const docBudget = MAX_KNOWLEDGE_CHARS - (opts.reservedChars ?? 0);
@@ -311,19 +322,29 @@ export function conversationContext(
       '- Customer identity VERIFIED (logged-in session) — name/email above are authoritative.',
     );
   }
+  const market = (p as { market?: string }).market;
+  if (market) {
+    lines.push(
+      `- Storefront market: ${market} — the shopper is browsing the store's ${market} market. Availability, delivery options and prices can differ per market: "sold out" on their screen can mean "not deliverable in their market" rather than out of stock. When a tool result includes shop coverage (e.g. shipsToCountries), compare it with this market and say so if the store doesn't serve it.`,
+    );
+  }
   // Host-provided traits (Janis.identify / signed claim). Self-reported
   // unless the identity was verified — label accordingly so the model
   // doesn't treat a visitor-supplied "plan: enterprise" as fact.
   const meta = p.metadata;
   if (meta && typeof meta === 'object') {
+    // janis_account marks the console context pack (workspaces, agents,
+    // current page) — Janis-injected, not host-provided or self-reported.
+    // The agents inventory carries per-agent uuids + channel ids — the
+    // corpus console deep links verify against — so it can't be clipped at
+    // the self-reported-trait budget or every id past ~2 agents vanishes.
+    const janisCtx = meta.janis_account === 'yes';
+    const valCap = janisCtx ? 6000 : 120;
     const traitLines = Object.entries(meta)
       .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v) && String(v) !== '')
       .slice(0, 10)
-      .map(([k, v]) => `  - ${k}: ${String(v).slice(0, 120)}`);
+      .map(([k, v]) => `  - ${k}: ${String(v).slice(0, valCap)}`);
     if (traitLines.length) {
-      // janis_account marks the console context pack (workspaces, agents,
-      // current page) — Janis-injected, not host-provided or self-reported.
-      const janisCtx = meta.janis_account === 'yes';
       lines.push(
         janisCtx
           ? '- Customer context (Janis console — verified):'
@@ -362,19 +383,31 @@ export interface SavedWidgetDef {
   spec: WidgetComponent;
   states?: WidgetState[];
   tool?: WidgetToolBinding;
+  /** Builder-written "when to use" — the model's primary signal for picking
+   *  this ref over a hand-built widget or a different bound component. */
+  description?: string;
 }
 
-function widgetDigest(w: SavedWidgetDef & { name: string }): string {
+function widgetDigest(w: SavedWidgetDef & { name: string; toolDef?: ToolDef }): string {
   const s = w.spec;
   let detail = '';
   if (s.type === 'cards') detail = s.items.map((i) => i.title).join(', ');
+  else if (s.type === 'pricing') detail = s.items.map((i) => `${i.name} ${i.price}`).join(', ');
   else if (s.type === 'options') detail = [s.title, ...s.items.map((i) => i.label)].filter(Boolean).join(' — ');
   else if (s.type === 'form') detail = [s.title, ...s.fields.map((f) => f.label)].filter(Boolean).join(' — ');
   else detail = s.title ?? '';
   const props = specProps(s).filter((p) => p !== 'state');
+  const reqArgs = w.toolDef
+    ? [
+        ...new Set([
+          ...missingTemplateArgs(w.toolDef.bodyTemplate ?? '', {}),
+          ...[...w.toolDef.url.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]),
+        ]),
+      ]
+    : [];
   const meta = [
     w.tool
-      ? `bound to tool ${w.tool.name} — pass its args in the ref data`
+      ? `bound to tool ${w.tool.name}${reqArgs.length ? ` (required args: ${reqArgs.join(', ')})` : ''} — emitting the ref runs it; pass its args in the ref data`
       : props.length
         ? `props: ${props.join(', ')}`
         : '',
@@ -382,7 +415,8 @@ function widgetDigest(w: SavedWidgetDef & { name: string }): string {
   ]
     .filter(Boolean)
     .join('; ');
-  return `- ${w.name} (${s.type}${detail ? `: ${detail}` : ''}${meta ? ` — ${meta}` : ''})`;
+  const when = w.description?.trim() ? ` — use when: ${w.description.trim()}` : '';
+  return `- ${w.name} (${s.type}${detail ? `: ${detail}` : ''}${meta ? ` — ${meta}` : ''}${when})`;
 }
 
 /** Resolve a WIDGET_REF to a renderable component:
@@ -393,6 +427,16 @@ function widgetDigest(w: SavedWidgetDef & { name: string }): string {
  *     list items
  *  3. the ref's inline data overrides tool-derived props
  *  4. {prop} placeholders interpolate; the result must still validate. */
+/** Count leaf scalars — a GraphQL miss like {orders:{nodes:[]}} yields 0,
+ *  distinguishing "bound tool found nothing" from a successful fetch. */
+function countLeaves(v: unknown, depth = 0): number {
+  if (v == null || depth > 8) return 0;
+  if (Array.isArray(v)) return v.reduce((n, x) => n + countLeaves(x, depth + 1), 0);
+  if (typeof v === 'object')
+    return Object.values(v).reduce((n, x) => n + countLeaves(x, depth + 1), 0);
+  return 1;
+}
+
 export async function resolveWidgetRef(
   def: SavedWidgetDef,
   data: Record<string, unknown> | undefined,
@@ -400,39 +444,109 @@ export async function resolveWidgetRef(
   secrets: Record<string, string>,
   ctx: AgentRunContext,
   producedIds: Set<string>,
+  /** Preview instrumentation — the widgets/test endpoint captures the bound
+   *  call's args, raw result and failure reason for the composer. */
+  cap?: { args?: Record<string, unknown>; result?: string; error?: string },
+  /** The bound tool's result from an earlier call this run — a bare
+   *  "WIDGET_REF: tracker" after the model already looked the order up
+   *  means "render that result", not "fetch again with empty args". */
+  priorResult?: string,
 ): Promise<WidgetComponent | null> {
   const props: Record<string, unknown> = {};
   let items: Record<string, unknown>[] | null = null;
+  let toolRan = false;
+  let toolEmptyResult = false;
   if (def.tool) {
     const tool = tools.find((t) => t.name === def.tool!.name);
     if (!tool || tool.approval) {
       console.warn(`[widgets] bound tool unavailable or gated: ${def.tool.name}`);
+      if (cap) cap.error = `bound tool "${def.tool.name}" is missing or approval-gated`;
+      return null; // a data-bound component with no data renders hollow
     } else if (!ctx.testRun) {
       const { state: _state, ...rest } = data ?? {};
       const args = Object.fromEntries(
         Object.entries(rest).map(([k, v]) => [def.tool!.args?.[k] ?? k, v]),
       );
+      if (cap) cap.args = args;
+      // Fill verified anchors BEFORE the identity check — a bare ref
+      // ("render my orders") carries no args at all, and the signed-claim
+      // customer id is never visible to the model anyway.
+      if (tool.identity && !ctx.identity?.operator) {
+        applyVerifiedAnchors(tool, args, ctx.identity);
+      }
       const denied =
         tool.identity && !ctx.identity?.operator
-          ? identityBlockReason(args, ctx.identity?.emails ?? new Set(), producedIds)
+          ? identityBlockReason(
+              args,
+              ctx.identity?.emails ?? new Set(),
+              producedIds,
+              ctx.identity?.ids,
+            )
           : null;
       if (denied) {
         console.warn(`[widgets] bound tool ${tool.name} identity-blocked: ${denied}`);
+        if (cap) cap.error = `identity check blocked the tool: ${denied}`;
+        return null;
       } else {
-        const result = await callTool(tool, args, secrets);
+        const result =
+          priorResult !== undefined && Object.keys(args).length === 0
+            ? priorResult
+            : await callTool(tool, args, secrets);
+        if (cap) cap.result = result;
         if (result.startsWith('error')) {
           console.warn(`[widgets] bound tool ${tool.name} failed: ${result.slice(0, 160)}`);
-        } else {
-          try {
-            const json: unknown = JSON.parse(result);
-            Object.assign(props, propsFromResult(def.tool.props, json, secrets));
-            items = itemsFromResult(def.tool, json, secrets);
-          } catch {
-            // non-JSON tool result — nothing to bind
-          }
+          if (cap) cap.error = result.slice(0, 200);
+          return null;
+        }
+        try {
+          const json: unknown = JSON.parse(result);
+          Object.assign(props, propsFromResult(def.tool.props, json, secrets));
+          items = itemsFromResult(def.tool, json, secrets);
+          toolRan = true;
+          // A matched-nothing result ({"data":{"orders":{"nodes":[]}}}) — no
+          // leaf scalar anywhere under the payload. Prop-level emptiness
+          // can't detect this: :stepstate maps a missing field to 'todo',
+          // so an absent order still fills ship_state.
+          toolEmptyResult =
+            countLeaves(
+              (json as { data?: unknown }).data !== undefined
+                ? (json as { data?: unknown }).data
+                : json,
+            ) === 0;
+        } catch {
+          // non-JSON tool result — nothing to bind
+          if (cap) cap.error = 'tool result was not JSON';
+          return null;
         }
       }
     }
+  }
+  // Bound tool ran but matched nothing (e.g. the order isn't under this
+  // verified identity) — a spec interpolated from empty props renders a
+  // hollow shell ("Order" with no name). Render the component's not_found
+  // variant when it defines one, else fail the ref so the retry prompt can
+  // narrate the miss and offer next steps.
+  if (toolEmptyResult) {
+    const notFound = def.states?.find((s) => normWidgetRef(s.name) === 'not-found');
+    if (notFound) {
+      const parsed = WidgetComponent.safeParse(
+        stripEmptyStrings(interpolateSpec(notFound.spec, { ...(data ?? {}) })),
+      );
+      if (parsed.success) {
+        // cap.error on a SUCCESS is a soft-fail signal: the caller keeps the
+        // rendered not-found component but regenerates the text so the model
+        // narrates the miss instead of a blind "Here you go:".
+        if (cap)
+          cap.error =
+            'the bound tool found no matching records — the component rendered its not-found state; say the lookup found nothing plainly, and when the record may sit under a different email offer to verify that address (send_verification_email) or offer a human';
+        return parsed.data;
+      }
+    }
+    console.warn(`[widgets] bound tool ${def.tool!.name} returned no matching records`);
+    if (cap)
+      cap.error =
+        'the bound tool found no matching records for this customer — tell the customer plainly; when the record may sit under a different email, offer send_verification_email for that address, or offer a human';
+    return null;
   }
   // Inline ref data overrides tool-derived props.
   for (const [k, v] of Object.entries(data ?? {})) props[k] = v;
@@ -445,20 +559,35 @@ export async function resolveWidgetRef(
     if (st) spec = st.spec;
   }
   let filled = interpolateSpec(spec, props) as Record<string, unknown>;
-  // Tool-derived rows replace the template's items — list content is data,
-  // not layout. Each row interpolates against itself so a template value
-  // like "Track {title}" resolves per-row.
-  if (items && Array.isArray(filled.items)) {
+  // Tool-derived rows replace the template's list — list content is data,
+  // not layout. Each spec type's array is the target (cards/options →
+  // items, status → steps, receipt → rows); each row interpolates against
+  // itself so a template value like "Track {title}" resolves per-row.
+  const listKey = { cards: 'items', options: 'items', status: 'steps', receipt: 'rows' }[
+    (filled as { type?: string }).type ?? ''
+  ] ?? 'items';
+  if (items && Array.isArray(filled[listKey])) {
     filled = {
       ...filled,
-      items: items
+      [listKey]: items
         .map((r) => stripEmptyStrings(interpolateSpec(r, { ...props, ...r })))
         .filter((it) => it && typeof it === 'object' && ('title' in it || 'label' in it)),
     };
   }
-  const parsed = WidgetComponent.safeParse(stripEmptyStrings(filled));
+  const bound = stripEmptyStrings(filled) as Record<string, unknown>;
+  // A summary row whose value placeholder resolved empty is a whole row to
+  // drop — "{refunded}" on an unrefunded order must not render a bare label.
+  if (Array.isArray(bound.summary)) {
+    const kept = bound.summary.filter(
+      (r) => r && typeof r === 'object' && 'value' in (r as object),
+    );
+    if (kept.length) bound.summary = kept;
+    else delete bound.summary;
+  }
+  const parsed = WidgetComponent.safeParse(bound);
   if (!parsed.success) {
     console.warn(`[widgets] ref spec failed validation after binding`);
+    if (cap) cap.error = 'the filled component failed validation — check required fields and step/row shapes';
     return null;
   }
   return parsed.data;
@@ -474,10 +603,30 @@ export function defaultPersona(
   const tail =
     opts?.handoff === false
       ? ' There is no human tier above you — never offer or promise a human, and for what you cannot do say so plainly and point the customer to any contact path your knowledge provides.'
-      : ' If the customer explicitly asks for a human, reply with [HANDOFF]. If they seem stuck or frustrated and you genuinely cannot help further, offer a human once with [OFFER_HUMAN] — otherwise just ask a clarifying question. If they decline a human, reply with [CANCEL_HANDOFF].';
+      : ' If the customer explicitly asks for a human — a bare "human", "agent" or "real person" counts — reply with [HANDOFF], never [OFFER_HUMAN]. If they seem stuck or frustrated and you genuinely cannot help further, offer a human once with [OFFER_HUMAN] — otherwise just ask a clarifying question. If they decline a human, reply with [CANCEL_HANDOFF].';
   return `You are ${name}, a helpful assistant. Answer concisely and accurately. You don't represent a company or brand — if asked who you are, give your name.${
-    opts?.forSuggestion || opts?.operator ? '' : tail
+    // Operators get the tail too — testing your own agent's escalation
+    // from the console needs the same tags customers trigger. Drafts
+    // stay tag-free (a suggested reply can't itself escalate).
+    opts?.forSuggestion ? '' : tail
   }`;
+}
+
+/** Slack concierge runs stamp metadata.surface — without a surface clause
+ *  the copilot talks like the console rail (approval cards "in this chat
+ *  window") while the operator is actually reading a Slack DM/thread. */
+function slackSurfaceNote(conv?: ConversationRow): string {
+  const meta = ((conv?.userProfile ?? {}) as UserProfile).metadata as
+    | Record<string, unknown>
+    | undefined;
+  if (meta?.surface !== 'slack') return '';
+  return (
+    ' You are answering inside Slack (a DM or mention thread), not the console — ' +
+    'approval cards post right here as real Approve/Deny buttons the operator can tap in place, ' +
+    'so propose them normally and say the card is in this Slack chat; never send them to the ' +
+    'console to approve. Console deep links still work when you need to point at a page, but keep ' +
+    'the reply plain — quick-reply chips and widgets render read-only here.'
+  );
 }
 
 /** Workspace-inherited flags — an agent that never set a flag takes
@@ -513,9 +662,10 @@ export function systemPrompt(
     forSuggestion?: boolean;
     pendingOffer?: boolean;
     offerMade?: boolean;
-    savedWidgets?: (SavedWidgetDef & { name: string })[];
+    savedWidgets?: (SavedWidgetDef & { name: string; toolDef?: ToolDef })[];
     /** Signed-in teammate on this agent's workspace — the Ask Janis
-     *  copilot context. No customer escalation ladder exists for them. */
+     *  copilot context. They keep the normal escalation ladder so the
+     *  escalation flow is testable end-to-end from the console. */
     operator?: boolean;
   } = {},
 ): string {
@@ -682,7 +832,7 @@ export function systemPrompt(
           : '\nOn this channel only "cards" and "options" render (as a native carousel / tappable list) — never emit the other types here.';
       parts.push(
         '\nOn this channel you can render an interactive component instead of describing it — a card beats a paragraph. Emit a line starting "WIDGET:" followed by one JSON object on the same line, anywhere in your reply; it is removed from the text and rendered for the customer. Shapes:' +
-          '\n{"type":"cards","items":[{"title","subtitle","image","price","link","link_label","select_label"}]} — product/plan carousel. "link" must be a URL from your context (opens it); "select_label" sends that text as the customer\'s message when tapped — cards carrying it are already the tappable choices, so don\'t also emit BUTTON: lines in that reply.' +
+          '\n{"type":"cards","items":[{"title","subtitle","image","price","link","link_label","select_button","select_label"}]} — product/plan carousel. "link" must be a URL from your context (opens it); "select_label" is the message the customer sends when tapped — phrase it as they\'d say it ("Tell me more about Bayview Ridge Estate"), never just repeat the card\'s title. "select_button" is the short text shown ON the button (e.g. "Tell me more…") — keep it under ~16 chars; when you use select_label, set select_button too so the button shows a label, not the whole message. Cards carrying it are already the tappable choices, so don\'t also emit BUTTON: lines in that reply.' +
           '\n{"type":"options","title","items":[{"label","description"}]} — tappable picker (time slots, plans, locations); tapping sends the label.' +
           (chan === 'webchat'
             ? '\n{"type":"form","title","submit_label","fields":[{"name","label","type":"text|email|tel|textarea|select","options":[...],"required":true}]} — collects fields and submits them as a message you\'ll receive.' +
@@ -698,7 +848,7 @@ export function systemPrompt(
           '\nWhen the customer asks to see products, plans or options that carry data (price, image, description), prefer a "cards" or "options" widget over a BUTTON: list — and when a tool call returns list data (search results, products, availability), render it as a widget rather than retelling it as text. Some tool results arrive already rendered as a component — the result says so; never emit a WIDGET: line restating data that was already rendered. Always pair a widget with a one-line lead-in ("Here are our plans:") — never emit a WIDGET: line alone.' +
           metaOnly +
           (opts.savedWidgets?.length
-            ? '\nSaved components (built by your team). When a request matches one, emit a line "WIDGET_REF: <name>" instead of building the same thing with WIDGET: — prefer the ref whenever it fits. When the digest lists props, args or states, add a JSON object on the same line — "WIDGET_REF: order-status {\"order_id\":\"1234\"}" supplies a bound tool its args or fills {prop} placeholders (only values you actually have — never invent them), and {"state":"<name>"} selects one of its named states:\n' +
+            ? '\nSaved components (built by your team). Each entry\'s "use when" names the asks it covers — pick the ref whose use-when matches what the customer actually asked for, and emit "WIDGET_REF: <name>" instead of building the same thing with WIDGET: or picking a different tool\'s output. When the digest lists props, args or states, add a JSON object on the same line — "WIDGET_REF: order-status {\"order_id\":\"1234\"}" supplies a bound tool its args or fills {prop} placeholders (only values you actually have — never invent them), and {"state":"<name>"} selects one of its named states. A component bound to a tool IS that tool\'s invocation — emitting the ref runs it and renders the result, so never call the bound tool directly to narrate the same data:\n' +
               opts.savedWidgets.map(widgetDigest).join('\n')
             : ''),
       );
@@ -710,11 +860,13 @@ export function systemPrompt(
     );
   } else {
     parts.push(
-      opts.operator
-        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. There is no human tier above you: never emit [HANDOFF], [OFFER_HUMAN] or [CANCEL_HANDOFF] and never offer to fetch a teammate — if something genuinely needs a human, say plainly what needs doing. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When you link to a console page, link it (https://app.janis.ai/…) — never leave a destination as bare bold text; use a URL a tool returned verbatim, or build it from ids in your context: agents are listed as Name {agent-id} (kind:{channel-id}, …), and current_agent_id covers the selected agent. Agent pages live at /agents/{agent-id}/{section} — sections: behavior (?sub=instructions (covers greeting + quick replies too), components — sidebar label 'Behavior'), knowledge (?sub=sources, gaps — articles manage as a row inside Sources), channels (/{channel-id} for one channel), integrations ('Actions'), components, tests ('Test'), settings (?sub=general, csat, escalation, team) — plus /agents/{agent-id}/inbox (/{conv-id} for a thread), /contacts, /campaigns, /reports; workspace-wide: /conversations (/{conv-id}), /contacts (/{id}), /campaigns, /reports, /errors, /billing, /settings?section=workspace|me|csat|escalation|team, /docs, and setup steps at /agents/new/{agent-id}?step=teach|guide|abilities|try|deploy. Every {…} slot carries a real uuid from your context — substitute it, never emit the placeholder itself or a slug or a kind name in an id slot. The console is a single-page app but every route above is a real browser deep link — never claim deep links don't exist or that the address bar can't reach them, and emit the full https URL, not a relative path or a code span. When the operator asks for a link, give the deep link — do not reply with click-path instructions instead. Never point the operator at a Google search or external docs for console navigation — you are the product's help desk; if you truly cannot construct a URL, say so plainly rather than outsourcing the answer to a search engine."
-        : handoffOff
+      (opts.operator
+        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When you link to a console page, link it (https://app.janis.ai/…) — never leave a destination as bare bold text; use a URL a tool returned verbatim, or build it from ids in your context: agents are listed as Name {agent-id} (kind:{channel-id}, …), and current_agent_id covers the selected agent. Agent pages live at /agents/{agent-id}/{section} — sections: behavior (?sub=instructions (covers greeting + quick replies too), components — sidebar label 'Behavior'), knowledge (?sub=sources, gaps — articles manage as a row inside Sources), channels (/{channel-id} for one channel), integrations ('Actions'), components, tests ('Test'), settings (?sub=general, csat, escalation, team) — plus /agents/{agent-id}/inbox (/{conv-id} for a thread), /contacts, /campaigns, /reports; workspace-wide: /conversations (/{conv-id}), /contacts (/{id}), /campaigns, /reports, /errors, /billing, /settings?section=workspace|me|csat|escalation|team, /docs, and setup steps at /agents/new/{agent-id}?step=teach|guide|abilities|try|deploy. Every {…} slot carries a real uuid from your context — substitute it, never emit the placeholder itself or a slug or a kind name in an id slot. The console is a single-page app but every route above is a real browser deep link — never claim deep links don't exist or that the address bar can't reach them, and emit the full https URL, not a relative path or a code span. When the operator asks for a link, give the deep link — do not reply with click-path instructions instead. Never point the operator at a Google search or external docs for console navigation — you are the product's help desk; if you truly cannot construct a URL, say so plainly rather than outsourcing the answer to a search engine. Pick tools by domain: questions about an agent's setup, knowledge, channels or settings are answered by inspect_agent — never by billing or catalogue tools; stripe_*/product/price lookups exist only for billing, plan and charge questions about the workspace's own subscription, and a 'show me the knowledge' ask is never a product list. Never call a tool just to have a widget or cards to show — widgets come only from tools whose data the question itself asked for." +
+            slackSurfaceNote(conv)
+        : '') +
+        (handoffOff
           ? '\nThere is no human escalation here — no team exists to hand the conversation to. Never emit [HANDOFF], [OFFER_HUMAN] or [CANCEL_HANDOFF], and never offer, promise or mention a human teammate — not to rescue a hard question, not to appease frustration. Resolve what you can; for what you genuinely cannot do, say plainly that you cannot and point the customer to whatever contact path your context actually provides (a support email, booking link or help page — never invent one).'
-          : '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, mild pushback, or a tool that failed while the customer\'s goal still has a working path (route them to that path instead — e.g. a failed draft-order attempt still leaves checkout in their cart), and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.',
+          : '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. A bare "human", "agent", "real person" or "customer support" IS an explicit ask — go straight to [HANDOFF], never [OFFER_HUMAN], and never answer an ask by asking whether they want one. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, mild pushback, or a tool that failed while the customer\'s goal still has a working path (route them to that path instead — e.g. a failed draft-order attempt still leaves checkout in their cart), and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.'),
     );
     parts.push(
       // Real incident: the model read a plan-card tap ("Choose Free") as a
@@ -1210,21 +1362,120 @@ export function repairCardImages(
   const imgFor = new Map<string, string>();
   const docUrls = new Set<string>();
   const docImages = new Set<string>();
+  const docTokens = new Map<string, Set<string>>();
+  const nameFor = new Map<string, string>();
+  const STOP = new Set(['the', 'for', 'and', 'our', 'sale']);
+  const tokenize = (s: string) =>
+    s.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2 && !STOP.has(w));
+  const nameTokens = new Map<string, Set<string>>();
+  const lowerFor = new Map<string, string>();
   for (const d of docs) {
-    docUrls.add(normLink(d.name));
+    const key = normLink(d.name);
+    docUrls.add(key);
+    // Only URL-named docs can serve as a card's link — help-article docs
+    // carry "Help center: <title>" names, which would emit as a dead href.
+    if (/^https?:\/\//i.test(d.name)) nameFor.set(key, d.name);
+    docTokens.set(key, new Set(tokenize(`${d.name} ${d.text}`)));
+    nameTokens.set(key, new Set(tokenize(d.name)));
+    lowerFor.set(key, d.text.toLowerCase());
     const img = /^Image: (\S+)/.exec(d.text)?.[1];
     if (img) {
-      imgFor.set(normLink(d.name), img);
+      imgFor.set(key, img);
       docImages.add(normLink(img));
     }
   }
   const blessed = new Set(blessedUrls.map(normLink));
+  // A card's title is its subject. When the model links every card at the
+  // same index/list page (or leaves the link off), the card's image should
+  // come from the doc that actually describes that subject — slugs don't
+  // help ("Life in Lawrence Park" lives at "10blythdalerd"), so rank docs
+  // by: verbatim title phrase in text > title-token coverage > name-token
+  // coverage > earliest phrase position. The decisive signal against index
+  // pages is density — an index doc holds EVERY card's title in the row;
+  // the item's own page holds only its own.
+  const docForTitle = (title: string | undefined, density: Map<string, number>): string | undefined => {
+    const tt = tokenize(title ?? '');
+    if (tt.length < 2) return undefined;
+    const phrase = (title ?? '').toLowerCase().replace(/\s+/g, ' ').trim();
+    type Cand = { u: string; excl: number; hit: boolean; cov: number; name: number; pos: number };
+    let best: Cand | undefined;
+    let tied = false;
+    for (const d of docs) {
+      const u = normLink(d.name);
+      const pos = (lowerFor.get(u) ?? '').indexOf(phrase);
+      const toks = docTokens.get(u)!;
+      let hitN = 0;
+      for (const w of tt) if (toks.has(w)) hitN++;
+      const cov = hitN / tt.length;
+      if (pos < 0 && cov < 0.6) continue;
+      const nt = nameTokens.get(u)!;
+      const name = tt.reduce((n, w) => n + (nt.has(w) ? 1 : 0), 0);
+      const c: Cand = {
+        u,
+        // A doc holding ONLY this title outranks an index page holding the
+        // same phrase amid every sibling card's title.
+        excl: pos >= 0 && (density.get(u) ?? 0) <= 1 ? 1 : 0,
+        hit: pos >= 0,
+        cov,
+        name,
+        pos: pos < 0 ? Number.MAX_SAFE_INTEGER : pos,
+      };
+      const beats =
+        !best ||
+        c.excl > best.excl ||
+        (c.excl === best.excl && c.hit && !best.hit) ||
+        (c.excl === best.excl && c.hit === best.hit && c.cov > best.cov) ||
+        (c.excl === best.excl && c.hit === best.hit && c.cov === best.cov && c.name > best.name) ||
+        (c.excl === best.excl &&
+          c.hit === best.hit &&
+          c.cov === best.cov &&
+          c.name === best.name &&
+          c.pos < best.pos);
+      const equal =
+        best &&
+        c.u !== best.u &&
+        c.excl === best.excl &&
+        c.hit === best.hit &&
+        c.cov === best.cov &&
+        c.name === best.name &&
+        c.pos === best.pos;
+      if (beats) {
+        best = c;
+        tied = false;
+      } else if (equal && !c.hit) {
+        tied = true;
+      }
+    }
+    return best && !tied ? best.u : undefined;
+  };
   for (const w of widgets) {
     if (w.type !== 'cards' || skip.has(w)) continue;
+    // Per-widget title density: how many of THIS row's card titles a doc
+    // contains verbatim. The listings index holds all of them; a listing's
+    // own page holds one. Cheapest unambiguous index tell there is.
+    const titlePhrases = w.items
+      .map((i) => (i.title ?? '').toLowerCase().replace(/\s+/g, ' ').trim())
+      .filter(Boolean);
+    const density = new Map<string, number>();
+    for (const d of docs) {
+      const lt = lowerFor.get(normLink(d.name)) ?? '';
+      density.set(normLink(d.name), titlePhrases.filter((p) => lt.includes(p)).length);
+    }
     for (const item of w.items) {
       const docKey = item.link ? normLink(item.link) : undefined;
-      if (docKey && docUrls.has(docKey)) {
-        const img = imgFor.get(docKey);
+      const titleDoc = docForTitle(item.title, density);
+      const doc = titleDoc ?? (docKey && docUrls.has(docKey) ? docKey : undefined);
+      if (doc) {
+        // Title names the card's subject — when it resolves to a doc
+        // different from the emitted link (the shared-index case), or the
+        // link was left off, point the card at the item's own page so
+        // "View Listing" lands on that listing. A link that already goes
+        // somewhere outside the doc set is a deliberate destination — the
+        // model linked a booking page or storefront on purpose — leave it.
+        if (titleDoc && titleDoc !== docKey && (!docKey || docUrls.has(docKey))) {
+          item.link = nameFor.get(titleDoc) ?? item.link;
+        }
+        const img = imgFor.get(doc);
         if (img) item.image = img;
         else delete item.image;
       } else if (
@@ -1232,6 +1483,42 @@ export function repairCardImages(
         (docImages.has(normLink(item.image)) || !blessed.has(normLink(item.image)))
       ) {
         delete item.image;
+      }
+    }
+    // One photo across several distinct cards means the model leaned on a
+    // single asset (usually the index page's og:image) — bare cards beat
+    // identical wrong photos.
+    const seen = new Map<string, number>();
+    for (const item of w.items) if (item.image) seen.set(item.image, (seen.get(item.image) ?? 0) + 1);
+    for (const item of w.items) {
+      if (item.image && (seen.get(item.image) ?? 0) > 1) delete item.image;
+    }
+  }
+}
+
+/** select_label is the message the tap sends; select_button is what the
+ *  button shows. Left unprompted the model parrots the card title into
+ *  select_label — which then renders AS the button text and sends a bare
+ *  product name as the customer's message. Normalize the two degenerate
+ *  shapes: a parroted title becomes a "Tell me more…" CTA whose message
+ *  asks about that item, and a tell-me-more phrased label collapses to the
+ *  same short button (its label already reads as the customer's message).
+ *  Custom labels ("Pick this one") and explicit select_button pass through. */
+export function normalizeCardSelects(
+  widgets: WidgetComponent[],
+  skip: Set<WidgetComponent> = new Set(),
+): void {
+  for (const w of widgets) {
+    if (w.type !== 'cards' || skip.has(w)) continue;
+    for (const item of w.items) {
+      if (!item.select_label || item.select_button || !item.title) continue;
+      const label = item.select_label.trim().toLowerCase();
+      const title = item.title.trim().toLowerCase();
+      if (label === title) {
+        item.select_label = `Tell me more about ${item.title}`;
+        item.select_button = 'Tell me more…';
+      } else if (label.startsWith('tell me more')) {
+        item.select_button = 'Tell me more…';
       }
     }
   }
@@ -1696,7 +1983,7 @@ const PHOTO_GUARD_RETRY =
   'If the photo is not about a product at all, rewrite the reply without naming or pricing one.';
 
 const WIDGET_PARSE_RETRY =
-  'Your previous draft emitted a component line (WIDGET: or WIDGET_REF:) that produced nothing — the JSON was malformed or the component name unknown — ' +
+  'Your previous draft emitted a component line (WIDGET: or WIDGET_REF:) that produced nothing — the JSON was malformed, the component name unknown or its data binding empty — ' +
   'so the customer only saw the text around it. Rewrite the reply: emit the component as ONE line of valid JSON in a supported shape, ' +
   'or give the answer as plain text. Never leave a lead-in ("Here are…") promising a component that did not render.';
 
@@ -2011,11 +2298,11 @@ export async function generateReply(
   ctx: AgentRunContext | undefined,
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
-): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[]; producedIds: Set<string>; actionCards: number; toolUrls: string[]; toolTexts: string[] }> {
+): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[]; producedIds: Set<string>; actionCards: number; toolUrls: string[]; toolTexts: string[]; lastToolResult: Map<string, string> }> {
   const first = await complete(llm, prompt, msgs, tools, secrets, ctx, builtins, onStall);
   const draft = first.text;
   if (!draft) {
-    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, toolTexts: first.toolTexts, fixed: [], stripped: [], verified: [], unverified: [] };
+    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, toolTexts: first.toolTexts, lastToolResult: first.lastToolResult, fixed: [], stripped: [], verified: [], unverified: [] };
   }
   // The linkable corpus grows inside the tool loop — results carry URLs and
   // ids the model may cite (conversation links, channel pages). Blessed =
@@ -2037,7 +2324,7 @@ export async function generateReply(
       : undefined;
   const guard = await guardReplyLinks(draft, allBlessed, { ids, exists });
   if (!guard.stripped.length) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, toolTexts: first.toolTexts, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, toolTexts: first.toolTexts, lastToolResult: first.lastToolResult, ...guard };
   }
   const retry = await complete(
     llm,
@@ -2053,7 +2340,7 @@ export async function generateReply(
     builtins,
   ).catch(() => null);
   if (!retry?.text) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards + (retry?.actionCards ?? 0), toolUrls: [...first.toolUrls, ...(retry?.toolUrls ?? [])], toolTexts: [...first.toolTexts, ...(retry?.toolTexts ?? [])], ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards + (retry?.actionCards ?? 0), toolUrls: [...first.toolUrls, ...(retry?.toolUrls ?? [])], toolTexts: [...first.toolTexts, ...(retry?.toolTexts ?? [])], lastToolResult: new Map([...first.lastToolResult, ...(retry?.lastToolResult ?? [])]), ...guard };
   }
   for (const id of retry.contextIds) ids.add(id);
   const allBlessed2 = retry.toolUrls.length ? [...allBlessed, ...retry.toolUrls] : allBlessed;
@@ -2068,6 +2355,7 @@ export async function generateReply(
     actionCards: first.actionCards + retry.actionCards,
     toolUrls: [...first.toolUrls, ...retry.toolUrls],
     toolTexts: [...first.toolTexts, ...retry.toolTexts],
+    lastToolResult: new Map([...first.lastToolResult, ...retry.lastToolResult]),
     ...g2,
   };
 }
@@ -2091,7 +2379,7 @@ export interface AgentRunContext {
    *  arg binding). Absent/empty means nothing is verified → those tools
    *  block. Never trust typed emails, contact records, or profile fields
    *  the customer could claim. */
-  identity?: { emails: Set<string>; operator: boolean };
+  identity?: { emails: Set<string>; operator: boolean; ids?: Set<string> };
   /** Card titles shown in the most recent outbound message — a paginated
    *  tool call whose cursor was rejected replays page one verbatim, and
    *  without this the same carousel ships twice. */
@@ -2123,6 +2411,11 @@ export interface AgentRunContext {
   /** Merchant-Ask threads pin concierge workspace resolution to the bound
    *  shop's workspace — see BuiltinCtx.pinWorkspaceId. */
   pinWorkspaceId?: string;
+  /** Run-scoped tool memo keyed by name+args — repair/verification retries
+   *  regenerate the turn and the model re-issues identical calls; replaying
+   *  the cached result keeps side-effecting tools single-fire (a second
+   *  send_verification_email mints a second code and invalidates the first). */
+  toolMemo?: Map<string, { result: string; outcome: InspectorToolCall['outcome'] }>;
 }
 
 /** Channel kinds where the sender address is verified by the mailbox —
@@ -2139,20 +2432,38 @@ const EMAIL_KINDS: ('email' | 'gmail' | 'outlook')[] = ['email', 'gmail', 'outlo
  *  - sender addresses on mailbox-kind channels — contact identities and the
  *    conversation's own binding.
  */
+const EXTERNAL_ID_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function verifiedIdentityFor(
   db: Db,
   conv: ConversationRow,
   workspaceId: string,
-): Promise<{ emails: Set<string>; operator: boolean }> {
+): Promise<{ emails: Set<string>; operator: boolean; ids: Set<string> }> {
   const emails = new Set<string>();
+  const ids = new Set<string>();
   let operator = false;
   const p = (conv.userProfile ?? {}) as UserProfile & {
     identity_verified?: boolean;
     external_id?: string;
+    verified_emails?: string[];
   };
   if (p.identity_verified) {
     if (p.email) emails.add(p.email.toLowerCase());
-    if (p.external_id) {
+    // Verified order emails accumulate — a customer who ordered under a
+    // different address (PayPal/Apple Pay, gift, shared inbox) can verify
+    // that address too; every proven email stays an identity anchor.
+    for (const e of p.verified_emails ?? []) emails.add(String(e).toLowerCase());
+    // A signed storefront claim carries the Shopify customer id — an
+    // identity anchor for customer_id: lookups (orders bought under any
+    // email, including POS orders with no email at all). Provider-scoped:
+    // only shopify:<digits> claims count.
+    const cid = /^shopify:(\d+)$/i.exec(p.external_id ?? '')?.[1];
+    if (cid) ids.add(cid);
+    // external_id is a Janis user id only for session/u:-bound identities —
+    // provider ids ('shopify:<cid>', host-site claims) aren't uuid-shaped and
+    // would crash the users query on Postgres's uuid comparison.
+    if (p.external_id && EXTERNAL_ID_UUID.test(p.external_id)) {
       const [u] = await db.select().from(users).where(eq(users.id, p.external_id)).limit(1);
       if (u) {
         if (u.email) emails.add(u.email.toLowerCase());
@@ -2224,7 +2535,34 @@ export async function verifiedIdentityFor(
   // On a mailbox channel the stored profile email is the authentic sender —
   // verified even though identity_verified (sign-in) stays false.
   if (binds.length && p.email) emails.add(p.email.toLowerCase());
-  return { emails, operator };
+  return { emails, operator, ids };
+}
+
+/**
+ * Bind identity-scoped tool args to anchors the model cannot know — a
+ * signed Shopify claim's customer id never appears in context, so the
+ * model literally cannot supply it. Runs BEFORE identityBlockReason; the
+ * filled value is what anchors the call. A signed claim id OVERWRITES a
+ * model-typed customer_id (typed ids are claims, never proof); a single
+ * verified email fills a missing email arg. Operators pass args as-is.
+ */
+export function applyVerifiedAnchors(
+  tool: ToolDef,
+  args: Record<string, unknown>,
+  identity?: { emails: Set<string>; operator: boolean; ids?: Set<string> },
+): void {
+  const tpl = tool.bodyTemplate ?? '';
+  const cid =
+    identity?.ids && identity.ids.size === 1 ? [...identity.ids][0] : undefined;
+  if (cid && tpl.includes('{customer_id')) {
+    args.customer_id = cid;
+    return;
+  }
+  // :clause emails are template-optional so missingTemplateArgs never
+  // flags them — fill whenever the template references an email anchor.
+  if (identity?.emails?.size === 1 && args.email == null && tpl.includes('{email')) {
+    args.email = [...identity.emails][0];
+  }
 }
 
 const SAVE_PROFILE_TOOL = 'save_user_profile';
@@ -2265,15 +2603,17 @@ export async function saveUserProfile(
     .where(eq(conversations.id, ctx.convId))
     .limit(1);
   if (!conv) return 'error: conversation not found';
-  const base = (conv.userProfile as UserProfile) ?? {};
   // Facts live under userProfile.metadata — same bag the /v1 traits push
   // merges into — so this conversation recalls them next turn.
-  const metadata = Object.keys(facts).length
-    ? { ...((base as Record<string, unknown>).metadata as Record<string, unknown> ?? {}), ...facts }
-    : (base as Record<string, unknown>).metadata;
+  // Merge per-key, never blind-replace: ingress writes profile keys outside
+  // the conversation lock, so a stale base would clobber its update (and
+  // vice-versa — verification keys). Facts concat at the nested metadata key.
+  let profileMerge: SQL = sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || ${JSON.stringify(update)}::jsonb`;
+  if (Object.keys(facts).length)
+    profileMerge = sql`${profileMerge} || jsonb_build_object('metadata', coalesce(${conversations.userProfile}->'metadata', '{}'::jsonb) || ${JSON.stringify(facts)}::jsonb)`;
   await ctx.db
     .update(conversations)
-    .set({ userProfile: { ...base, ...update, ...(metadata ? { metadata } : {}) } })
+    .set({ userProfile: profileMerge })
     .where(eq(conversations.id, ctx.convId));
   // Form-parity: claimed details also enrich the contact bound to this
   // conversation — fills empty fields, differing values fold into alt
@@ -2319,7 +2659,14 @@ function verifyCodeHash(convId: string, email: string, code: string): string {
     .digest('hex');
 }
 
-type VerifyProfile = UserProfile & { pending_verification?: PendingVerification };
+type VerifyProfile = UserProfile & {
+  pending_verification?: PendingVerification;
+  verified_via?: string;
+  /** Every address proven by a code this conversation — order emails
+   *  differ from account emails (PayPal/Apple Pay/gift checkouts), so a
+   *  second verification widens the anchor instead of replacing it. */
+  verified_emails?: string[];
+};
 
 /**
  * Built-in tool: email a 6-digit code to the address the customer claims —
@@ -2344,8 +2691,21 @@ export async function sendVerificationEmail(
     .limit(1);
   if (!conv) return 'error: conversation not found';
   const base = (conv.userProfile ?? {}) as VerifyProfile;
+  const pending0 = base.pending_verification;
+  // A live pending code for the same address is reused, not replaced — a
+  // second send mid-conversation (two rapid messages, model retry) used to
+  // mint a fresh code, silently invalidating the email already in the
+  // customer's inbox. resend:true is the explicit escape for a lost email.
+  if (
+    pending0?.email === email &&
+    Date.parse(pending0.expiresAt) > Date.now() &&
+    args.resend !== true
+  ) {
+    const mins = Math.max(1, Math.round((Date.parse(pending0.expiresAt) - Date.now()) / 60_000));
+    return `already sent — a verification code for ${email} is still valid for ~${mins} more minutes. Ask the customer to check their inbox and spam folder. Only call send_verification_email again with resend:true if they genuinely cannot find it.`;
+  }
   // Re-sends to the same address share the cap; a new claim restarts it.
-  const sends = base.pending_verification?.email === email ? base.pending_verification.sends : 0;
+  const sends = pending0?.email === email ? pending0.sends : 0;
   if (sends >= VERIFY_MAX_SENDS) {
     return `error: verification email limit reached for this conversation — if the customer cannot receive the code at ${email}, offer a human`;
   }
@@ -2357,9 +2717,14 @@ export async function sendVerificationEmail(
     attempts: 0,
     sends: sends + 1,
   };
+  // Key-merge the pending record in — a blind {...base} replace races the
+  // ingress profile write (outside the conv lock) and can clobber
+  // verified_emails or the customer's claimed details mid-run.
   await ctx.db
     .update(conversations)
-    .set({ userProfile: { ...base, pending_verification: pending } })
+    .set({
+      userProfile: sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || jsonb_build_object('pending_verification', ${JSON.stringify(pending)}::jsonb)`,
+    })
     .where(eq(conversations.id, ctx.convId));
   await sendEmail(
     [email],
@@ -2400,22 +2765,40 @@ export async function checkVerificationCode(
     const attempts = pending.attempts + 1;
     await ctx.db
       .update(conversations)
-      .set({ userProfile: { ...base, pending_verification: { ...pending, attempts } } })
+      .set({
+        userProfile: sql`jsonb_set(coalesce(${conversations.userProfile}, '{}'::jsonb), '{pending_verification,attempts}', to_jsonb(${attempts}::int))`,
+      })
       .where(eq(conversations.id, ctx.convId));
     return attempts >= VERIFY_MAX_ATTEMPTS
       ? 'error: incorrect code — attempt limit reached; call send_verification_email to send a fresh one'
       : `error: incorrect code — ${VERIFY_MAX_ATTEMPTS - attempts} attempt(s) left; ask the customer to re-check the email`;
   }
-  const { pending_verification: _drop, ...rest } = base;
+  // Accumulate in SQL, not a stale-snapshot replace — a signed-in customer
+  // who also verifies the address they ordered under keeps BOTH as anchors
+  // (verified_identity reads the list), and the dedupe runs against the row's
+  // CURRENT verified_emails so a concurrent ingress write can't be lost.
   await ctx.db
     .update(conversations)
     .set({
-      userProfile: {
-        ...rest,
-        email: pending.email,
-        identity_verified: true,
-        verified_via: 'email_code',
-      },
+      userProfile: sql`(coalesce(${conversations.userProfile}, '{}'::jsonb) - 'pending_verification')
+        || jsonb_build_object(
+          'email', ${pending.email}::text,
+          'identity_verified', true,
+          'verified_via', 'email_code',
+          'verified_emails', (
+            select coalesce(jsonb_agg(distinct lower(e)), '[]'::jsonb)
+            from jsonb_array_elements_text(
+              coalesce(${conversations.userProfile}->'verified_emails', '[]'::jsonb)
+              || jsonb_build_array(${pending.email}::text)
+              || case
+                   when coalesce((${conversations.userProfile}->>'identity_verified')::boolean, false)
+                     then jsonb_build_array(coalesce(${conversations.userProfile}->>'email', ''))
+                   else '[]'::jsonb
+                 end
+            ) as e
+            where e <> ''
+          )
+        )`,
     })
     .where(eq(conversations.id, ctx.convId));
   // Same-run effect — the identity snapshot was taken at run start, so
@@ -2480,6 +2863,10 @@ interface Completion {
   /** Raw tool result bodies this run — the evidence corpus card-item
    *  verification checks catalog fields (variant ids, titles) against. */
   toolTexts: string[];
+  /** Last successful result body per tool name (pre-note, pure JSON) —
+   *  WIDGET_REF resolution reuses it when the model calls the bound tool
+   *  directly and then emits the ref to render that same result. */
+  lastToolResult: Map<string, string>;
   /** Uuids (dash-normalized) that appeared in tool results — the id corpus
    *  the link guard validates console links against. */
   contextIds: Set<string>;
@@ -2552,7 +2939,7 @@ export async function complete(
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
 ): Promise<Completion> {
-  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[], producedIds: new Set<string>(), toolUrls: [] as string[], toolTexts: [] as string[], contextIds: new Set<string>(), actionCards: 0 };
+  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[], producedIds: new Set<string>(), toolUrls: [] as string[], toolTexts: [] as string[], lastToolResult: new Map<string, string>(), contextIds: new Set<string>(), actionCards: 0 };
   if (!llm.apiKey) return empty;
 
   const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
@@ -2643,6 +3030,11 @@ export async function complete(
                     type: 'string',
                     description: "the customer's claimed email address — the code goes there",
                   },
+                  resend: {
+                    type: 'boolean',
+                    description:
+                      'true only when the customer says the earlier code never arrived — otherwise a live pending code is reused',
+                  },
                 },
                 required: ['email'],
               },
@@ -2683,6 +3075,10 @@ export async function complete(
   // Raw result corpus — card-item verification checks catalog fields
   // (variant ids, titles) trace to real output, not model memory.
   const toolTexts: string[] = [];
+  // Last successful result per tool — a WIDGET_REF emitted after a direct
+  // call to its bound tool reuses this instead of re-calling with empty
+  // args (the model means "render that lookup", not "fetch again").
+  const lastToolResult = new Map<string, string>();
   const contextIds = new Set<string>();
   let actionCards = 0;
   // Calls (name+args) that already failed this run — an identical retry can
@@ -2862,6 +3258,7 @@ export async function complete(
         producedIds,
         toolUrls,
         toolTexts,
+        lastToolResult,
         contextIds,
         actionCards,
       };
@@ -2957,12 +3354,29 @@ export async function complete(
       try {
         // Customer-record tools hard-bind to the verified identity — a typed
         // email is a claim, never proof. Blocks before gating too, so an
-        // unverifiable call can't even reach the approval queue.
+        // unverifiable call can't even reach the approval queue. Verified
+        // anchors (signed-claim customer id, single verified email) fill
+        // first — the model can't know them and the filled value anchors.
+        if (tool?.identity && !ctx?.testRun && !ctx?.identity?.operator) {
+          applyVerifiedAnchors(tool, args, ctx?.identity);
+        }
         const denied =
           tool?.identity && !ctx?.testRun && !ctx?.identity?.operator
-            ? identityBlockReason(args, ctx?.identity?.emails ?? new Set(), producedIds)
+            ? identityBlockReason(
+                args,
+                ctx?.identity?.emails ?? new Set(),
+                producedIds,
+                ctx?.identity?.ids,
+              )
             : null;
-        if (!ctx?.testRun && failedCalls.has(callKey)) {
+        const memoHit = ctx?.testRun ? undefined : ctx?.toolMemo?.get(callKey);
+        if (memoHit) {
+          // Regeneration replay — the same call already ran this run; serve
+          // the stored result so side effects (emailed codes, approvals,
+          // writes) fire once.
+          outcome = memoHit.outcome;
+          result = memoHit.result;
+        } else if (!ctx?.testRun && failedCalls.has(callKey)) {
           outcome = 'failed';
           result =
             'error: this exact call already failed this turn — do not retry it; reply to the visitor in plain text instead';
@@ -3052,11 +3466,15 @@ export async function complete(
       // Sales-analytics payloads are merchant-internal — collapse them to a
       // ranked title list so units/revenue can never be quoted to a shopper.
       if (outcome === 'ran') result = internalDataResult(call.function.name, result) ?? result;
+      // Memoize the final result — a repair/regeneration pass that re-issues
+      // the identical call replays this instead of re-firing a side effect.
+      if (!ctx?.testRun && ctx?.toolMemo) ctx.toolMemo.set(callKey, { result, outcome });
       if (outcome === 'ran' || outcome === 'proposed') harvestProducedIds(result, producedIds);
       // URLs/uuids a tool emitted are the model's linkable corpus — the
       // reply guard blesses them and rejects id segments it never saw.
       toolUrls.push(...extractUrls(result));
       toolTexts.push(result);
+      if (outcome === 'ran') lastToolResult.set(call.function.name, result);
       extractIds(result, contextIds);
       toolCalls.push({
         name: call.function.name,
@@ -3143,6 +3561,7 @@ export async function complete(
                   toolUrls.push(...extractUrls(r2));
                   extractIds(r2, contextIds);
                   harvestProducedIds(r2, producedIds);
+                  lastToolResult.set(call.function.name, r2);
                   resultJson = r2;
                   result = r2;
                   args = retryArgs;
@@ -3367,13 +3786,13 @@ export async function complete(
       const text = (json.choices?.[0]?.message?.content ?? '').trim() || null;
       if (text) {
         console.warn(`[hosted] tool-storm salvage — forced text after ${toolCalls.length} calls`);
-        return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, toolTexts, contextIds, actionCards };
+        return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, toolTexts, lastToolResult, contextIds, actionCards };
       }
     }
   } catch {
     // fall through — the null-text path escalates as before
   }
-  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, toolTexts, contextIds, actionCards };
+  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, toolTexts, lastToolResult, contextIds, actionCards };
 }
 
 const RECENT_WINDOW = 20;
@@ -4083,9 +4502,19 @@ const ESCALATION_CLAIMS = [
   // "connecting|transferring|handing|passing you (over) to/with a human…"
   /\b(?:connect\w*|transfer\w*|pass\w*|hand\w*|forward\w*|escalat\w*)\s+(?:you|this|your)[^.!?\n]{0,50}\b(?:human|teammate|team|agent|representative|specialist|someone|support)\b/i,
   // "a human (teammate|agent|someone from the team) will/'ll join|reach out|take over…"
-  /\b(?:human|teammate|team member|specialist|representative|support agent|someone from (?:the|our|this) team|member of (?:the|our) team)\b[^.!?\n]{0,40}\b(?:will|is going to|are going to|'ll)\b[^.!?\n]{0,50}\b(?:join|help|assist|take over|reach out|be in touch|contact|respond|reply|follow up|message|chat|call|step in|pick (?:this|it) up)\b/i,
+  /\b(?:human|teammate|team member|specialist|representative|support agent|someone from (?:the|our|this) team|member of (?:the|our) team)\b[^.!?\n]{0,40}\b(?:will|is going to|are going to|'ll)\b[^.!?\n]{0,50}\b(?:join|help|assist|take over|reach out|be in touch|contact|respond|reply|follow\w* up|message|chat|call|step in|pick (?:this|it) up|review\w*|look\w* (?:at|into|over)|investigat\w*)\b/i,
   // "(get) you connected / in touch with a human | our team"
   /\b(?:connect\w*|in touch)\s+you\s+(?:with|to)[^.!?\n]{0,40}\b(?:human|teammate|team|agent|representative|specialist|someone)\b/i,
+  // Past/passive completion claims — the strongest lie: "I've ensured your
+  // request is flagged", "they have been notified", "a ticket has been
+  // created". Any passive/already-done handoff verb, no tag required.
+  /\b(?:has|have|had|was|were|is|are|been|'ve)\s+(?:already\s+|just\s+|been\s+)?(?:flagged|escalated|notified|alerted|forwarded|assigned|routed|submitted|ticketed|passed)\b/i,
+  /\b(?:created|opened|logged|raised|filed)\b[^.!?\n]{0,20}\b(?:ticket|request|case|incident|escalation)\b/i,
+  /\b(?:ticket|request|case|incident|escalation)\b[^.!?\n]{0,30}\b(?:has|have|was|were|is|are|been)\s+(?:been\s+)?(?:created|opened|logged|raised|filed|submitted|assigned)\b/i,
+  // Pronoun-subject promises — "They will follow up", "the team will reach
+  // out". The noun-less form rides on an earlier mention that the stripper
+  // may have removed; the sentence still promises human action.
+  /\b(?:they|someone|the team|our team|the support team|support)\b[^.!?\n]{0,30}\b(?:will|'ll|shall|would)\b[^.!?\n]{0,50}\b(?:follow\w* up|be in touch|reach out|contact|respond|reply|get back|pick (?:this|it) up|review\w*|look\w* into|investigat\w*|take (?:it|this) (?:from|over)|assist|help)\b/i,
 ];
 
 /** Remove unbacked escalation promises from a reply the model didn't tag.
@@ -4160,6 +4589,19 @@ const HANDOFF_FALLBACKS = [
   'One moment — connecting you with a human teammate now.',
   'Got it — bringing in a human teammate now.',
 ];
+
+/** Inbound text that plainly asks for a human — a bare "human", "real
+ *  person", "speak to an agent", etc. Used to salvage the handoff when the
+ *  model promises one but forgets the tag. */
+export const HUMAN_ASK =
+  /\b(?:humans?|(?:a |an |the |some )?(?:real|live|actual)\s+(?:person|human|agent|operator|rep(?:resentative)?)|(?:speak|talk|connect|chat)\w*\s+(?:(?:me|us|you)\s+)?(?:to|with)\s+(?:a\s+|an\s+|some\s+|the\s+)?(?:person|human|agent|operator|rep(?:resentative)?|staff|team|support|someone)|customer (?:service|support))\b/i;
+
+// Interrogative offer — "want me to get a human teammate?", "would you like
+// to talk to a real person?", "shall I bring in a human?" Redundant once the
+// customer already asked: stripped when an explicit ask forces the handoff,
+// or when an untagged offer gets salvaged.
+export const OFFER_QUESTION =
+  /\b(?:want|need|would|shall|should|can|could|may|do|does|prefer|like)\b[^?\n]{0,80}\b(?:humans?|teammates?|team members?|(?:real|live|actual) person|agents?|representatives?|specialists?|someone|support(?: team)?|people)\b[^?\n]*\?\s*$/i;
 
 // Tappable yes/no attached to every "want a human?" offer — webchat chips,
 // native quick replies on Meta channels.
@@ -4268,9 +4710,11 @@ async function replyAsHostedAgent(
     const draftsOpted =
       ((agent.config ?? {}) as { builder?: { include_drafts_in_test?: boolean } }).builder
         ?.include_drafts_in_test === true;
+    const allDocs: { name: string; text: string }[] = [];
     const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history, conv), {
       includeDrafts: draftsOpted && (await isTestConversation(db, conv)),
       reservedChars: notesReserved(agent),
+      allDocs,
     });
     await freshShopifyToken(db, agent.id); // re-mirrors an expiring shop token before the map loads
     const secrets = {
@@ -4350,6 +4794,7 @@ async function replyAsHostedAgent(
       paginationTap,
       inboundText: lastInboundText,
       shopperMarket,
+      toolMemo: new Map(),
       ...(merchantAsk ? { pinWorkspaceId: agent.workspaceId } : {}),
     };
     // One escalation lookup feeds the prompt (pending offer) AND the
@@ -4380,6 +4825,7 @@ async function replyAsHostedAgent(
     const savedWidgets = await db
       .select({
         name: agentWidgets.name,
+        description: agentWidgets.description,
         spec: agentWidgets.spec,
         states: agentWidgets.states,
         tool: agentWidgets.tool,
@@ -4413,13 +4859,21 @@ async function replyAsHostedAgent(
         spec: spec.data,
         states: states.success ? states.data : undefined,
         tool: tool?.success ? tool.data : undefined,
+        description: w.description ?? undefined,
       });
     }
+    const agentToolDefs = toolsFor(agent);
     let prompt =
       systemPrompt(agent, docs, conv, {
         pendingOffer: openEsc.some((a) => a.type === 'handoff_offer'),
         offerMade: offeredBefore,
-        savedWidgets: [...refSpecs.entries()].map(([name, def]) => ({ name, ...def })),
+        savedWidgets: [...refSpecs.entries()].map(([name, def]) => ({
+          name,
+          ...def,
+          toolDef: def.tool
+            ? agentToolDefs.find((t) => t.name === def.tool!.name)
+            : undefined,
+        })),
         operator: ctx.identity?.operator,
       }) +
       ((await campaignContextFor(db, convId)) ?? '') +
@@ -4472,7 +4926,9 @@ async function replyAsHostedAgent(
     // component lines that rendered nothing on the surviving attempt —
     // hoisted out of the retry loop so the error signal can report them
     let lostComponents = 0;
-    const agentToolDefs = toolsFor(agent);
+    // why each lost component died — fed back to the model on the repair
+    // pass so it can fix args instead of re-emitting the same bare ref
+    let lostReasons: string[] = [];
     // Any cards-producing catalogue search tool qualifies for the
     // photo-match guard and named-product promotion — Shopify or a
     // WooCommerce/custom connector alike; the query arg name comes from
@@ -4512,16 +4968,63 @@ async function replyAsHostedAgent(
       // variant, a tool binding fetches live props/items, inline data fills
       // {prop} placeholders — a static spec when it carries none of those.
       lostComponents = dropped;
+      lostReasons = [];
+      // A hand-written WIDGET: of a type a tool-bound saved component owns
+      // is fabrication-prone by definition — the model types the layout from
+      // memory instead of binding live data, and an unfilled spec renders a
+      // hollow shell ("Order" with no number). Drop it so the retry pass
+      // emits WIDGET_REF — which either binds real data or fails honestly.
+      const boundTypes = new Map<string, string>();
+      for (const [name, def] of refSpecs)
+        if (def.tool && !boundTypes.has(def.spec.type)) boundTypes.set(def.spec.type, name);
+      for (let i = w.length - 1; i >= 0; i--) {
+        const owner = boundTypes.get(w[i].type);
+        if (owner) {
+          w.splice(i, 1);
+          lostComponents++;
+          lostReasons.push(
+            `a hand-written ${w.length ? 'WIDGET:' : 'widget'} was dropped — emit "WIDGET_REF: ${owner}" instead so it binds live data`,
+          );
+        }
+      }
       for (const ref of refs) {
         const def = refSpecs.get(ref.name);
         if (!def) {
           lostComponents++; // ref to a component that doesn't exist — line vanished, nothing rendered
+          lostReasons.push(
+            `"${ref.name}" is not a saved component — saved components are: ${[...refSpecs.keys()].join(', ')}`,
+          );
           continue;
         }
-        const spec = await resolveWidgetRef(def, ref.data, agentToolDefs, secrets, ctx, gen.producedIds);
+        // A bare ref after the model already ran the bound tool renders
+        // that call's result — only a ref carrying its own args re-fetches.
+        const cap: { args?: Record<string, unknown>; result?: string; error?: string } = {};
+        const spec = await resolveWidgetRef(
+          def,
+          ref.data,
+          agentToolDefs,
+          secrets,
+          ctx,
+          gen.producedIds,
+          cap,
+          def.tool ? gen.lastToolResult.get(def.tool.name) : undefined,
+        );
         if (spec) {
           w.push(spec);
           refResolved.add(spec);
+          // Soft fail — e.g. a bound lookup found no records and the
+          // not-found state rendered. Keep the component but regenerate
+          // once so the text narrates the miss instead of a blind lead-in.
+          if (cap.error) {
+            lostComponents++;
+            lostReasons.push(`${ref.name}: ${cap.error}`);
+          }
+        } else {
+          // Ref resolved to nothing (bad binding, tool error) — the emitted
+          // line still vanished, so count it for the repair pass like a
+          // malformed WIDGET:.
+          lostComponents++;
+          lostReasons.push(`${ref.name}: ${cap.error ?? 'produced nothing'}`);
         }
       }
       const { text: r, buttons: b } = extractButtons(noWidgets);
@@ -4554,8 +5057,31 @@ async function replyAsHostedAgent(
       // WIDGET_REF) — silent content loss; the customer sees a dangling
       // lead-in. Regenerate once with explicit feedback.
       if (attempt === 0 && lostComponents > 0) {
-        console.warn(`[hosted] dropped component line conv=${convId} — regenerating`);
-        prompt += '\n\n' + WIDGET_PARSE_RETRY;
+        console.warn(
+          `[hosted] dropped component line conv=${convId} — regenerating` +
+            (lostReasons.length ? ` (${lostReasons.join('; ')})` : ''),
+        );
+        const refFailed = lostReasons.some(
+          (r) => !/is not a saved component$/.test(r),
+        );
+        // Failure-class-specific guidance: an identity-blocked ref must NOT be
+        // re-emitted (it will block again — verify the claimed address first);
+        // a soft-failed not-found ref MUST be re-emitted so the component
+        // re-renders, with honest text around it; a missing-args ref wants the
+        // same ref with args filled.
+        const identityBlocked = lostReasons.some((r) => r.includes('identity check blocked'));
+        const softNotFound = lostReasons.some((r) => r.includes('rendered its not-found state'));
+        prompt +=
+          '\n\n' +
+          WIDGET_PARSE_RETRY +
+          (lostReasons.length ? ` What failed: ${lostReasons.join('; ')}.` : '') +
+          (identityBlocked
+            ? ' Do NOT emit that component ref again — the lookup will keep blocking while the address is unverified. Call send_verification_email with the address the customer claims, tell them a verification code is on its way, and end the turn there; the order component comes after they confirm the code.'
+            : softNotFound
+              ? ' Emit the SAME component ref again unchanged so the not-found component re-renders, and write the honest text around it.'
+              : refFailed
+                ? ' If a saved-component ref failed on missing data, emit the SAME ref name again with its required args filled from the conversation — do not switch to a different component or tool.'
+                : '');
         continue;
       }
       // Widget-truth mismatch — claiming components that didn't render this
@@ -4884,7 +5410,12 @@ async function replyAsHostedAgent(
     if (bogusItems) runIssues.push(`stripped ${bogusItems} unverified card item(s)`);
     if (stockFixed) runIssues.push(`repaired ${stockFixed} card field(s)`);
     if (gen.stripped.length)
-      runIssues.push(`link guard stripped ${gen.stripped.length} URL(s)`);
+      runIssues.push(
+        `link guard stripped ${gen.stripped.length} URL(s): ${gen.stripped
+          .map((u) => u.slice(0, 120))
+          .join(', ')
+          .slice(0, 500)}`,
+      );
     if (runIssues.length)
       void fireErrorAlert(db, agent, convId, runIssues.join('; ')).catch(() => {});
     // Data-bound components from widget-bound tools lead the reply; the
@@ -4892,13 +5423,20 @@ async function replyAsHostedAgent(
     // component (a duplicate cards row reads as a bug; the pairwise dedupe
     // also collapses a tool-bound widget emitted twice by the tool loop).
     // Card image fields are model-typed URLs — reconcile them against the
-    // injected docs before anything ships (tool-result URLs count as
-    // context; ref-resolved specs are exempt).
-    repairCardImages(widgets, docs, [...blessedUrls, ...gen.toolUrls], refResolved);
+    // doc corpus before anything ships (tool-result URLs count as context;
+    // ref-resolved specs are exempt). Repair resolves card titles against
+    // the WHOLE corpus, not just the prompt's injected subset — a "show me
+    // listings" turn typically injects only the index doc, and a title
+    // matched there can never find the item's own page/image.
+    repairCardImages(widgets, allDocs, [...blessedUrls, ...gen.toolUrls], refResolved);
     // Catalog-shaped card items must trace to this run's tool output —
     // "here are both items" backed by a model-typed six-product carousel is
     // a hallucination the customer acts on. Dropped entirely → regenerate.
     widgets = mergeCardWidgets(dedupeWidgetList([...toolWidgets, ...widgets])).slice(0, 3);
+    // Runs AFTER the merge — tool-bound cards (widget specs mapping only
+    // select_label) need the same select_button normalization as
+    // model-authored ones.
+    normalizeCardSelects(widgets, refResolved);
     // Narration↔carousel agreement: when the reply NAMES products, the
     // cards must contain them — "the Liquid is the match" under three
     // unrelated cards reads as the widget contradicting the text. A named
@@ -5207,6 +5745,32 @@ async function replyAsHostedAgent(
       return;
     }
     if (tag?.kind === 'offer') {
+      // The customer already asked for a human — an offer is the wrong
+      // rung of the ladder. Upgrade to a real handoff: strip the redundant
+      // offer question and any unbacked commitment, keep a genuine partial
+      // answer, then fire the escalation the ask already earned.
+      if (lastCustomerText && HUMAN_ASK.test(lastCustomerText)) {
+        const { text: kept, stripped } = stripSentencesByLine(
+          tag.partial,
+          (s) => OFFER_QUESTION.test(s) || ESCALATION_CLAIMS.some((re) => re.test(s)),
+        );
+        if (stripped) inspectorFlag.inspector.esc_claim_stripped = stripped;
+        inspectorFlag.inspector.offer_upgraded = true;
+        await emit([
+          {
+            type: 'message_out',
+            conversation_id: externalId,
+            text: kept || pick(HANDOFF_FALLBACKS),
+            payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+          },
+          {
+            type: 'handoff_request',
+            conversation_id: externalId,
+            reason: 'customer explicitly asked for a human — offer upgraded to handoff',
+          },
+        ]);
+        return;
+      }
       // Agent thinks a human would help but the customer hasn't asked —
       // deliver the reply (which should include the offer question) and
       // fire a non-escalating handoff_offer alert so operators can peek.
@@ -5218,13 +5782,23 @@ async function replyAsHostedAgent(
         .from(alerts)
         .where(and(eq(alerts.conversationId, convId), eq(alerts.type, 'handoff_offer')))
         .limit(1))[0];
-      // A bare tag after reply text that never poses the offer question
-      // ships orphaned "Yes, get a human" chips under text that offered
-      // nothing — append the offer so the buttons have an antecedent.
-      const partial = tag.partial
-        ? /\?/.test(tag.partial)
-          ? tag.partial
-          : `${tag.partial.trimEnd()}\n${pick(OFFER_FALLBACKS)}`
+      // Unbacked "I'll connect you with a human" promises don't belong in an
+      // offer — they read as escalation already happening while the buttons
+      // say otherwise. Strip them (the offer question itself survives —
+      // OFFER_QUESTION phrasing isn't a claim), then make sure what remains
+      // actually poses the question the buttons answer.
+      const { text: offerText, stripped: offerStripped } =
+        conv.state === 'needs_human'
+          ? { text: tag.partial, stripped: 0 }
+          : stripEscalationClaims(tag.partial);
+      if (offerStripped) {
+        inspectorFlag.inspector.esc_claim_stripped = offerStripped;
+        console.warn(`[hosted] unbacked escalation claim stripped conv=${convId} n=${offerStripped}`);
+      }
+      const partial = offerText
+        ? /\?/.test(offerText)
+          ? offerText
+          : `${offerText.trimEnd()}\n${pick(OFFER_FALLBACKS)}`
         : pick(OFFER_FALLBACKS);
       const events: Parameters<typeof processEvents>[2] = [];
       events.push({
@@ -5251,15 +5825,50 @@ async function replyAsHostedAgent(
     // message so "why this reply" shows the save. tag.partial also covers an
     // [END_CHAT] emitted with auto_archive off — the tag never reaches the
     // customer, the reply just goes out plain.
-    const { text: cleanReply, stripped: claimStripped } =
+    const humanAsked =
+      handoffEnabled &&
+      conv.state !== 'needs_human' &&
+      !!lastCustomerText &&
+      HUMAN_ASK.test(lastCustomerText);
+    const { text: claimFree, stripped: claimStripped } =
       conv.state === 'needs_human'
         ? { text: (tag?.partial ?? reply).trim(), stripped: 0 }
         : stripEscalationClaims((tag?.partial ?? reply).trim());
-    const finalReply = cleanReply || pick(DECLINE_FALLBACKS);
-    if (claimStripped) {
-      inspectorFlag.inspector.esc_claim_stripped = claimStripped;
-      console.warn(`[hosted] unbacked escalation claim stripped conv=${convId} n=${claimStripped}`);
+    // An untagged "want me to get a human?" after the customer already asked
+    // for one is the same fumble as an untagged promise — the question is
+    // redundant and the handoff is already earned.
+    const { text: cleanReply, stripped: offerStripped } = humanAsked
+      ? stripSentencesByLine(claimFree, (s) => OFFER_QUESTION.test(s))
+      : { text: claimFree, stripped: 0 };
+    const strippedTotal = claimStripped + offerStripped;
+    if (strippedTotal) {
+      inspectorFlag.inspector.esc_claim_stripped = strippedTotal;
+      console.warn(`[hosted] unbacked escalation claim stripped conv=${convId} n=${strippedTotal}`);
     }
+    // The model promised a human without the tag AND the customer plainly
+    // asked for one — intent is unambiguous on both sides, so the model
+    // just fumbled the tag. Fire the handoff it forgot and answer with a
+    // "human is coming" line that is now true. (prod incident: concierge
+    // replied "I've ensured your request is flagged… within 24 hours"
+    // twice to a bare "human" ask — no alert, no state change.)
+    if (strippedTotal && humanAsked) {
+      inspectorFlag.inspector.handoff_salvaged = true;
+      await emit([
+        {
+          type: 'message_out',
+          conversation_id: externalId,
+          text: cleanReply || pick(HANDOFF_FALLBACKS),
+          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+        },
+        {
+          type: 'handoff_request',
+          conversation_id: externalId,
+          reason: 'customer asked for a human; model promised without tagging',
+        },
+      ]);
+      return;
+    }
+    const finalReply = cleanReply || pick(DECLINE_FALLBACKS);
     await emit([
       {
         type: 'message_out',

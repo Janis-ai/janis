@@ -78,6 +78,8 @@ export interface LegacyQuery {
   event?: { name: string; data?: Record<string, unknown> };
   lang?: string;
   contexts?: LegacyContext[];
+  /** v1 session entities → v2 sessionEntityTypes (bot/apikey lists). */
+  entities?: { name: string; extend?: number; entries: { value: string; synonyms: string[] }[] }[];
   resetContexts?: boolean;
   location?: { latitude: number; longitude: number };
   originalRequest?: { source: string; data?: unknown };
@@ -268,6 +270,189 @@ async function mergeJanisContext(
   } catch {}
 }
 
+/** Raw v2 intent read — for mutation round-trips (GET → mutate → PATCH). */
+export async function getIntentV2Raw(project: string, intentId: string, sa: ServiceAccount): Promise<any | null> {
+  try {
+    const res = await dfFetch(
+      sa,
+      `/v2/projects/${project}/agent/intents/${encodeURIComponent(intentId)}?intentView=INTENT_VIEW_FULL`,
+    );
+    return res.ok ? await res.json() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Full-intent PATCH — legacy dialogflow.patchIntent equivalent (v1 PUT →
+ *  v2 PATCH without updateMask updates all top-level fields). Returns the
+ *  updated intent, or throws with the API error body for 409/400 handling. */
+export async function patchIntentV2(project: string, intentName: string, body: any, sa: ServiceAccount): Promise<any> {
+  const res = await dfFetch(sa, `/v2/${intentName}?languageCode=en`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = new Error(`dialogflow PATCH ${res.status}: ${(await res.text()).slice(0, 300)}`) as Error & { statusCode?: number };
+    err.statusCode = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+export async function createIntentV2(project: string, body: any, sa: ServiceAccount): Promise<any> {
+  const res = await dfFetch(sa, `/v2/projects/${project}/agent/intents?languageCode=en`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = new Error(`dialogflow CREATE ${res.status}: ${(await res.text()).slice(0, 300)}`) as Error & { statusCode?: number };
+    err.statusCode = res.status;
+    throw err;
+  }
+  return res.json();
+}
+
+export async function deleteIntentV2(project: string, intentId: string, sa: ServiceAccount): Promise<boolean> {
+  const res = await dfFetch(sa, `/v2/projects/${project}/agent/intents/${encodeURIComponent(intentId)}`, {
+    method: 'DELETE',
+  });
+  return res.ok;
+}
+
+// restoreAgentV2 — POST /v2/projects/{p}/agent:restore with a zip payload.
+// Used by the legacy `starter_kit` action (df.import(zip-url)): we fetch the
+// zip ourselves and base64 it into agentContent.
+export async function restoreAgentV2(project: string, agentContentBase64: string, sa: ServiceAccount): Promise<any> {
+  const res = await dfFetch(sa, `/v2/projects/${project}/agent:restore`, {
+    method: 'POST',
+    body: JSON.stringify({ agentContent: agentContentBase64 }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    const err = new Error(text.slice(0, 500)) as Error & { statusCode?: number };
+    err.statusCode = res.status;
+    throw err;
+  }
+  return res.json().catch(() => ({}));
+}
+
+export async function listIntentsV2(project: string, sa: ServiceAccount): Promise<any[]> {
+  const out: any[] = [];
+  let pageToken = '';
+  for (let i = 0; i < 10; i++) {
+    const res = await dfFetch(
+      sa,
+      `/v2/projects/${project}/agent/intents?intentView=INTENT_VIEW_FULL&pageSize=1000${pageToken ? `&pageToken=${pageToken}` : ''}`,
+    );
+    if (!res.ok) break;
+    const j = (await res.json()) as { intents?: any[]; nextPageToken?: string };
+    out.push(...(j.intents ?? []));
+    if (!j.nextPageToken) break;
+    pageToken = j.nextPageToken;
+  }
+  return out;
+}
+
+/** v2 intent resource → legacy v1 intent doc. Shared by getIntentV1 and the
+ *  slackClassic mutation layer so a PATCH response can be re-rendered without
+ *  a second GET. */
+export function v2IntentToV1Doc(intentId: string, j: any): any {
+  // v2 fulfillment messages → v1 {type, speech|replies|payload}:
+  // text→0, quickReplies→2, payload→4; everything else rides as payload.
+  const messages = (j.messages ?? []).map((m: any) => {
+    if (m.text?.text?.length) return { type: 0, speech: m.text.text };
+    if (m.quickReplies?.quickReplies) {
+      return { type: 2, replies: m.quickReplies.quickReplies, title: m.quickReplies.title };
+    }
+    if (m.payload) return { type: 4, payload: m.payload };
+    return { type: 4, payload: m };
+  });
+  const intent: any = {
+    id: intentId,
+    resourceName: j.name,
+    name: j.displayName ?? '',
+    userSays: (j.trainingPhrases ?? []).map((p: any) => ({
+      data: (p.parts ?? []).map((part: any) => ({ text: part.text ?? '' })),
+    })),
+    events: (j.events ?? []).map((name: string) => ({ name })),
+    contexts: (j.inputContextNames ?? []).map((n: string) => n.split('/contexts/').pop() ?? n),
+    fallbackIntent: j.isFallback === true,
+    responses: [{ messages }],
+  };
+  if (j.action) intent.action = j.action;
+  if (j.priority != null) intent.priority = j.priority;
+  if (j.webhookState && j.webhookState !== 'WEBHOOK_STATE_UNSPECIFIED') intent.webhookUsed = true;
+  if (j.parameters?.length) intent.responses[0].parameters = j.parameters;
+  if (j.outputContexts?.length) {
+    intent.responses[0].affectedContexts = j.outputContexts.map((c: any) => ({
+      name: c.name?.split('/contexts/').pop() ?? c.name,
+      parameters: c.parameters ?? {},
+      lifespan: c.lifespanCount ?? 1,
+    }));
+  }
+  if (j.rootFollowupIntentName) {
+    intent.rootParentId = j.rootFollowupIntentName.split('/intents/').pop();
+    const parent = j.followupIntentInfo?.[0]?.parentFollowupIntentName;
+    if (parent) intent.parentId = parent.split('/intents/').pop();
+  } else if (j.parentFollowupIntentName || j.followupIntentInfo?.[0]?.parentFollowupIntentName) {
+    const parent = j.parentFollowupIntentName ?? j.followupIntentInfo?.[0]?.parentFollowupIntentName;
+    if (parent) intent.parentId = parent.split('/intents/').pop();
+  }
+  return intent;
+}
+
+/** v1-shaped intent read via the v2 API — training.js findIntent equivalent.
+ *  Returns the v1 doc shape the legacy send_to_user / training-menu paths
+ *  consume: id, name, userSays, events, contexts, fallbackIntent,
+ *  responses[0].messages in v1 message types (0 text / 2 replies / 4 payload).
+ *  followUpIntentsArr comes from a separate list call (addFollowups=true). */
+export async function getIntentV1(
+  project: string,
+  intentId: string,
+  sa: ServiceAccount,
+  opts: { withFollowups?: boolean } = {},
+): Promise<{
+  id: string;
+  name: string;
+  userSays: { data: { text: string }[] }[];
+  events: { name: string }[];
+  contexts: string[];
+  fallbackIntent: boolean;
+  responses: { messages: any[] }[];
+  followUpIntentsArr?: { name: string; id: string }[];
+  parentIntentName?: string;
+  parentId?: string;
+} | null> {
+  try {
+    const res = await dfFetch(
+      sa,
+      `/v2/projects/${project}/agent/intents/${encodeURIComponent(intentId)}?intentView=INTENT_VIEW_FULL`,
+    );
+    if (!res.ok) return null;
+    const j = (await res.json()) as any;
+    const intent = v2IntentToV1Doc(intentId, j);
+    if (opts.withFollowups) {
+      const listRes = await dfFetch(
+        sa,
+        `/v2/projects/${project}/agent/intents?intentView=INTENT_VIEW_FULL&pageSize=1000`,
+      );
+      if (listRes.ok) {
+        const lj = (await listRes.json()) as { intents?: any[] };
+        const children = (lj.intents ?? []).filter(
+          (i) => i.parentFollowupIntentName === j.name || i.rootFollowupIntentName === j.name,
+        );
+        intent.followUpIntentsArr = children.map((i) => ({
+          name: i.displayName ?? '',
+          id: String(i.name ?? '').split('/intents/').pop(),
+        }));
+      }
+    }
+    return intent;
+  } catch {
+    return null;
+  }
+}
+
 export async function detectIntentV1(
   project: string,
   sessionId: string,
@@ -296,6 +481,15 @@ export async function detectIntentV1(
 
   const queryParams: Record<string, unknown> = {};
   if (contexts.length) queryParams.contexts = contexts;
+  // Legacy injects session entities (bot names, apikey, apiai_key) so the
+  // meta-bot recognizes them in free text — v2 sessionEntityTypes OVERRIDE.
+  if (body.entities?.length) {
+    queryParams.sessionEntityTypes = body.entities.map((e) => ({
+      name: `projects/${project}/agent/sessions/${sessionId}/entityTypes/${e.name}`,
+      entityOverrideMode: 'SESSION_ENTITY_TYPE_MODE_OVERRIDE',
+      entities: e.entries,
+    }));
+  }
   if (body.resetContexts) queryParams.resetContexts = true;
   if (body.location) queryParams.geoLocation = body.location;
   if (body.originalRequest) queryParams.payload = body.originalRequest;

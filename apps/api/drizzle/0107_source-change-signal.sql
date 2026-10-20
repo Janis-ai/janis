@@ -1,0 +1,1 @@
+ALTER TABLE "knowledge_files" ADD COLUMN "text_changed_at" timestamp with time zone;

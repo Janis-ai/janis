@@ -17,7 +17,7 @@ import {
 import { sessionAuth, adminOnly, type SessionEnv } from '../middleware/sessionAuth.js';
 import { audit } from '../lib/audit.js';
 import { segmentConditions, type CampaignSegment } from '../lib/campaigns.js';
-import { purgeContactData } from '../lib/contacts.js';
+import { contactExportBundle, purgeContactData } from '../lib/contacts.js';
 
 const boolParam = (v: string | undefined) =>
   v === '1' || v === 'true' ? true : undefined;
@@ -346,33 +346,7 @@ export function contactRoutes(db: Db) {
       .where(and(eq(contacts.id, c.req.param('id')), eq(contacts.workspaceId, workspaceId)))
       .limit(1);
     if (!contact) return c.json({ error: 'not found' }, 404);
-    const [identities, convs, sends, memberships] = await Promise.all([
-      db.select().from(contactIdentities).where(eq(contactIdentities.contactId, contact.id)),
-      db
-        .select()
-        .from(conversations)
-        .where(eq(conversations.contactId, contact.id))
-        .limit(500),
-      db.select().from(campaignSends).where(eq(campaignSends.contactId, contact.id)),
-      db
-        .select({ listId: contactListMembers.listId, name: contactLists.name })
-        .from(contactListMembers)
-        .innerJoin(contactLists, eq(contactListMembers.listId, contactLists.id))
-        .where(eq(contactListMembers.contactId, contact.id)),
-    ]);
-    const msgs = convs.length
-      ? await db
-          .select()
-          .from(messages)
-          .where(inArray(messages.conversationId, convs.map((v) => v.id)))
-          .orderBy(messages.createdAt)
-      : [];
-    const byConv = new Map<string, typeof msgs>();
-    for (const m of msgs) {
-      const list = byConv.get(m.conversationId) ?? [];
-      list.push(m);
-      byConv.set(m.conversationId, list);
-    }
+    const bundle = await contactExportBundle(db, contact);
     await audit(db, {
       workspaceId,
       userId: c.get('user').id,
@@ -380,17 +354,10 @@ export function contactRoutes(db: Db) {
       action: 'contact.export',
       targetType: 'contact',
       targetId: contact.id,
-      meta: { conversations: convs.length },
+      meta: { conversations: (bundle.conversations as unknown[]).length },
     });
     c.header('content-disposition', `attachment; filename="contact-${contact.id}.json"`);
-    return c.json({
-      exported_at: new Date().toISOString(),
-      contact,
-      identities,
-      lists: memberships,
-      campaign_sends: sends,
-      conversations: convs.map((v) => ({ ...v, messages: byConv.get(v.id) ?? [] })),
-    });
+    return c.json(bundle);
   });
 
   // DELETE /api/contacts/:id — GDPR erasure. Default keeps the anonymized

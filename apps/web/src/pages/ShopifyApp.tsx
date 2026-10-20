@@ -122,6 +122,9 @@ async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopif
   await new Promise<void>((resolve, reject) => {
     const s = document.createElement('script');
     s.src = 'https://cdn.shopify.com/shopifycloud/app-bridge.js';
+    // Dynamically injected scripts default to async; App Bridge v4 errors
+    // out unless its tag is synchronous.
+    s.async = false;
     s.onload = () => resolve();
     s.onerror = () => reject(new Error('Shopify App Bridge failed to load'));
     document.head.appendChild(s);

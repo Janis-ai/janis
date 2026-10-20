@@ -306,6 +306,8 @@ export const AgentConfig = z.object({
         bodyTemplate: z.string().optional(),
         // mutating tools park as pending actions until a teammate decides
         approval: z.boolean().optional(),
+        // installed but switched off — stays configured, never reaches the model
+        disabled: z.boolean().optional(),
         // customer-record tool — args bind to the verified identity at runtime
         identity: z.boolean().optional(),
         // live data binding: a JSON result renders as an in-conversation
@@ -317,6 +319,8 @@ export const AgentConfig = z.object({
             title: z.string().optional(),
             link_label: z.string().optional(),
             select_label: z.string().optional(),
+            // shorter text ON the button; select_label stays the sent message
+            select_button: z.string().optional(),
             items: z.string().optional(),
             map: z.record(z.string(), z.string()).optional(),
             // fuzzy-result filter — drop rows not matching the query arg
@@ -839,6 +843,10 @@ export const AlertRule = z.object({
     group_ids: z.array(z.string()).optional(), // member_groups — roster members join the pool
     tag: z.string().optional(),
     enabled: z.boolean(),
+    // who the alert PAGES — 'workspace', 'pool' (everyone in the routing
+    // rotation), or a member id list (assignee is always included);
+    // absent = assignee only, workspace when unrouted
+    notify: z.union([z.literal('workspace'), z.literal('pool'), z.array(z.string())]).optional(),
   }),
   created_at: z.string(),
 });
@@ -1105,6 +1113,17 @@ export const StreamEvent = z.discriminatedUnion('type', [
   // A channel changed out-of-band (concierge update_channel — rename,
   // widget title) — open channel lists/details refetch.
   z.object({ type: z.literal('channel'), data: z.object({ id: z.string() }) }),
+  // Concierge select_agent — tells one user's open console to navigate to a
+  // page. user_id targets the session; agent_id drives the stream's
+  // visibility filter (scoped members who can't see the agent never get it).
+  z.object({
+    type: z.literal('navigate'),
+    data: z.object({
+      user_id: z.string(),
+      agent_id: z.string(),
+      path: z.string().regex(/^\//),
+    }),
+  }),
 ]);
 export type StreamEvent = z.infer<typeof StreamEvent>;
 

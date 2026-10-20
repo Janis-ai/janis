@@ -42,6 +42,7 @@ const CHANNEL_LABELS: Record<string, string> = {
   instagram: 'Instagram',
   whatsapp: 'WhatsApp',
   webchat: 'Bubble',
+  slack: 'Slack',
   email: 'Email',
   gmail: 'Gmail',
 };
@@ -49,6 +50,14 @@ const CHANNEL_LABELS: Record<string, string> = {
 export function channelLabel(kind?: string): string {
   if (!kind) return '';
   return CHANNEL_LABELS[kind] ?? kind;
+}
+
+/** What surface the conversation actually arrived on — concierge threads
+ * can ride the webchat channel but originate in Slack; the `surface` trait
+ * the ingress stamps is more honest than the transport channel kind. */
+export function surfaceLabel(p?: Pick<UserProfile, 'channel'> & { metadata?: Record<string, unknown> }): string {
+  const surface = p?.metadata?.surface;
+  return channelLabel(typeof surface === 'string' && surface ? surface : p?.channel);
 }
 
 /** Profile picture via the API proxy, falling back to an initial. */

@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, isNotNull, sql, type SQLWrapper } from 'drizzle-orm';
-import { friendlyName } from '@janis/shared';
+import { friendlyName, mathToUnicode } from '@janis/shared';
+import type { QuickReply } from '@janis/shared';
+import type { WidgetComponent } from './widgets.js';
 import type { Db } from '../db/client.js';
 import {
   agentMembers,
@@ -629,21 +631,37 @@ async function alertMention(
   db: Db,
   inst: Installation,
   conv: ConversationRow,
+  notify?: 'workspace' | string[],
 ): Promise<{ text: string; slackUserId: string | null; dmIds: string[] }> {
-  if (!conv.assigneeId) {
-    const members = await workspaceMembers(db, inst.workspaceId);
-    const ids = (
-      await Promise.all(members.map((m) => memberToSlackUser(db, inst, m.user.id)))
+  const members = await workspaceMembers(db, inst.workspaceId);
+  const resolve = async (ids: string[]) =>
+    (
+      await Promise.all(ids.map((id) => memberToSlackUser(db, inst, id)))
     ).filter((x): x is string => !!x);
-    if (ids.length && ids.length <= 8) {
+  const allIds = () => resolve(members.map((m) => m.user.id));
+
+  if (!conv.assigneeId) {
+    // Explicit notify lists always ping individually; the implicit workspace
+    // page falls back to <!channel> past 8 to keep cards readable.
+    const ids = Array.isArray(notify) ? await resolve(notify) : await allIds();
+    if (ids.length && (ids.length <= 8 || Array.isArray(notify))) {
       return { text: ids.map((id) => `<@${id}>`).join(' ') + ' ', slackUserId: null, dmIds: ids };
     }
     return { text: '<!channel> ', slackUserId: null, dmIds: [] };
   }
   const slackId = await memberToSlackUser(db, inst, conv.assigneeId);
+  // DM fan-out = the notify target, minus nothing — the assignee stays in an
+  // explicit list (they're paged, not just mentioned). No notify configured:
+  // the assignee alone was meant to be paged, but when they can't resolve to
+  // a Slack user that page would go nowhere — fall back to the workspace.
+  const dmIds = Array.isArray(notify)
+    ? await resolve(notify)
+    : notify === 'workspace' || !slackId
+      ? await allIds()
+      : [];
   return slackId
-    ? { text: `<@${slackId}> `, slackUserId: slackId, dmIds: [] }
-    : { text: '<!here> ', slackUserId: null, dmIds: [] };
+    ? { text: `<@${slackId}> `, slackUserId: slackId, dmIds }
+    : { text: '<!here> ', slackUserId: null, dmIds };
 }
 
 /**
@@ -866,11 +884,15 @@ export async function postSlackActionRequest(
       ],
     },
   ];
-  const posts: { channelId: string; ts: string }[] = [];
+  const posts: { channelId: string; ts: string; installationId?: string }[] = [];
   for (const t of threads) {
     const res = await postThreadMessage(db, t, { text, blocks });
     if (res.ok && res.ts) {
-      posts.push({ channelId: res.channel ?? t.slackThreads.channelId, ts: res.ts });
+      posts.push({
+        channelId: res.channel ?? t.slackThreads.channelId,
+        ts: res.ts,
+        installationId: t.installation.id,
+      });
       await markThreadReply(db, t.slackThreads.channelId, t.slackThreads.ts, res.ts);
     }
   }
@@ -889,24 +911,64 @@ export async function resolveSlackActionCards(
   approved: boolean,
   decidedByName: string,
 ): Promise<void> {
-  const posts = (action.slackPosts ?? []) as { channelId: string; ts: string }[];
+  const posts = (action.slackPosts ?? []) as {
+    channelId: string;
+    ts: string;
+    installationId?: string;
+  }[];
   if (!posts.length) return;
   const threads = await threadsForConversation(db, action.conversationId);
   const preview = action.result ? `\n\`\`\`${action.result.slice(0, 400)}\`\`\`` : '';
   const text = approved
     ? `:white_check_mark: *${decidedByName} approved* \`${action.toolName}\` — executed${preview}`
     : `:no_entry_sign: *${decidedByName} denied* \`${action.toolName}\``;
+  let wsInst: Installation | null | undefined;
+  const instCache = new Map<string, Installation | null>();
   for (const p of posts) {
     const t = threads.find((x) => x.slackThreads.channelId === p.channelId);
-    if (!t) continue;
-    const res = await callInChannel(t.installation, 'chat.update', {
+    // The posting install is the only one whose token can edit the card —
+    // a workspace can carry several team installs, and a sibling team's
+    // token gets channel_not_found on this team's DM. New posts stamp
+    // installationId at write time; old rows fall back to the thread's
+    // install, then to the (ambiguous) workspace install.
+    let inst = t?.installation;
+    if (!inst && p.installationId) {
+      if (!instCache.has(p.installationId)) {
+        const [row] = await db
+          .select()
+          .from(slackInstallations)
+          .where(eq(slackInstallations.id, p.installationId))
+          .limit(1);
+        instCache.set(p.installationId, row ?? null);
+      }
+      inst = instCache.get(p.installationId) ?? undefined;
+    }
+    // Concierge cards post into DMs/mention threads — those conversations
+    // have no slack_threads row, so the install resolves via the action's
+    // workspace instead.
+    if (!inst) {
+      if (wsInst === undefined) {
+        const [row] = await db
+          .select()
+          .from(slackInstallations)
+          .where(eq(slackInstallations.workspaceId, action.workspaceId))
+          .limit(1);
+        wsInst = row ?? null;
+      }
+      inst = wsInst ?? undefined;
+    }
+    if (!inst) continue;
+    const res = await callInChannel(inst, 'chat.update', {
       channel: p.channelId,
       ts: p.ts,
       text,
       blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }],
     }).catch(() => null);
-    if (res && !res.ok && deadChannelError(res.error)) {
-      await pruneDeadThreads(db, action.conversationId, p.channelId);
+    if (!res?.ok) {
+      console.error('slack action card update failed:', res?.error ?? 'no response', 'channel:', p.channelId);
+      if (res && deadChannelError(res.error) && t) {
+        await pruneDeadThreads(db, action.conversationId, p.channelId);
+      }
     }
   }
 }
@@ -972,13 +1034,14 @@ export async function postSlackAlert(
   conv: ConversationRow,
   agent: typeof agents.$inferSelect,
   alert: AlertRow,
+  opts: { notify?: 'workspace' | string[] } = {},
 ): Promise<void> {
   // Fan out to every configured destination — an agent can alert several
   // Slack workspaces/channels at once; each keeps its own thread anchor.
   const targets = await alertTargetsFor(db, agent);
   for (const t of targets) {
     if (!t.channelId) continue;
-    await postSlackAlertTo(db, conv, agent, alert, t.inst, t.channelId).catch((err) =>
+    await postSlackAlertTo(db, conv, agent, alert, t.inst, t.channelId, opts.notify).catch((err) =>
       console.error('slack alert post failed:', err),
     );
   }
@@ -991,6 +1054,7 @@ async function postSlackAlertTo(
   alert: AlertRow,
   inst: Installation,
   channelId: string,
+  notify?: 'workspace' | string[],
 ): Promise<void> {
   // Only this installation's threads — each destination anchors its own.
   const convThreads = async () =>
@@ -1001,8 +1065,10 @@ async function postSlackAlertTo(
   // @mention; if they can't be invited, DM a pointer instead. Unassigned →
   // every resolvable member gets an individual <@U> in the post plus a DM
   // (direct mentions can't be suppressed the way @channel can). Assigned-but-
-  // unresolvable → @here: the assignee is paged via Janis push/email anyway.
-  const { text: mention, slackUserId, dmIds } = await alertMention(db, inst, conv);
+  // unresolvable → @here plus DM fan-out to the notify list (or the whole
+  // workspace when the rule didn't set one) — a dead assignee must never
+  // swallow the page.
+  const { text: mention, slackUserId, dmIds } = await alertMention(db, inst, conv, notify);
   const dmTargets = new Set(dmIds);
   if (slackUserId && !(await ensureInAlertChannel(inst, slackUserId, channelId))) {
     dmTargets.add(slackUserId);
@@ -1102,6 +1168,7 @@ async function seedSlackThread(
       ovAvatarUrl: agentMembers.avatarUrl,
       ovShowIdentity: agentMembers.showIdentity,
       flags: messages.flags,
+      payload: messages.payload,
     })
     .from(messages)
     .leftJoin(users, eq(messages.authorId, users.id))
@@ -1118,7 +1185,6 @@ async function seedSlackThread(
   };
   const customerName = profile.name ?? friendlyName(conv.externalId);
   const avatar = profile.picture_url ? slackAvatarUrl(conv.id) : null;
-  const agentIcon = await agentIconFor(db, conv.id);
 
   let lastReplyTs: string | undefined;
   const [{ count }] = await db
@@ -1149,28 +1215,34 @@ async function seedSlackThread(
     );
     // Role suffixes keep same-named participants (e.g. agent and customer
     // both "Michael Nathanson") from collapsing into a single header.
-    const identity: { username?: string; icon_url?: string } = isSystemNote
+    const identity: SlackIdentity = isSystemNote
       ? {}
       : m.direction === 'in'
-        ? { username: `${customerName} (customer)`, icon_url: avatar ?? undefined }
+        ? {
+            username: `${customerName} (customer)`,
+            ...(avatar ? { icon_url: avatar } : { icon_emoji: PERSON_ICON_EMOJI }),
+          }
         : m.direction === 'human'
-          ? operatorIdentity(
-              agent.name,
-              {
-                name: m.author,
-                // Per-agent override (agent_members) wins over the global
-                // profile — same precedence the customer-facing widget uses.
-                displayName: m.ovDisplayName || m.authorDisplayName,
-                avatarUrl: m.ovAvatarUrl ?? m.authorAvatarUrl,
-                showIdentity: m.ovShowIdentity ?? m.authorShowIdentity,
-              },
-              agentIcon,
-            )
-          : { username: `${agent.name} (agent)`, icon_url: agentIcon };
+          ? operatorIdentity(agent.name, {
+              name: m.author,
+              // Per-agent override (agent_members) wins over the global
+              // profile — same precedence the customer-facing widget uses.
+              displayName: m.ovDisplayName || m.authorDisplayName,
+              avatarUrl: m.ovAvatarUrl ?? m.authorAvatarUrl,
+              showIdentity: m.ovShowIdentity ?? m.authorShowIdentity,
+            })
+          : { username: `${agent.name} (agent)`, icon_emoji: AGENT_ICON_EMOJI };
+    const p = (m.payload ?? {}) as {
+      widgets?: WidgetComponent[];
+      quick_replies?: QuickReply[];
+    };
+    const blocks = isSystemNote ? [] : slackWidgetBlocks(p.widgets ?? [], p.quick_replies ?? []);
+    const mrkdwn = slackMrkdwn(m.text);
     const res2 = await slackApi<{ ts?: string }>(inst.botToken, 'chat.postMessage', {
       channel,
       thread_ts: threadTs,
-      text: isSystemNote ? `_${m.text}_` : m.text,
+      text: isSystemNote ? `_${mrkdwn}_` : mrkdwn,
+      ...(blocks.length ? { blocks } : {}),
       ...identity,
     });
     if (res2.ok && res2.ts) {
@@ -1180,7 +1252,8 @@ async function seedSlackThread(
       const res3 = await slackApi<{ ts?: string }>(inst.botToken, 'chat.postMessage', {
         channel,
         thread_ts: threadTs,
-        text: `*${identity.username}:* ${m.text}`,
+        text: `*${identity.username}:* ${mrkdwn}`,
+        ...(blocks.length ? { blocks } : {}),
       });
       if (res3.ok && res3.ts) lastReplyTs = res3.ts;
     }
@@ -1242,10 +1315,19 @@ export async function updateSlackAlert(
   }
 }
 
+/** Sender attribution for a transcript line. Slack honors icon_url or
+ * icon_emoji (either needs chat:write.customize); we send exactly one —
+ * pass an emoji as the fallback, not alongside the url. */
+type SlackIdentity = { username?: string; icon_url?: string; icon_emoji?: string };
+
+const AGENT_ICON_EMOJI = ':robot_face:';
+const PERSON_ICON_EMOJI = ':bust_in_silhouette:';
+
 /** Operator identity for transcript rendering — honors their show_identity
  * pref: their profile display name + avatar when they opted to show them to
- * customers, the agent's masquerade when not. Avatar falls back to the
- * agent icon so the thread keeps a consistent face. */
+ * customers, the agent's masquerade (name + robot face) when not. An avatar-
+ * less visible operator falls back to a bust silhouette rather than the
+ * Janis app icon. */
 function operatorIdentity(
   agentName: string,
   u: {
@@ -1254,32 +1336,181 @@ function operatorIdentity(
     avatarUrl?: string | null;
     showIdentity?: boolean | null;
   } | null | undefined,
-  agentIcon: string | undefined,
-): { username: string; icon_url?: string } {
+): SlackIdentity {
   const name =
     u?.showIdentity === false
       ? null
       : (u?.displayName ?? u?.name?.split(' ')[0] ?? u?.name ?? null);
-  if (!name) return { username: `${agentName} (operator)`, icon_url: agentIcon };
+  if (!name) return { username: `${agentName} (operator)`, icon_emoji: AGENT_ICON_EMOJI };
   return {
     username: `${name} (operator)`,
-    icon_url: u?.avatarUrl ? `${env.apiOrigin}${u.avatarUrl}` : agentIcon,
+    ...(u?.avatarUrl
+      ? { icon_url: `${env.apiOrigin}${u.avatarUrl}` }
+      : { icon_emoji: PERSON_ICON_EMOJI }),
   };
 }
 
-/** The agent's face for reposted/mirrored messages — the conversation's
- * channel logo (the same image the widget shows as the agent avatar),
- * absolutized for Slack. */
-async function agentIconFor(db: Db, conversationId: string): Promise<string | undefined> {
-  const [bind] = await db
-    .select({ creds: channels.credentials })
-    .from(channelBindings)
-    .innerJoin(channels, eq(channelBindings.channelId, channels.id))
-    .where(eq(channelBindings.conversationId, conversationId))
-    .limit(1);
-  const logo = (bind?.creds as { logo_url?: string } | null)?.logo_url;
-  if (!logo) return undefined;
-  return /^https?:\/\//.test(logo) ? logo : `${env.apiOrigin}${logo}`;
+/** Canonical transcript markdown → Slack mrkdwn. Sibling of formatForChannel
+ * (channels.ts) — Slack is the one destination that renders richer than
+ * plain text, so instead of stripping we translate: **b**→*b*, *i*→_i_,
+ * ~~s~~→~s~, [label](url)→<url|label>. `&<>` escape first — Slack reads
+ * them as markup. Math goes Unicode like every other text channel. Applied
+ * only to stored message text — composed strings (mentions, permalinks,
+ * alert blocks) are authored in mrkdwn already. */
+const SLACK_FMT_RE =
+  /\*\*([^\s*](?:[^*]*[^\s*])?)\*\*|\*([^\s*](?:[^*]*[^\s*])?)\*|~~([^\s~](?:[^~]*[^\s~])?)~~|`([^`\n]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
+
+export function slackMrkdwn(text: string): string {
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return mathToUnicode(escaped).replace(
+    SLACK_FMT_RE,
+    (_m, bold, ital, strike, code, label, url) => {
+      if (bold != null) return `*${bold}*`;
+      if (ital != null) return `_${ital}_`;
+      if (strike != null) return `~${strike}~`;
+      if (code != null) return `\`${code}\``;
+      return `<${url}|${label}>`;
+    },
+  );
+}
+
+/** Slack mrkdwn → canonical transcript markdown — the inverse of
+ * slackMrkdwn, applied to thread replies so an operator's *bold* stores
+ * as **bold** and renders correctly in the console (and re-translates
+ * cleanly on delivery). Slack encodes &<>; unescape last so link targets
+ * come through intact. <@U…> resolves to a member's name when we know
+ * them — a mention can't reach the customer meaningfully anyway. */
+export async function slackToCanonical(
+  db: Db,
+  inst: Installation,
+  text: string,
+): Promise<string> {
+  const ids = [...new Set([...text.matchAll(/<@([UW][A-Z0-9]+)>/g)].map((m) => m[1]))];
+  const names = new Map<string, string>();
+  for (const id of ids) {
+    const member = await slackUserToMember(db, inst, id).catch(() => null);
+    names.set(id, member?.name ?? 'teammate');
+  }
+  let out = text.replace(/<@[UW][A-Z0-9]+>/g, (m) => `@${names.get(m.slice(2, -1)) ?? 'teammate'}`);
+  out = out.replace(/<(https?:\/\/[^|>\s]+)\|([^>]+)>/g, '[$2]($1)');
+  out = out.replace(/<(https?:\/\/[^>\s]+)>/g, '$1');
+  out = out.replace(/<!(here|channel|everyone)>/g, '@$1');
+  out = out.replace(/&gt;/g, '>').replace(/&lt;/g, '<').replace(/&amp;/g, '&');
+  // Fenced blocks collapse to inline code — canonical has no block form.
+  out = out.replace(/```([^`]+)```/gs, (_m, c: string) => `\`${c.trim()}\``);
+  return out.replace(
+    /\*([^\s*](?:[^*]*[^\s*])?)\*|_([^\s_](?:[^_]*[^\s_])?)_|~([^\s~](?:[^~]*[^\s~])?)~/g,
+    (_m, b, i, s) => (b != null ? `**${b}**` : i != null ? `*${i}*` : `~~${s}~~`),
+  );
+}
+
+/** Read-only Block Kit rendering of a message's interactive payload —
+ * the thread conveys what the customer actually saw: carousel cards as
+ * image+text sections, pickers as lists, suggestions as a context line.
+ * Deliberately not tappable buttons — an operator clicking a customer's
+ * choice in Slack shouldn't speak for them. */
+export function slackWidgetBlocks(
+  widgets: WidgetComponent[],
+  quickReplies: QuickReply[] = [],
+): Record<string, unknown>[] {
+  const blocks: Record<string, unknown>[] = [];
+  const section = (text: string, accessory?: Record<string, unknown>) => ({
+    type: 'section',
+    text: { type: 'mrkdwn', text },
+    ...(accessory ? { accessory } : {}),
+  });
+  const context = (text: string) => ({
+    type: 'context',
+    elements: [{ type: 'mrkdwn', text }],
+  });
+  for (const w of widgets) {
+    if (w.type === 'cards') {
+      w.items.slice(0, 10).forEach((item, i) => {
+        const bits = [
+          [item.subtitle, item.options].filter(Boolean).join(' · ') || null,
+          (item.compare_at ? `~${item.compare_at}~ ` : '') + (item.price ?? '') +
+            (item.stock ? ` (${item.stock})` : '') || null,
+          item.cart_variant_id ? 'Add to cart button' : null,
+          item.select_label ? `tap: “${item.select_label}”` : null,
+        ].filter(Boolean);
+        const imageUrl = item.image
+          ? item.image.startsWith('http')
+            ? item.image
+            : `${env.apiOrigin}${item.image}`
+          : null;
+        // A link becomes a real accessory button — url buttons navigate
+        // without speaking for anyone, so they're safe on transcript
+        // mirrors too (the click payload no-ops on an unknown action_id).
+        blocks.push(
+          section(
+            `*${slackMrkdwn(item.title)}*${bits.length ? `\n${bits.join(' · ')}` : ''}`,
+            item.link
+              ? {
+                  type: 'button',
+                  action_id: `janis_card_link_${i}`,
+                  text: { type: 'plain_text', text: (item.link_label ?? 'View').slice(0, 75) },
+                  url: item.link,
+                }
+              : imageUrl
+                ? { type: 'image', image_url: imageUrl, alt_text: item.title }
+                : undefined,
+          ),
+        );
+        // Both a link and an image? The accessory slot is taken by the
+        // button — give the image its own block instead of dropping it.
+        if (item.link && imageUrl) {
+          blocks.push({ type: 'image', image_url: imageUrl, alt_text: item.title });
+        }
+      });
+      if (w.total && w.total > w.items.length) {
+        blocks.push(context(`_showing ${w.items.length} of ${w.total}_`));
+      }
+    } else if (w.type === 'options') {
+      blocks.push(
+        section(
+          `${w.title ? `*${slackMrkdwn(w.title)}*\n` : ''}${w.items
+            .map((i) => `• ${slackMrkdwn(i.label)}${i.description ? ` — ${slackMrkdwn(i.description)}` : ''}`)
+            .join('\n')}`,
+        ),
+      );
+    } else if (w.type === 'form') {
+      blocks.push(
+        context(
+          `_:clipboard: Form${w.title ? ` — ${slackMrkdwn(w.title)}` : ''}: ${w.fields.map((f) => f.label).join(', ')}_`,
+        ),
+      );
+    } else if (w.type === 'status') {
+      const icon = (s: unknown) =>
+        s === 'done' ? ':heavy_check_mark:' : s === 'current' ? ':arrow_forward:' : ':white_circle:';
+      blocks.push(
+        section(
+          `${w.title ? `*${slackMrkdwn(w.title)}*\n` : ''}${w.steps
+            .map((s) => `${icon(s.state)} ${slackMrkdwn(s.label)}${s.note ? ` — ${slackMrkdwn(s.note)}` : ''}`)
+            .join('\n')}`,
+        ),
+      );
+    } else if (w.type === 'receipt') {
+      const rows = [...w.rows, ...(w.summary ?? [])].map((r) => `${r.label}: ${r.value}`);
+      blocks.push(
+        section(
+          `${w.title ? `*${slackMrkdwn(w.title)}*\n` : ''}${rows.join('\n')}${
+            w.total ? `\n*${w.total.label}: ${w.total.value}*` : ''
+          }`,
+        ),
+      );
+    } else if (w.type === 'cart') {
+      blocks.push(
+        context('_:shopping_trolley: live cart — renders items + checkout in the customer’s widget_'),
+      );
+    }
+  }
+  if (quickReplies.length) {
+    const labels = quickReplies.map((q) =>
+      typeof q === 'string' ? q : q.type === 'email' ? 'share email' : 'share phone',
+    );
+    blocks.push(context(`_suggested replies: ${labels.join(' · ')}_`));
+  }
+  return blocks;
 }
 
 /** Mirror a console-originated message into the conversation's Slack threads.
@@ -1292,14 +1523,18 @@ export async function mirrorToSlack(
   text: string,
   opts: {
     direction?: 'in' | 'out' | 'human';
-    identity?: { username?: string; icon_url?: string };
+    identity?: SlackIdentity;
     operator?: UserRow; // direction 'human' — resolves show_identity prefs
+    widgets?: WidgetComponent[];
+    quickReplies?: QuickReply[];
   } = {},
 ): Promise<void> {
   const threads = await threadsForConversation(db, conversationId);
   if (!threads.length) return;
+  const mrkdwn = slackMrkdwn(text);
+  const blocks = slackWidgetBlocks(opts.widgets ?? [], opts.quickReplies ?? []);
 
-  let identity: { username?: string; icon_url?: string } = opts.identity ?? {};
+  let identity: SlackIdentity = opts.identity ?? {};
   if (!opts.identity && opts.direction) {
     const [row] = await db
       .select({ conv: conversations, agent: agents })
@@ -1313,14 +1548,15 @@ export async function mirrorToSlack(
         picture_url?: string;
       };
       if (opts.direction === 'in') {
+        const avatar = profile.picture_url ? slackAvatarUrl(conversationId) : null;
         identity = {
           username: `${profile.name ?? friendlyName(row.conv.externalId)} (customer)`,
-          icon_url: profile.picture_url ? slackAvatarUrl(conversationId) ?? undefined : undefined,
+          ...(avatar ? { icon_url: avatar } : { icon_emoji: PERSON_ICON_EMOJI }),
         };
       } else if (opts.direction === 'out') {
         identity = {
           username: `${row.agent.name} (agent)`,
-          icon_url: await agentIconFor(db, conversationId),
+          icon_emoji: AGENT_ICON_EMOJI,
         };
       } else if (opts.direction === 'human') {
         // Operators who opted to show their identity appear as themselves;
@@ -1349,22 +1585,25 @@ export async function mirrorToSlack(
             };
           }
         }
-        identity = operatorIdentity(
-          row.agent.name,
-          op,
-          await agentIconFor(db, conversationId),
-        );
+        identity = operatorIdentity(row.agent.name, op);
       }
     }
   }
 
   for (const t of threads) {
-    const res = await postThreadMessage(db, t, { text, ...identity });
+    const res = await postThreadMessage(db, t, {
+      text: mrkdwn,
+      ...(blocks.length ? { blocks } : {}),
+      ...identity,
+    });
     if (res.ok && res.ts) {
       await markThreadReply(db, t.slackThreads.channelId, t.slackThreads.ts, res.ts);
     } else if (!res.ok && !deadChannelError(res.error)) {
       // Install predates chat:write.customize — keep the labeled text form.
-      const res2 = await postThreadMessage(db, t, { text: `${label} ${text}` });
+      const res2 = await postThreadMessage(db, t, {
+        text: `${label} ${mrkdwn}`,
+        ...(blocks.length ? { blocks } : {}),
+      });
       if (res2.ok && res2.ts) {
         await markThreadReply(db, t.slackThreads.channelId, t.slackThreads.ts, res2.ts);
       }

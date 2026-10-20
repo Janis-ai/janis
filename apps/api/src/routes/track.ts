@@ -11,6 +11,7 @@ const EVENTS = z.enum([
   'discovery_card_dismissed',
   'tab_view',
   'onboarding_step_click',
+  'signup_attribution',
 ]);
 
 /** POST /api/track — session-authed activation events. Fire-and-forget from

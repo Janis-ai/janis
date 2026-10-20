@@ -2,6 +2,8 @@ import dns from 'node:dns/promises';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { knowledgeFiles } from '../db/schema.js';
+import { fireEventWebhook } from './eventWebhook.js';
+import { decryptSecret } from './secrets.js';
 import { fetchShopifySourceText } from './shopifySync.js';
 
 const MAX_CHARS = 80_000;
@@ -84,16 +86,26 @@ export async function assertPublicUrl(raw: string): Promise<void> {
 }
 
 /** Guarded fetch — every redirect hop is re-checked before it is followed,
- *  so a public URL can't 302 into an internal one. Returns the final
- *  response and the URL it actually came from. */
+ *  so a public URL can't 302 into an internal one. `authHeaders` (per-source
+ *  credentials) are only sent while the hop stays on the origin host —
+ *  a cross-host redirect drops them so a public page can't bounce the
+ *  crawler into exfiltrating the token. Returns the final response and
+ *  the URL it actually came from. */
 export async function fetchPublic(
   url: string,
   init?: RequestInit,
+  authHeaders?: Record<string, string>,
 ): Promise<{ res: Response; finalUrl: string }> {
   let current = url;
+  const originHost = new URL(url).host;
   for (let hop = 0; ; hop++) {
     await assertPublicUrl(current);
-    const res = await fetch(current, { ...init, redirect: 'manual' });
+    const sameHost = new URL(current).host === originHost;
+    const headers =
+      authHeaders && sameHost
+        ? { ...(init?.headers as Record<string, string> | undefined), ...authHeaders }
+        : init?.headers;
+    const res = await fetch(current, { ...init, headers, redirect: 'manual' });
     if (![301, 302, 303, 307, 308].includes(res.status)) return { res, finalUrl: current };
     const loc = res.headers.get('location');
     await res.body?.cancel().catch(() => {});
@@ -186,18 +198,25 @@ export function normalizeSourceUrl(raw: string): string {
   return raw;
 }
 
-/** Fetch a URL and return its knowledge text. Throws on network/HTTP errors. */
+/** Fetch a URL and return its knowledge text. Throws on network/HTTP errors.
+ *  `headers` carries per-source auth (Notion tokens, private docs) —
+ *  operator-supplied on the source row, decrypted just before the fetch. */
 export async function fetchUrlText(
   url: string,
+  opts: { headers?: Record<string, string> } = {},
 ): Promise<{ text: string; sizeBytes: number; imageUrl?: string; finalUrl: string }> {
-  const { res, finalUrl } = await fetchPublic(url, {
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-    headers: {
-      // A polite crawler identity — some hosts block the default UA.
-      'user-agent': 'JanisKB/1.0 (+knowledge refresh)',
-      accept: 'text/html,text/plain,text/markdown,application/json;q=0.9,*/*;q=0.5',
+  const { res, finalUrl } = await fetchPublic(
+    url,
+    {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: {
+        // A polite crawler identity — some hosts block the default UA.
+        'user-agent': 'JanisKB/1.0 (+knowledge refresh)',
+        accept: 'text/html,text/plain,text/markdown,application/json;q=0.9,*/*;q=0.5',
+      },
     },
-  });
+    opts.headers,
+  );
   if (!res.ok) throw new Error(`fetch failed: HTTP ${res.status}`);
   const raw = await res.text();
   const type = (res.headers.get('content-type') ?? '').toLowerCase();
@@ -256,7 +275,16 @@ export async function refreshKnowledgeSource(
 ): Promise<boolean> {
   const now = new Date();
   const intervalMs = (file.refreshHours ?? 24) * 3600_000;
+  const sourceEvent = (event: string, extra: Record<string, unknown> = {}) =>
+    fireEventWebhook(db, file.workspaceId, event, {
+      fileId: file.id,
+      agentId: file.agentId,
+      name: file.name,
+      sourceUrl: file.sourceUrl,
+      ...extra,
+    });
   const degrade = async (reason: string) => {
+    const entersDegraded = !!file.text && file.status !== 'degraded';
     await db
       .update(knowledgeFiles)
       .set({
@@ -266,22 +294,37 @@ export async function refreshKnowledgeSource(
         nextFetchAt: new Date(now.getTime() + intervalMs),
       })
       .where(eq(knowledgeFiles.id, file.id));
+    // Page the workspace's event hook on the ready→degraded transition only —
+    // repeated failed re-crawls of an already-degraded row don't re-page.
+    if (entersDegraded) sourceEvent('knowledge_source.degraded', { reason });
     return false;
   };
   try {
     // shopify://catalog|policies rows render from the bound shop's Admin
     // API instead of an HTTP crawl — same update/degrade contract either
     // way (a wiped catalog still trips the shrink guard like page rot).
+    // Authenticated sources decrypt their headers just for the fetch.
+    let sourceHeaders: Record<string, string> | undefined;
+    if (file.sourceHeadersEnc) {
+      try {
+        sourceHeaders = JSON.parse(decryptSecret(file.sourceHeadersEnc));
+      } catch {
+        sourceHeaders = undefined;
+      }
+    }
     const { text, sizeBytes, imageUrl, finalUrl } = file.sourceUrl!.startsWith('shopify://')
       ? await fetchShopifySourceText(db, file)
-      : await fetchUrlText(file.sourceUrl!);
+      : await fetchUrlText(file.sourceUrl!, { headers: sourceHeaders });
     const rot = rotReason(file.text ?? '', file.sourceUrl!, text, finalUrl);
     if (rot) return degrade(rot);
+    // No-change crawls keep the last-good row but skip the text/size
+    // rewrite — textChangedAt stays put so "when did this doc actually
+    // change" survives N identical crawls.
+    const unchanged = text === (file.text ?? '');
     await db
       .update(knowledgeFiles)
       .set({
-        text,
-        sizeBytes,
+        ...(unchanged ? {} : { text, sizeBytes, textChangedAt: now }),
         imageUrl: imageUrl ?? null,
         status: 'ready',
         error: null,
@@ -289,6 +332,7 @@ export async function refreshKnowledgeSource(
         nextFetchAt: new Date(now.getTime() + intervalMs),
       })
       .where(eq(knowledgeFiles.id, file.id));
+    if (file.status === 'degraded') sourceEvent('knowledge_source.recovered');
     return true;
   } catch (err) {
     return degrade(`last fetch failed — serving previous text (${err instanceof Error ? err.message : 'fetch failed'})`);

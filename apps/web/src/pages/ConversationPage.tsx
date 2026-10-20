@@ -5,7 +5,7 @@ import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
-import { ArgsRows, Avatar, channelLabel, displayName, fmtTime, mdSpans } from '../components/bits';
+import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, surfaceLabel } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
@@ -52,12 +52,20 @@ export default function ConversationPage() {
   const jumpMsg = searchParams.get('msg'); // search-result deep link
   const returnScroll = searchParams.get('scroll'); // agent-page breadcrumb round-trip
   const { data, error: loadError } = useConversation(id);
+  // A merged conversation (visitor adoption) returns the survivor with
+  // merged_from set — swap the URL to the surviving id silently.
+  useEffect(() => {
+    if (data?.merged_from && data.conversation.id !== id) {
+      navigate(`/conversations/${data.conversation.id}`, { replace: true });
+    }
+  }, [data, id, navigate]);
   usePageTitle(data ? displayName(data.conversation) : 'Conversation');
   const { data: agents } = useAgents();
   const { data: users } = useUsers();
   const { data: me } = useMe();
   const [draft, setDraft] = useState('');
   const [sendAs, setSendAs] = useState<'human' | 'agent' | 'note' | 'teach'>('human');
+  const [wsSwitch, setWsSwitch] = useState<'idle' | 'trying' | 'failed'>('idle');
   const [error, setError] = useState('');
   const [convQ, setConvQ] = useState('');
   const [convHits, setConvHits] = useState<Message[] | null>(null);
@@ -71,8 +79,9 @@ export default function ConversationPage() {
   // Returning via the agent-page breadcrumb restores scroll — disarm the
   // bottom-stick before the snap effect below can run.
   if (returnScroll) stickRef.current = false;
-  const snapToBottom = (behavior: ScrollBehavior = 'auto') => {
-    if (stickRef.current) bottomRef.current?.scrollIntoView({ behavior });
+  const snapToBottom = () => {
+    const el = transcriptRef.current;
+    if (stickRef.current && el) el.scrollTop = el.scrollHeight;
   };
 
   // Optimistic outbound entries + which one currently owns the receipt.
@@ -162,14 +171,17 @@ export default function ConversationPage() {
   // scroll smoothly. The mount effect runs before the fetch resolves, so
   // don't record the snap until messages actually exist — otherwise the real
   // first paint is treated as incremental and smooth-scrolls the whole list.
-  const snappedFor = useRef('');
-  useEffect(() => {
-    if (!data?.messages.length) return;
-    const initial = snappedFor.current !== id;
-    snappedFor.current = id;
-    // jump windows clear stickRef, so this is a no-op until "Jump to latest"
-    snapToBottom(initial ? 'auto' : 'smooth');
-  }, [data?.messages.length, outbox.length, visitorTyping, agentTyping, id]);
+  // Re-snap on EVERY commit while pinned, not just when the dep list changes:
+  // the messages page is capped server-side (PAGE=100), so once full a new
+  // arrival rotates the window without changing length, and bubbles keep
+  // growing a render after the text lands (verdict box, embeds). Skips when
+  // stickRef is off (scrolled up / jump window) or a prepend is holding the
+  // scroll position. Same pattern as AskJanis, for the same reason.
+  useLayoutEffect(() => {
+    const el = transcriptRef.current;
+    if (!el || !data?.messages.length || !stickRef.current || pendingAdjust.current) return;
+    el.scrollTop = el.scrollHeight;
+  });
 
   // ?scroll=<px> return trip — restore the transcript position once the
   // messages render, then drop the param so refetches don't re-pin it.
@@ -654,7 +666,47 @@ export default function ConversationPage() {
     }
   };
 
+  // A 404 on a deep link usually means the conversation lives in another
+  // workspace the user belongs to (alert emails point here regardless of
+  // the session's active workspace). Ask the server to move the session to
+  // the owning workspace — it 404s unless the user could see this
+  // conversation there — then reload the same URL under it.
+  useEffect(() => {
+    if (
+      !(loadError instanceof ApiError) ||
+      loadError.status !== 404 ||
+      wsSwitch !== 'idle' ||
+      !id
+    ) {
+      return;
+    }
+    setWsSwitch('trying');
+    void api('/auth/switch', {
+      method: 'POST',
+      body: JSON.stringify({ for_conversation: id }),
+    })
+      .then((r) => {
+        const res = r as { ok?: boolean; unchanged?: boolean };
+        // unchanged = the conv is already in the active workspace and the
+        // 404 is real — don't reload-loop.
+        if (!res.ok || res.unchanged) {
+          setWsSwitch('failed');
+          return;
+        }
+        // Each workspace remembers its own agent — nothing to clear; the
+        // destination workspace restores whatever was selected there last.
+        qc.clear();
+        window.location.reload();
+      })
+      .catch(() => setWsSwitch('failed'));
+  }, [loadError, wsSwitch, id, qc]);
+
   if (loadError instanceof ApiError && loadError.status === 404) {
+    if (wsSwitch !== 'failed') {
+      // Deep link into another workspace (alert emails) — the switch attempt
+      // is in flight (or hasn't started); hold the loading state.
+      return <div className="muted">Loading conversation…</div>;
+    }
     return (
       <div className="muted">
         Conversation not found. <Link to="/conversations">Back to conversations</Link>
@@ -1497,7 +1549,7 @@ export default function ConversationPage() {
             {(p.channel || p.channel_name) && (
               <div>
                 <strong>Channel:</strong>{' '}
-                <span className="badge active">{channelLabel(p.channel)}</span>
+                <span className="badge active">{surfaceLabel(p)}</span>
                 {p.channel_name ? ` ${p.channel_name}` : ''}
               </div>
             )}

@@ -2,9 +2,9 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
-import { useConversations, useAgents, useSearch, useViews } from '../api/hooks';
+import { useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
-import { Avatar, channelLabel, displayName, Empty, Md, StateBadge, timeAgo } from '../components/bits';
+import { Avatar, displayName, Empty, Md, StateBadge, surfaceLabel, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
 import { Bot, Cog, Headset, ListFilter, Moon, Save, Star, User, X } from 'lucide-react';
@@ -157,7 +157,7 @@ function ConvRow({
           {agentName && <span className="agent-tag">{agentName}</span>}
           {c.user_profile?.channel && (
             <span className="channel-tag">
-              {channelLabel(c.user_profile.channel)}
+              {surfaceLabel(c.user_profile)}
               {/* the page/account — disambiguates same-person-different-page
                   PSID conversations that otherwise render identically */}
               {c.user_profile.channel_name && (
@@ -213,6 +213,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   // The agent dimension IS app context, not a local filter: on a scoped
   // route it's the URL agent; on /conversations it's the persisted context.
   const ctxAgent = useContextAgent();
+  const wsId = useMe().data?.workspace?.id;
   const agentId = scopeAgent ?? ctxAgent ?? '';
   const inboxBase = agentId ? `/agents/${agentId}/inbox` : '/conversations';
   // Deep link: /conversations?agent=<id> means "inside that agent" —
@@ -228,7 +229,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     }
     const rest = new URLSearchParams(params);
     rest.delete('agent');
-    setLastAgent(a);
+    if (wsId) setLastAgent(a, wsId);
     navigate(`/agents/${a}/inbox${rest.size ? `?${rest}` : ''}`, { replace: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -300,10 +301,10 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     // A view's agent dimension is context, not a filter: one that names an
     // agent moves into it, one that doesn't is workspace-wide.
     if (f.agent_id) {
-      setLastAgent(f.agent_id);
+      if (wsId) setLastAgent(f.agent_id, wsId);
       if (scopeAgent !== f.agent_id) navigate(`/agents/${f.agent_id}/inbox`);
     } else {
-      clearLastAgent();
+      if (wsId) clearLastAgent(wsId);
       if (scopeAgent) navigate('/conversations');
     }
     setMine(f.assignee === 'me');

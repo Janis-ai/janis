@@ -4,10 +4,10 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
-import { identityBlockReason } from './toolExec.js';
+import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { identityBlockReason, type ToolDef } from './toolExec.js';
 import { env } from '../env.js';
 import { extractWidgets } from './widgets.js';
 import { newestInboundIsPending } from './convLock.js';
@@ -594,6 +594,16 @@ describe('stripEscalationClaims', () => {
       'Someone from our team will be in touch soon.',
       "I'm connecting you with a human agent now.",
       'We can escalate this to a representative for you.',
+      // prod incident (conv 1fb291f8): concierge promised "flagged + a human
+      // within 24 hours" twice with no [HANDOFF] tag — past-tense completion
+      // claims, review verbs, and pronoun subjects all slipped the regex.
+      "I've ensured your request is flagged.",
+      'A human teammate will be reviewing your account access.',
+      'They will follow up with you right here in this thread within 24 hours.',
+      'I have already flagged this for our team to review.',
+      'They have been notified of your request.',
+      'A ticket has been created for your issue.',
+      'Your case has been escalated to the support team.',
     ]) {
       expect(stripEscalationClaims(s).text).toBe('');
     }
@@ -623,6 +633,62 @@ describe('stripEscalationClaims', () => {
     );
     expect(r.stripped).toBe(1);
     expect(r.text).toBe('Here are your plans:\n- Free\n- Pro');
+  });
+});
+
+describe('HUMAN_ASK', () => {
+  it('matches explicit asks — including the bare "human" from prod', () => {
+    for (const s of [
+      'human',
+      'human please',
+      'I want to talk to a real person',
+      'can I speak to an agent?',
+      'connect me with someone',
+      'get me a live operator',
+      'customer service',
+    ]) {
+      expect(HUMAN_ASK.test(s), s).toBe(true);
+    }
+  });
+
+  it('does not fire on ordinary messages', () => {
+    for (const s of [
+      'where is my order?',
+      'the tracking says delivered but nothing arrived',
+      'do you ship to Canada?',
+      'thanks, that fixed it',
+    ]) {
+      expect(HUMAN_ASK.test(s), s).toBe(false);
+    }
+  });
+});
+
+describe('OFFER_QUESTION', () => {
+  it('matches offer-question phrasings', () => {
+    for (const s of [
+      'Want me to get a human teammate to take a look with you?',
+      'Would you like me to bring in a human teammate?',
+      'Shall I escalate this to the support team?',
+      'Do you want to talk to a real person?',
+      'Should I get a human?',
+      'Want a human?',
+      'Can I connect you with an agent?',
+    ]) {
+      expect(OFFER_QUESTION.test(s), s).toBe(true);
+    }
+  });
+
+  it('leaves ordinary questions alone', () => {
+    for (const s of [
+      'Can I help you with anything else?',
+      'Do you have the model number?',
+      'Would 2pm work for your appointment?',
+      'What size do you need?',
+      'Did that fix it?',
+      'How can I check my order status?',
+    ]) {
+      expect(OFFER_QUESTION.test(s), s).toBe(false);
+    }
   });
 });
 
@@ -948,6 +1014,164 @@ describe('repairCardImages', () => {
     const w = [card([{ title: 'Designed', link: DOC_URL, image: 'https://assets.example/hero.png' }])];
     repairCardImages(w, docs, [], new Set(w));
     expect(w[0].items[0]).toMatchObject({ image: 'https://assets.example/hero.png' });
+  });
+
+  describe('index-page cards', () => {
+    // The prod shape: every card links to the listings index, so all three
+    // inherit the index og:image. Titles are editorial while doc names are
+    // address slugs — matching has to happen in doc text.
+    const INDEX = 'https://site.example/properties/sale';
+    const INDEX_IMG = 'https://cdn.example/index.jpg';
+    const indexDocs = [
+      {
+        name: INDEX,
+        text: `Image: ${INDEX_IMG}\nCurrent listings: Bayview Ridge Estate — Life in Lawrence Park — Rosedale Reimagined.`,
+      },
+      {
+        name: 'https://site.example/properties/95-bayview-ridge',
+        text: 'Image: https://cdn.example/bayview.jpg\nBayview Ridge Estate — 3 beds on the ravine.',
+      },
+      {
+        name: 'https://site.example/properties/10blythdalerd',
+        text: 'Image: https://cdn.example/blyth.jpg\nLife in Lawrence Park — renovated throughout.',
+      },
+      {
+        name: 'https://site.example/properties/149roxboroughste',
+        text: 'Image: https://cdn.example/rosedale.jpg\nRosedale Reimagined — south garden.',
+      },
+    ];
+
+    it('gives each card its own listing image when titles match doc text', () => {
+      const w = [
+        card([
+          { title: 'Bayview Ridge Estate', link: INDEX, image: INDEX_IMG },
+          { title: 'Life in Lawrence Park', link: INDEX, image: INDEX_IMG },
+          { title: 'Rosedale Reimagined', link: INDEX, image: INDEX_IMG },
+        ]),
+      ];
+      repairCardImages(w, indexDocs, [INDEX_IMG]);
+      const imgs = w[0].items.map((i: { image?: string }) => i.image);
+      expect(imgs).toEqual([
+        'https://cdn.example/bayview.jpg',
+        'https://cdn.example/blyth.jpg',
+        'https://cdn.example/rosedale.jpg',
+      ]);
+    });
+
+    it('relinks a shared-index card to the doc its title names', () => {
+      const w = [
+        card([
+          { title: 'Bayview Ridge Estate', link: INDEX, image: INDEX_IMG },
+          { title: 'Life in Lawrence Park', image: INDEX_IMG },
+        ]),
+      ];
+      repairCardImages(w, indexDocs, [INDEX_IMG]);
+      const [a, b] = w[0].items as { link?: string }[];
+      expect(a.link).toBe('https://site.example/properties/95-bayview-ridge');
+      // No link emitted at all → the title match supplies one.
+      expect(b.link).toBe('https://site.example/properties/10blythdalerd');
+    });
+
+    it('leaves a link outside the doc set alone', () => {
+      const w = [
+        card([
+          {
+            title: 'Bayview Ridge Estate',
+            link: 'https://calendly.example/tour',
+            image: INDEX_IMG,
+          },
+        ]),
+      ];
+      repairCardImages(w, indexDocs, [INDEX_IMG]);
+      expect(w[0].items[0]).toMatchObject({
+        link: 'https://calendly.example/tour',
+        image: 'https://cdn.example/bayview.jpg',
+      });
+    });
+
+    it('strips the duplicated index image to bare cards when titles resolve nowhere', () => {
+      const w = [
+        card([
+          { title: 'Another home', link: INDEX, image: INDEX_IMG },
+          { title: 'Some place nice', link: INDEX, image: INDEX_IMG },
+        ]),
+      ];
+      repairCardImages(w, indexDocs, [INDEX_IMG]);
+      for (const i of w[0].items as { image?: string }[]) expect(i.image).toBeUndefined();
+    });
+
+    it('strips a repeated image even when it came from distinct docs', () => {
+      const shared = 'https://cdn.example/shared.jpg';
+      const dupDocs = [
+        { name: 'https://site.example/a', text: `Image: ${shared}\nFirst item doc.` },
+        { name: 'https://site.example/b', text: `Image: ${shared}\nSecond item doc.` },
+      ];
+      const w = [
+        card([
+          { title: 'First item doc', link: 'https://site.example/a' },
+          { title: 'Second item doc', link: 'https://site.example/b' },
+        ]),
+      ];
+      repairCardImages(w, dupDocs, []);
+      for (const i of w[0].items as { image?: string }[]) expect(i.image).toBeUndefined();
+    });
+
+    it('keeps the index image on the one card whose subject is the index', () => {
+      const w = [
+        card([
+          { title: 'Bayview Ridge Estate', link: INDEX, image: INDEX_IMG },
+          { title: 'Unrelated thing', link: INDEX, image: INDEX_IMG },
+        ]),
+      ];
+      repairCardImages(w, indexDocs, [INDEX_IMG]);
+      const [a, b] = w[0].items as { image?: string }[];
+      expect(a.image).toBe('https://cdn.example/bayview.jpg');
+      expect(b.image).toBe(INDEX_IMG);
+    });
+  });
+});
+
+describe('normalizeCardSelects', () => {
+  const card = (items: Record<string, unknown>[]) => ({
+    type: 'cards' as const,
+    items: items as never,
+  });
+
+  it('rewrites a parroted title into a tell-me-more CTA', () => {
+    const w = [card([{ title: 'Bayview Ridge Estate', select_label: 'Bayview Ridge Estate' }])];
+    normalizeCardSelects(w);
+    expect(w[0].items[0]).toMatchObject({
+      select_label: 'Tell me more about Bayview Ridge Estate',
+      select_button: 'Tell me more…',
+    });
+  });
+
+  it('collapses a tell-me-more label onto the short button text', () => {
+    const w = [card([{ title: 'Oak', select_label: 'Tell me more about Oak' }])];
+    normalizeCardSelects(w);
+    expect(w[0].items[0]).toMatchObject({
+      select_label: 'Tell me more about Oak',
+      select_button: 'Tell me more…',
+    });
+  });
+
+  it('leaves custom labels and explicit select_button alone', () => {
+    const w = [
+      card([
+        { title: 'Oak', select_label: 'Pick this one' },
+        { title: 'Pine', select_label: 'Pine', select_button: 'Choose' },
+      ]),
+    ];
+    normalizeCardSelects(w);
+    expect(w[0].items[0]).toMatchObject({ select_label: 'Pick this one' });
+    expect(w[0].items[0]).not.toHaveProperty('select_button');
+    expect(w[0].items[1]).toMatchObject({ select_label: 'Pine', select_button: 'Choose' });
+  });
+
+  it('leaves resolved saved-component specs alone', () => {
+    const w = [card([{ title: 'Oak', select_label: 'Oak' }])];
+    normalizeCardSelects(w, new Set(w));
+    expect(w[0].items[0]).toMatchObject({ select_label: 'Oak' });
   });
 });
 
@@ -1979,6 +2203,95 @@ describe('verifiedIdentityFor', () => {
     expect(id.operator).toBe(false);
   });
 
+  it('a provider-shaped external_id keeps the verified email — not a uuid, no users lookup', async () => {
+    // Shopify app-proxy claims carry external_id 'shopify:<cid>' — the
+    // verified email comes from p.email; the users.id query must not run on
+    // a non-uuid id (Postgres throws on the uuid comparison, PGlite coerces
+    // — the guard keeps behavior identical on both).
+    const a = await mkAgent('provider');
+    const conv = await mkConv(a.id, 'webchat:provider', {
+      identity_verified: true,
+      external_id: 'shopify:9588398489777',
+      email: 'shopper@store.com',
+    });
+    const id = await verifiedIdentityFor(db, conv, wsId);
+    expect(id.emails.has('shopper@store.com')).toBe(true);
+    expect(id.operator).toBe(false);
+    // …and the claim's Shopify customer id is a verified identity anchor —
+    // covers orders under any email (PayPal/Apple-Pay mismatch, POS orders
+    // with no email at all).
+    expect(id.ids.has('9588398489777')).toBe(true);
+    expect(
+      identityBlockReason(
+        { order_number: '#1001', customer_id: '9588398489777' },
+        id.emails,
+        new Set(),
+        id.ids,
+      ),
+    ).toBeNull();
+    // A DIFFERENT customer id hard-blocks — typed ids are never proof.
+    expect(
+      identityBlockReason(
+        { order_number: '#1001', customer_id: '11111111' },
+        id.emails,
+        new Set(),
+        id.ids,
+      ),
+    ).toContain('verified customer id');
+  });
+
+  it('verified_emails accumulate — every code-verified address anchors', async () => {
+    const a = await mkAgent('vmail');
+    const conv = await mkConv(a.id, 'webchat:vmail', {
+      identity_verified: true,
+      email: 'account@x.com',
+      verified_emails: ['account@x.com', 'paypal-backup@x.com'],
+      external_id: 'shopify:42424242',
+    });
+    const id = await verifiedIdentityFor(db, conv, wsId);
+    expect(id.emails.has('account@x.com')).toBe(true);
+    expect(id.emails.has('paypal-backup@x.com')).toBe(true);
+    expect(id.ids.has('42424242')).toBe(true);
+  });
+
+  it('applyVerifiedAnchors binds the signed-claim cid, even over a typed one', async () => {
+    const tool = {
+      identity: true,
+      bodyTemplate:
+        '{"variables":{"q":"name:${order_number:text} (${email:clause} OR ${customer_id:clause})"}}',
+    } as ToolDef;
+    const identity = {
+      emails: new Set(['shopper@store.com']),
+      operator: false,
+      ids: new Set(['9588398489777']),
+    };
+    // bare args → cid fills
+    const bare: Record<string, unknown> = { order_number: '#1001' };
+    applyVerifiedAnchors(tool, bare, identity);
+    expect(bare.customer_id).toBe('9588398489777');
+    // model-typed cid → overwritten with the verified claim
+    const typed: Record<string, unknown> = { order_number: '#1', customer_id: '11111111' };
+    applyVerifiedAnchors(tool, typed, identity);
+    expect(typed.customer_id).toBe('9588398489777');
+    // no verified ids → the single verified email fills a missing email arg
+    const emailOnly: Record<string, unknown> = { order_number: '#1001' };
+    applyVerifiedAnchors(
+      tool,
+      emailOnly,
+      { emails: new Set(['guest@x.com']), operator: false, ids: new Set() },
+    );
+    expect(emailOnly.email).toBe('guest@x.com');
+    expect(emailOnly.customer_id).toBeUndefined();
+    // multiple verified emails → ambiguous, nothing fills
+    const multi: Record<string, unknown> = { order_number: '#1001' };
+    applyVerifiedAnchors(
+      tool,
+      multi,
+      { emails: new Set(['a@x.com', 'b@x.com']), operator: false, ids: new Set() },
+    );
+    expect(multi.email).toBeUndefined();
+  });
+
   it('a contact\'s email-channel identity counts across channels', async () => {
     // Same person on Messenger AND email: the email-channel identity
     // authenticates that address for every conversation of the contact.
@@ -2035,6 +2348,99 @@ describe('verifiedIdentityFor', () => {
     const foreign = await verifiedIdentityFor(db, foreignConv, otherWs.id);
     expect(foreign.operator).toBe(false);
     expect(foreign.emails.has('op@janis.ai')).toBe(true); // still their own verified email
+  });
+
+  it('treats signed-in support-channel visitors as copilot operators', async () => {
+    // The concierge's channel: every verified signed-in visitor is a copilot
+    // user even without a membership on the concierge's workspace.
+    const prev = env.supportChannelId;
+    const a = await mkAgent('sup');
+    const [ch] = await db
+      .insert(channels)
+      .values({ workspaceId: wsId, agentId: a.id, kind: 'webchat', name: 'Ask' })
+      .returning();
+    env.supportChannelId = ch.id;
+    try {
+      const [u] = await db.insert(users).values({ email: 'cust@x.com', name: 'Cust' }).returning();
+      const conv = await mkConv(a.id, 'webchat:sup1', {
+        email: 'cust@x.com',
+        external_id: u.id,
+        identity_verified: true,
+      });
+      await db
+        .insert(channelBindings)
+        .values({ channelId: ch.id, conversationId: conv.id, platformUserId: 'cust' });
+      const id = await verifiedIdentityFor(db, conv, wsId);
+      // not a workspace member — copilot only because the channel is the concierge's
+      expect(id.operator).toBe(true);
+
+      const unbound = await mkConv(a.id, 'webchat:sup2', {
+        email: 'cust@x.com',
+        external_id: u.id,
+        identity_verified: true,
+      });
+      const id2 = await verifiedIdentityFor(db, unbound, wsId);
+      expect(id2.operator).toBe(false);
+    } finally {
+      env.supportChannelId = prev;
+    }
+  });
+});
+
+describe('systemPrompt escalation clause', () => {
+  const agent = { name: 'Janis', config: {} } as never;
+
+  it('copilots keep the normal escalation ladder — testing your own agent works', () => {
+    // Operators testing their agent from the console must be able to
+    // exercise escalation end-to-end; the copilot preamble adds tools/links
+    // context, it doesn't disable the ladder.
+    const p = systemPrompt(agent, [], undefined, { operator: true });
+    expect(p).toContain("the operator's copilot");
+    // Tool-domain steering — a "show me the knowledge" ask must route to
+    // inspect_agent, not to billing/catalogue list tools.
+    expect(p).toContain('inspect_agent');
+    expect(p).toContain('billing or catalogue tools');
+    expect(p).toContain('Escalation, two levels');
+    expect(p).toContain('[HANDOFF]');
+    expect(p).not.toContain('no human tier above you');
+  });
+
+  it('handoff-disabled agents suppress tags for copilots and customers alike', () => {
+    const off = systemPrompt(
+      { name: 'Janis', config: { handoff_enabled: false } } as never,
+      [],
+      undefined,
+      { operator: true },
+    );
+    expect(off).toContain("the operator's copilot");
+    expect(off).toContain('no human escalation here');
+    expect(off).not.toContain('Escalation, two levels');
+  });
+});
+
+describe('conversationContext traits', () => {
+  it('the janis console pack keeps long agent inventories; self-reported traits clip at 120', () => {
+    const uuid = (n: number) => `${'a'.repeat(8)}-0000-4000-8000-${String(n).padStart(12, '0')}`;
+    const agentsTrait = Array.from({ length: 12 }, (_, i) => `Agent${i} <${uuid(i)}> (webchat:${uuid(100 + i)})`).join('; ');
+    const op = conversationContext({
+      externalId: 'webchat:c1',
+      userProfile: {
+        name: 'Op',
+        metadata: { janis_account: 'yes', agents: agentsTrait, current_workspace: 'WS' },
+      },
+    } as never);
+    expect(op).toContain('Janis console — verified');
+    // agents past the 120-char clip point are visible — their uuids are the
+    // corpus the link guard verifies console deep links against
+    expect(op).toContain('Agent11');
+    expect(op).toContain(uuid(11));
+
+    const visitor = conversationContext({
+      externalId: 'webchat:c1',
+      userProfile: { name: 'V', metadata: { plan: 'x'.repeat(300) } },
+    } as never);
+    expect(visitor).toContain('x'.repeat(120));
+    expect(visitor).not.toContain('x'.repeat(121));
   });
 });
 
@@ -2116,6 +2522,29 @@ describe('collect-data forms', () => {
     expect(p).toContain('WIDGET_REF: <name>');
   });
 
+  it('lists saved components with their use-when description', () => {
+    const fakeAgent = { name: 'Bot', config: {} } as never;
+    const conv = { externalId: 'web:abc', userProfile: { channel: 'webchat' } } as never;
+    const p = systemPrompt(fakeAgent, [], conv, {
+      savedWidgets: [
+        {
+          name: 'order-tracker',
+          description: 'customer asks where their order is',
+          spec: { type: 'status', title: 'Order {order_name}', steps: [] },
+        },
+        {
+          name: 'support-form',
+          spec: { type: 'form', title: 'Get help', fields: [{ name: 'msg', label: 'Message', type: 'text' }] },
+        },
+      ] as never,
+    });
+    expect(p).toContain('Saved components');
+    expect(p).toContain('order-tracker (status');
+    expect(p).toContain('use when: customer asks where their order is');
+    expect(p).toContain('support-form (form');
+    expect(p).not.toContain('use when: undefined');
+  });
+
   it('omits the section for suggestion drafts and empty config', () => {
     const cfg = {
       collect_forms: [
@@ -2128,6 +2557,24 @@ describe('collect-data forms', () => {
     expect(p).not.toContain('Data-collection forms');
     const plain = systemPrompt({ name: 'Bot', config: {} } as never, [], undefined, {});
     expect(plain).not.toContain('Data-collection forms');
+  });
+
+  it('narrates the shopper\'s storefront market when the widget sent one', () => {
+    const fakeAgent = { name: 'Bot', config: {} } as never;
+    const conv = {
+      externalId: 'web:abc',
+      userProfile: { channel: 'webchat', market: 'CA' },
+    } as never;
+    const p = systemPrompt(fakeAgent, [], conv, {});
+    expect(p).toContain('Storefront market: CA');
+    expect(p).toContain('not deliverable in their market');
+    const noMarket = systemPrompt(
+      fakeAgent,
+      [],
+      { externalId: 'web:abc', userProfile: { channel: 'webchat' } } as never,
+      {},
+    );
+    expect(noMarket).not.toContain('Storefront market');
   });
 });
 
@@ -2186,12 +2633,15 @@ describe('handoff opt-out', () => {
 });
 
 describe('operator copilot prompt', () => {
-  it('drops the customer handoff ladder for a signed-in teammate', () => {
+  it('keeps the escalation ladder for a signed-in teammate', () => {
+    // Copilot preamble stays (tools + console links) but the escalation
+    // ladder is intact — an operator can test handoff on their own agent,
+    // and a concierge visitor can reach the Janis team.
     const fakeAgent = { name: 'Janis', config: {} } as never;
     const op = systemPrompt(fakeAgent, [], undefined, { operator: true });
     expect(op).toContain("operator's copilot");
-    expect(op).not.toContain('Escalation, two levels');
-    expect(op).not.toContain('offer a human once');
+    expect(op).toContain('Escalation, two levels');
+    expect(op).toContain('offer a human once');
     const cust = systemPrompt(fakeAgent, [], undefined, {});
     expect(cust).toContain('Escalation, two levels');
     expect(cust).toContain('offer a human once');
@@ -2619,13 +3069,137 @@ describe('email code verification — guest earns verified identity', () => {
         .where(eq(conversations.id, conv.id));
       expect(await checkVerificationCode(ctx, { code: r.code() })).toContain('expired');
 
-      // Sends cap at 3 per conversation for one address.
+      // Sends cap at 3 per conversation for one address (resend:true forces
+      // a fresh code each call — plain calls would reuse the live code).
       await sendVerificationEmail(ctx, { email: 'bomb@x.co' });
-      await sendVerificationEmail(ctx, { email: 'bomb@x.co' });
-      await sendVerificationEmail(ctx, { email: 'bomb@x.co' });
-      const fourth = await sendVerificationEmail(ctx, { email: 'bomb@x.co' });
+      await sendVerificationEmail(ctx, { email: 'bomb@x.co', resend: true });
+      await sendVerificationEmail(ctx, { email: 'bomb@x.co', resend: true });
+      const fourth = await sendVerificationEmail(ctx, { email: 'bomb@x.co', resend: true });
       expect(fourth).toContain('limit reached');
       expect(r.bodies.filter((b) => b.text).length).toBe(4); // 1 + 3
+    } finally {
+      r.restore();
+    }
+  });
+
+  it('a live pending code is reused — a duplicate send does not invalidate the emailed code', async () => {
+    const r = stubResend();
+    try {
+      const a = await mkAgent('vc5');
+      const conv = await mkConv(a.id, 'webchat:vc5');
+      const ctx = { db, convId: conv.id, workspaceId: wsId };
+
+      await sendVerificationEmail(ctx, { email: 's@x.co' });
+      const code = r.code();
+      // A second send while the first is live returns 'already sent' — no new
+      // email, no new code, and the emailed code still verifies.
+      const again = await sendVerificationEmail(ctx, { email: 's@x.co' });
+      expect(again).toContain('already sent');
+      expect(r.bodies.filter((b) => b.text)).toHaveLength(1);
+      expect(await checkVerificationCode(ctx, { code })).toContain('verified');
+    } finally {
+      r.restore();
+    }
+  });
+
+  it('resend:true mints a fresh code and supersedes the live one', async () => {
+    const r = stubResend();
+    try {
+      const a = await mkAgent('vc6');
+      const conv = await mkConv(a.id, 'webchat:vc6');
+      const ctx = { db, convId: conv.id, workspaceId: wsId };
+
+      await sendVerificationEmail(ctx, { email: 's@x.co' });
+      const old = r.code();
+      await sendVerificationEmail(ctx, { email: 's@x.co', resend: true });
+      const fresh = r.code();
+      expect(r.bodies.filter((b) => b.text)).toHaveLength(2);
+      expect(await checkVerificationCode(ctx, { code: old })).toContain('incorrect code');
+      expect(await checkVerificationCode(ctx, { code: fresh })).toContain('verified');
+    } finally {
+      r.restore();
+    }
+  });
+
+  it('a second code verification ACCUMULATES — order-email ≠ account-email stays anchored', async () => {
+    // The signed-in shopper verified their account email; the order was
+    // placed under a different address (PayPal). Verifying that address
+    // must widen the identity, not overwrite it.
+    const r = stubResend();
+    try {
+      const a = await mkAgent('vc8');
+      const conv = await mkConv(a.id, 'webchat:vc8');
+      await db
+        .update(conversations)
+        .set({
+          userProfile: {
+            identity_verified: true,
+            email: 'account@x.com',
+            external_id: 'shopify:42424242',
+          },
+        })
+        .where(eq(conversations.id, conv.id));
+      const ctx = { db, convId: conv.id, workspaceId: wsId };
+
+      await sendVerificationEmail(ctx, { email: 'paypal@x.com' });
+      expect(await checkVerificationCode(ctx, { code: r.code() })).toContain('verified');
+
+      const p = await profileOf(conv.id);
+      expect(p.verified_emails).toEqual(
+        expect.arrayContaining(['account@x.com', 'paypal@x.com']),
+      );
+      const id = await verifiedIdentityFor(
+        db,
+        (await db.select().from(conversations).where(eq(conversations.id, conv.id)))[0],
+        wsId,
+      );
+      expect(id.emails.has('account@x.com')).toBe(true);
+      expect(id.emails.has('paypal@x.com')).toBe(true);
+      expect(id.ids.has('42424242')).toBe(true);
+      // both anchors pass the identity gate
+      expect(
+        identityBlockReason({ email: 'account@x.com' }, id.emails, new Set(), id.ids),
+      ).toBeNull();
+      expect(
+        identityBlockReason({ email: 'paypal@x.com' }, id.emails, new Set(), id.ids),
+      ).toBeNull();
+      expect(
+        identityBlockReason(
+          { order_number: '#1', customer_id: '42424242' },
+          id.emails,
+          new Set(),
+          id.ids,
+        ),
+      ).toBeNull();
+    } finally {
+      r.restore();
+    }
+  });
+
+  it('a profile merge landing between send and check does not lose the pending code', async () => {
+    // Production race: the per-inbound ingress profile write uses a snapshot
+    // read BEFORE the run's send_verification_email committed — a blind
+    // replace erased pending_verification and the emailed code could never
+    // verify. Profile writes now concat keys, so the pending record survives.
+    const r = stubResend();
+    try {
+      const a = await mkAgent('vc-race');
+      const conv = await mkConv(a.id, 'webchat:vc-race');
+      const ctx = { db, convId: conv.id, workspaceId: wsId };
+      expect(await sendVerificationEmail(ctx, { email: 'shopper@x.com' })).toContain('sent');
+      // The concurrent writer (ingress shape): merge-only update of its own keys.
+      await db
+        .update(conversations)
+        .set({
+          userProfile: sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || ${JSON.stringify({ name: 'Racing Shopper' })}::jsonb`,
+        })
+        .where(eq(conversations.id, conv.id));
+      const ok = await checkVerificationCode(ctx, { code: r.code() });
+      expect(ok).toContain('verified');
+      const p = await profileOf(conv.id);
+      expect(p.name).toBe('Racing Shopper'); // the concurrent key survived too
+      expect(p.identity_verified).toBe(true);
+      expect(p.pending_verification).toBeUndefined();
     } finally {
       r.restore();
     }
@@ -2648,6 +3222,70 @@ describe('email code verification — guest earns verified identity', () => {
         'valid email address',
       );
       expect(r.bodies).toHaveLength(0);
+    } finally {
+      r.restore();
+    }
+  });
+
+  it('regeneration replays side-effecting tool calls instead of re-running them', async () => {
+    // Production bug: attempt-0's check_verification_code verified + cleared
+    // pending_verification, then a widget repair regenerated the turn and
+    // attempt-1 re-executed the tools — check failed "no pending" and the
+    // model sent a SECOND code that invalidated the first. ctx.toolMemo
+    // must replay identical calls across attempts instead.
+    const r = stubResend();
+    const llmCalls: object[] = [];
+    try {
+      const a = await mkAgent('memo1');
+      const conv = await mkConv(a.id, 'webchat:memo1');
+      const identity = { emails: new Set<string>(), operator: false };
+      const ctx = { db, convId: conv.id, workspaceId: wsId, identity, toolMemo: new Map() };
+      const llm = { apiKey: 'k', baseUrl: 'https://llm.example', model: 'm', byok: false };
+      const toolCall = (id: string, name: string, args: object) => ({
+        id,
+        function: { name, arguments: JSON.stringify(args) },
+      });
+      const resp = (body: object) =>
+        new Response(JSON.stringify({ choices: [{ message: body }], usage: {} }), {
+          status: 200,
+        });
+      const origFetch = globalThis.fetch;
+      let phase = 0;
+      globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+        const u = String(url);
+        if (u.includes('api.resend.com/emails')) {
+          r.bodies.push(JSON.parse(String(init?.body)));
+          return new Response('{}', { status: 200 });
+        }
+        if (u.includes('llm.example')) {
+          llmCalls.push(JSON.parse(String(init?.body)));
+          // per completion: send → check → final text
+          const step = phase++ % 3;
+          if (step === 0)
+            return resp({ tool_calls: [toolCall('s', 'send_verification_email', { email: 's@x.co' })] });
+          if (step === 1)
+            return resp({
+              tool_calls: [toolCall('c', 'check_verification_code', { code: r.code() })],
+            });
+          return resp({ content: 'done' });
+        }
+        return origFetch(u as never, init);
+      }) as typeof fetch;
+
+      // attempt-0: send + check both really execute
+      const r1 = await complete(llm, 'sys', [{ role: 'user', content: 'verify me' }], [], {}, ctx);
+      expect(r1.toolCalls.map((t) => t.outcome)).toEqual(['ran', 'ran']);
+      expect(r.bodies).toHaveLength(1);
+      expect((await profileOf(conv.id)).pending_verification).toBeUndefined();
+
+      // attempt-1 (simulated regeneration): identical calls must replay —
+      // no second email, no re-added pending state, check still 'verified'
+      const r2 = await complete(llm, 'sys', [{ role: 'user', content: 'verify me' }], [], {}, ctx);
+      expect(r.bodies).toHaveLength(1);
+      expect(r2.toolCalls.map((t) => t.outcome)).toEqual(['ran', 'ran']);
+      const p = await profileOf(conv.id);
+      expect(p.pending_verification).toBeUndefined();
+      expect(p.identity_verified).toBe(true);
     } finally {
       r.restore();
     }

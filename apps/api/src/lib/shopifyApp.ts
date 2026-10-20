@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { and, desc, eq, isNull, like, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, like, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import {
@@ -15,14 +15,14 @@ import {
   users,
   workspaces,
 } from '../db/schema.js';
-import { PLANS } from './plans.js';
+import { PLANS, messagesInRange, type Plan } from './plans.js';
 import { encryptSecret } from './secrets.js';
 import { adminToken, clearMirroredSecrets, mirrorSecrets } from './shopifyToken.js';
 import { audit } from './audit.js';
 import { sendEmail } from './notify.js';
 import { dispatchAlert, openAlertOnce } from './alerts.js';
 import { invalidateChannelCache } from './channels.js';
-import { purgeContactData } from './contacts.js';
+import { contactExportBundle, purgeContactData } from './contacts.js';
 import { bumpCatalogSync, ensureShopifyKnowledge } from './shopifySync.js';
 import { systemNote } from './systemNote.js';
 import { enqueueJob } from './jobs.js';
@@ -955,9 +955,9 @@ export async function uninstallShop(db: Db, shop: string): Promise<void> {
 
 /* ── GDPR compliance topics (declared in app config, POSTed here) ────── */
 
-/** customers/data_request — log it for the bound workspace so the merchant
- *  can hand the data over (audit trail is the compliance record). Returns
- *  the contact we found, if any. */
+/** customers/data_request — fulfil it, not just log it: the full GDPR
+ *  export bundle goes to the shop's contact email as a JSON attachment,
+ *  and the audit row records the delivery. */
 async function customerDataRequest(
   db: Db,
   row: ShopRow,
@@ -965,6 +965,27 @@ async function customerDataRequest(
 ): Promise<void> {
   if (!row.workspaceId) return;
   const contact = await findShopCustomer(db, row.workspaceId, payload.customer);
+  let emailed = false;
+  if (contact && row.contactEmail) {
+    const bundle = await contactExportBundle(db, contact);
+    const who = payload.customer?.email ?? `customer ${payload.customer?.id ?? '?'}`;
+    await sendEmail(
+      [row.contactEmail],
+      `Customer data request — ${who}`,
+      `Shopify passed a customer data request for ${who} to your Janis app. Everything Janis holds on this person — profile, identities, conversations and transcripts — is attached as JSON.\n\nIf you hold this customer's data in other systems, action those separately; this covers Janis only.`,
+      undefined,
+      {
+        attachments: [
+          {
+            filename: `janis-data-request-${contact.id}.json`,
+            content: Buffer.from(JSON.stringify(bundle)).toString('base64'),
+          },
+        ],
+      },
+    ).then(() => (emailed = true)).catch((err) =>
+      console.error(`shopify gdpr export email ${row.shop}:`, err),
+    );
+  }
   await audit(db, {
     workspaceId: row.workspaceId,
     action: 'shopify.gdpr.data_request',
@@ -974,7 +995,8 @@ async function customerDataRequest(
       shop: row.shop,
       customerId: payload.customer?.id,
       contactId: contact?.id ?? null,
-      note: 'export via GET /api/contacts/:id/export',
+      emailed: emailed ? row.contactEmail : false,
+      ...(emailed ? {} : { note: 'export via GET /api/contacts/:id/export' }),
     },
   });
 }
@@ -1149,6 +1171,13 @@ interface ShopBilling {
   subscriptionId?: string;
   plan?: string;
   status?: string;
+  // Usage rail: the subscription line item appUsageRecordCreate posts to,
+  // and the running total already billed for the current 30-day cycle.
+  usageLineItemId?: string;
+  usageBilledCents?: number;
+  usagePeriodEnd?: string; // the AppSubscription.currentPeriodEnd this total covers
+  usageCapHit?: string; // the periodEnd whose cap rejected a record — stops posting
+  // until the cycle rolls (a new periodEnd means a fresh cap budget)
 }
 
 /** The subscription the merchant currently holds (empty when never billed). */
@@ -1187,18 +1216,25 @@ export async function startBillingSubscription(
   const token = await adminToken(db, row);
   const test = await shopIsDevelopment(db, row);
   const amount = (plan.baseCents / 100).toFixed(2);
+  // The usage line item is how Shopify-billed plans actually charge the
+  // overage the listing advertises — without it a paid shop gets unlimited
+  // messages. cappedAmount is the merchant-approved ceiling per cycle.
+  const cap = ((plan.usageCapCents ?? 0) / 100).toFixed(2);
+  const usage = `appUsagePricingDetails: {cappedAmount: {amount: ${cap}, currencyCode: USD}, terms: ${JSON.stringify(
+    `Messages beyond the ${plan.name} plan's ${plan.includedMessages.toLocaleString('en-US')}/month allowance, billed at $${((plan.overagePer1kCents ?? 0) / 1000).toFixed(2)} per 100.`,
+  )}}`;
   // Return to the embedded app via the admin URL — Shopify wraps it with
   // host context; a bare origin lands the merchant on a shop-less page.
   const returnUrl = `https://${row.shop}/admin/apps/${env.shopifyAppApiKey}`;
   const res = await shopifyGraphql(
     row.shop,
     token,
-    `mutation { appSubscriptionCreate(name: ${JSON.stringify(`Janis ${plan.name}`)}, returnUrl: ${JSON.stringify(returnUrl)}, test: ${test}, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: ${amount}, currencyCode: USD}, interval: EVERY_30_DAYS}}}]) { confirmationUrl appSubscription { id status } userErrors { field message } } }`,
+    `mutation { appSubscriptionCreate(name: ${JSON.stringify(`Janis ${plan.name}`)}, returnUrl: ${JSON.stringify(returnUrl)}, test: ${test}, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: ${amount}, currencyCode: USD}, interval: EVERY_30_DAYS}, ${usage}}}]) { confirmationUrl appSubscription { id status lineItems { id } } userErrors { field message } } }`,
   );
   const out = (res.data as {
     appSubscriptionCreate?: {
       confirmationUrl?: string;
-      appSubscription?: { id: string; status: string };
+      appSubscription?: { id: string; status: string; lineItems?: { id: string }[] };
       userErrors?: { message: string }[];
     };
   })?.appSubscriptionCreate;
@@ -1214,11 +1250,152 @@ export async function startBillingSubscription(
         subscriptionId: out.appSubscription.id,
         plan: planKey,
         status: out.appSubscription.status ?? 'PENDING',
+        usageLineItemId: out.appSubscription.lineItems?.[0]?.id,
+        usageBilledCents: 0,
+        usagePeriodEnd: undefined,
+        usageCapHit: '',
       },
       updatedAt: new Date(),
     })
     .where(eq(shopifyShops.id, row.id));
   return { confirmationUrl: out.confirmationUrl, test };
+}
+
+/* ── Shopify usage billing sweep ──────────────────────────────────────
+ * Stripe meters every message and lets the invoice compute overage; the
+ * Shopify rail has no meter — we post appUsageRecordCreate deltas against
+ * the subscription's usage line item. Each record carries the cumulative
+ * billable total in its idempotency key, so a crash between post and
+ * bookkeeping re-posts the same target (deduped) instead of double-billing.
+ * The sweep runs per-shop at most every USAGE_SWEEP_MS. */
+const USAGE_SWEEP_MS = 30 * 60_000;
+const USAGE_MIN_POST_CENTS = 100; // de minimis — sub-dollar deltas roll forward
+const usageCheckedAt = new Map<string, number>();
+
+export async function sweepShopifyUsage(db: Db): Promise<void> {
+  const rows = await db
+    .select()
+    .from(shopifyShops)
+    .where(and(eq(shopifyShops.state, 'linked'), isNotNull(shopifyShops.workspaceId)));
+  for (const row of rows) {
+    const b = shopBilling(row);
+    const plan = PLANS[b.plan ?? ''];
+    // Only an ACTIVE sub takes usage records — PENDING has no approved cap
+    // and CANCELLED/FROZEN subs reject records outright.
+    if (!b.subscriptionId || b.status !== 'ACTIVE' || !plan?.overagePer1kCents) continue;
+    const last = usageCheckedAt.get(row.id) ?? 0;
+    if (Date.now() - last < USAGE_SWEEP_MS) continue;
+    usageCheckedAt.set(row.id, Date.now());
+    await billShopifyUsage(db, row, plan).catch((err) =>
+      console.error(`shopify usage sweep ${row.shop}:`, err),
+    );
+  }
+}
+
+/** The AppSubscription's current cycle, plus the usage line item id when it
+ *  wasn't captured at create time (subs that predate this rail). */
+async function subscriptionUsageState(
+  row: ShopRow,
+  token: string,
+): Promise<{ periodEnd: string | null; usageLineItemId: string | null }> {
+  const res = await shopifyGraphql(
+    row.shop,
+    token,
+    `{ appSubscription(id: ${JSON.stringify(shopBilling(row).subscriptionId!)}) { currentPeriodEnd lineItems { id } } }`,
+  );
+  const sub = (res.data as {
+    appSubscription?: { currentPeriodEnd?: string; lineItems?: { id: string }[] };
+  })?.appSubscription;
+  return {
+    periodEnd: sub?.currentPeriodEnd ?? null,
+    usageLineItemId: sub?.lineItems?.[0]?.id ?? null,
+  };
+}
+
+async function billShopifyUsage(db: Db, row: ShopRow, plan: Plan): Promise<void> {
+  const [ws] = await db
+    .select({ billingProvider: workspaces.billingProvider })
+    .from(workspaces)
+    .where(eq(workspaces.id, row.workspaceId!))
+    .limit(1);
+  if (ws?.billingProvider !== 'shopify') return; // re-bound to Stripe — not our rail
+  if (!row.accessTokenEnc) return;
+  const token = await adminToken(db, row);
+  const b = shopBilling(row);
+  const sub = await subscriptionUsageState(row, token);
+  const usageLineItemId = b.usageLineItemId ?? sub.usageLineItemId;
+  if (!usageLineItemId) {
+    // A sub created before the usage line item existed can't take records —
+    // the merchant re-subscribing is the only fix. Warn once per boot.
+    console.warn(`shopify usage ${row.shop}: subscription has no usage line item`);
+    return;
+  }
+  // The merchant's cap already rejected a record this cycle — a new
+  // currentPeriodEnd clears it (fresh cap budget each 30 days).
+  if (b.usageCapHit && b.usageCapHit === sub.periodEnd) return;
+  // Cycle rollover — Shopify bills every 30 days from activation.
+  const billedCents =
+    b.usagePeriodEnd === sub.periodEnd ? (b.usageBilledCents ?? 0) : 0;
+  const periodStart = sub.periodEnd
+    ? new Date(Date.parse(sub.periodEnd) - 30 * 86_400_000)
+    : new Date(Date.now() - 30 * 86_400_000);
+  const used = await messagesInRange(db, row.workspaceId!, periodStart, new Date());
+  const overage = Math.max(0, used - plan.includedMessages);
+  const billableCents = Math.round((overage * plan.overagePer1kCents!) / 1000);
+  const delta = billableCents - billedCents;
+  if (delta < USAGE_MIN_POST_CENTS) {
+    // Still record the discovered line item + period so later ticks compute
+    // deltas from the right baseline.
+    if (usageLineItemId !== b.usageLineItemId || sub.periodEnd !== b.usagePeriodEnd)
+      await db
+        .update(shopifyShops)
+        .set({ billing: { ...b, usageLineItemId, usagePeriodEnd: sub.periodEnd ?? undefined } })
+        .where(eq(shopifyShops.id, row.id));
+    return;
+  }
+  const res = await shopifyGraphql(
+    row.shop,
+    token,
+    `mutation { appUsageRecordCreate(subscriptionLineItemId: ${JSON.stringify(usageLineItemId)}, description: ${JSON.stringify(`Janis messages beyond plan allowance — ${overage.toLocaleString('en-US')} over ${plan.includedMessages.toLocaleString('en-US')}`)}, price: {amount: ${(delta / 100).toFixed(2)}, currencyCode: USD}, idempotencyKey: ${JSON.stringify(`${b.subscriptionId}:${sub.periodEnd}:${billableCents}`)}) { appUsageRecord { id } userErrors { field message } } }`,
+  );
+  const rec = (res.data as {
+    appUsageRecordCreate?: { appUsageRecord?: { id: string }; userErrors?: { message: string }[] };
+  })?.appUsageRecordCreate;
+  if (rec?.userErrors?.length) {
+    const capped = rec.userErrors.some((e) => /capped/i.test(e.message));
+    console.error(
+      `shopify usage ${row.shop}: record rejected — ${rec.userErrors.map((e) => e.message).join(', ')}`,
+    );
+    await db
+      .update(shopifyShops)
+      .set({
+        billing: {
+          ...b,
+          usageLineItemId,
+          usagePeriodEnd: sub.periodEnd ?? undefined,
+          // Mark the delta accounted even on rejection — a legacy sub with
+          // no usage line item would otherwise retry forever. Growth still
+          // re-attempts once per billable dollar. A capped rejection latches
+          // off entirely until the next cycle or re-approval.
+          usageBilledCents: billableCents,
+          usageCapHit: capped ? (sub.periodEnd ?? 'unknown') : '',
+        },
+      })
+      .where(eq(shopifyShops.id, row.id));
+    return;
+  }
+  await db
+    .update(shopifyShops)
+    .set({
+      billing: {
+        ...b,
+        usageLineItemId,
+        usageBilledCents: billableCents,
+        usagePeriodEnd: sub.periodEnd ?? undefined,
+      },
+      updatedAt: new Date(),
+    })
+    .where(eq(shopifyShops.id, row.id));
 }
 
 /** checkouts/update — the abandonment signal. One note per checkout on a
@@ -1897,7 +2074,15 @@ async function syncBillingSubscription(
   await db
     .update(shopifyShops)
     .set({
-      billing: { ...prior, subscriptionId: sub.admin_graphql_api_id ?? prior.subscriptionId, plan, status },
+      billing: {
+        ...prior,
+        subscriptionId: sub.admin_graphql_api_id ?? prior.subscriptionId,
+        plan,
+        status,
+        // A status flip (approve/cancel/re-subscribe) is a new approval —
+        // clear the cap latch so usage records can post again.
+        ...(status !== prior.status ? { usageCapHit: '' } : {}),
+      },
       updatedAt: new Date(),
     })
     .where(eq(shopifyShops.id, row.id));

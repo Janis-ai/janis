@@ -8,6 +8,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agentMembers, agents, memberships, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken, hashPassword } from '../lib/crypto.js';
+import { env } from '../env.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { authRoutes } from './auth.js';
 import { userRoutes } from './users.js';
@@ -158,6 +159,37 @@ describe('invites', () => {
       .where(and(eq(memberships.userId, u.id), eq(memberships.workspaceId, wsA)));
     expect(mem.acceptedAt).toBeNull();
   });
+
+  it('emails the invitee when a workspace invite is created', async () => {
+    const calls: { to: string[]; subject: string }[] = [];
+    const origFetch = globalThis.fetch;
+    const resend = { key: env.resendApiKey, from: env.emailFrom, origin: env.webOrigin };
+    env.resendApiKey = 're_test';
+    env.emailFrom = 'alerts@test.dev';
+    env.webOrigin = 'https://app.test';
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes('api.resend.com/emails')) {
+        calls.push(JSON.parse(String(init?.body)));
+        return new Response('{}', { status: 200 });
+      }
+      return origFetch(url as never, init);
+    }) as typeof fetch;
+    try {
+      const res = await post('/api/users', adminCookie, { email: 'emailed@x.test', name: 'Em' });
+      expect(res.status).toBe(201);
+      for (let i = 0; i < 20 && calls.length === 0; i++) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      expect(calls).toHaveLength(1);
+      expect(calls[0].to).toEqual(['emailed@x.test']);
+      expect(calls[0].subject).toContain('Alpha');
+    } finally {
+      globalThis.fetch = origFetch;
+      env.resendApiKey = resend.key;
+      env.emailFrom = resend.from;
+      env.webOrigin = resend.origin;
+    }
+  });
 });
 
 describe('invite acceptance and switching', () => {
@@ -307,6 +339,25 @@ describe('operator profile', () => {
       body: JSON.stringify({ avatar_url: 'https://evil.test/x.png' }),
     });
     expect(res.status).toBe(400);
+  });
+
+  it('updates the account name independently of the operator display name', async () => {
+    const res = await app.request('/api/users/me', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: memberCookie },
+      body: JSON.stringify({ name: 'Renamed Member' }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.user.name).toBe('Renamed Member');
+    // operator display name untouched by the account rename
+    expect(body.user.display_name).toBeNull();
+    const blank = await app.request('/api/users/me', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: memberCookie },
+      body: JSON.stringify({ name: '  ' }),
+    });
+    expect(blank.status).toBe(400);
   });
 });
 

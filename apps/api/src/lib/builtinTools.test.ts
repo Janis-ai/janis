@@ -7,6 +7,7 @@ import { BUILTIN_TOOLS, enabledBuiltins } from '../lib/builtinTools.js';
 import { decidePendingAction } from '../lib/approvals.js';
 import {
   agents,
+  agentMembers,
   agentTests,
   agentWidgets,
   channelBindings,
@@ -38,6 +39,8 @@ const USER3 = 'bbbbbbbb-0000-4000-8000-000000000008';
 const CONV3 = 'cccccccc-0000-4000-8000-000000000009';
 const USER4 = 'bbbbbbbb-0000-4000-8000-00000000000a';
 const CONV4 = 'cccccccc-0000-4000-8000-00000000000b';
+const USER5 = 'bbbbbbbb-0000-4000-8000-00000000000c';
+const CONV5 = 'cccccccc-0000-4000-8000-00000000000d';
 
 const siCalls: { id: string; method: string }[] = [];
 const accountStatus = () => BUILTIN_TOOLS.find((b) => b.name === 'account_status')!;
@@ -145,6 +148,61 @@ describe('account_status builtin', () => {
     expect(out.email).toBe('m@x.com');
     // Bot + the concierge agent on the same test workspace.
     expect(out.workspaces).toEqual([{ name: 'W1', plan: 'Pro', agents: 2 }]);
+    expect(out.agent_access).toBeUndefined();
+  });
+
+  it('lists agent-scoped grants the visitor holds on non-member workspaces', async () => {
+    // USER4 is a member of WS2 only, plus agent-scoped grants into W1 — the
+    // console switcher shows both, so a membership-only list makes the
+    // concierge deny an accessible workspace exists (the "Ari's workspace"
+    // bug).
+    const [w1Bot] = await db.select().from(agents).where(eq(agents.name, 'Bot')).limit(1);
+    const [w1Concierge] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.name, 'Concierge'))
+      .limit(1);
+    await db.insert(agentMembers).values([
+      { agentId: w1Bot.id, userId: USER4, role: 'member', acceptedAt: new Date() },
+      { agentId: w1Concierge.id, userId: USER4, role: 'member', acceptedAt: new Date() },
+    ]);
+    const out = JSON.parse(await accountStatus().run({}, ctx(CONV4)));
+    expect(out.workspaces).toEqual([{ name: 'Free WS', plan: 'Free', agents: 1 }]);
+    expect(out.agent_access).toEqual([
+      {
+        workspace: 'W1',
+        agents: expect.arrayContaining(['Bot', 'Concierge']),
+        note: 'agent-scoped access — can view these agents, not a workspace member',
+      },
+    ]);
+  });
+
+  it('hides hidden-role and pending grants from agent_access', async () => {
+    await db.insert(users).values({ id: USER5, email: 'd@x.com', name: 'Dee' });
+    await db.insert(memberships).values({
+      userId: USER5,
+      workspaceId: WS2,
+      role: 'member',
+      acceptedAt: new Date(),
+    });
+    const [w1Bot] = await db.select().from(agents).where(eq(agents.name, 'Bot')).limit(1);
+    const [w1Concierge] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.name, 'Concierge'))
+      .limit(1);
+    await db.insert(agentMembers).values([
+      { agentId: w1Bot.id, userId: USER5, role: 'hidden', acceptedAt: new Date() },
+      { agentId: w1Concierge.id, userId: USER5, role: 'member' }, // pending — no acceptedAt
+    ]);
+    await db.insert(conversations).values({
+      id: CONV5,
+      agentId: w1Bot.id,
+      externalId: 'v:test5',
+      userProfile: { external_id: USER5, email: 'd@x.com', identity_verified: true },
+    });
+    const out = JSON.parse(await accountStatus().run({}, ctx(CONV5)));
+    expect(out.agent_access).toBeUndefined();
   });
 });
 
@@ -1520,6 +1578,170 @@ describe('add_knowledge_source builtin', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('inspect_agent builtin', () => {
+  const inspect = () => BUILTIN_TOOLS.find((b) => b.name === 'inspect_agent')!;
+  it('is gated to the operator workspace', () => {
+    expect(inspect().available(WS)).toBe(true);
+    expect(inspect().available('other-ws')).toBe(false);
+  });
+  it('returns the agent\'s real config + source inventory — no guessing', async () => {
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    await db
+      .update(agents)
+      .set({
+        config: {
+          tone: 'warm and friendly',
+          greeting: "hey everybody! let's jam.",
+          greeting_enabled: true,
+          system_prompt: 'You are a helpful support bot.',
+          handoff_enabled: true,
+          quick_replies: ['Tour dates?', 'Merch'],
+          auto_assign: true,
+          sla_minutes: 30,
+          csat: { enabled: true },
+          knowledge: ['born 1942 in San Francisco', 'lead guitarist of the Grateful Dead'],
+          procedures: [
+            {
+              name: 'Refund flow',
+              when: 'customer wants a refund',
+              steps: ['check the order', { text: 'issue refund', tool: 'shopify_refund' }],
+            },
+          ],
+          collect_forms: [
+            {
+              name: 'vip_intake',
+              when: 'customer asks for early access',
+              fields: [{ name: 'email', label: 'Email', type: 'email', required: true }],
+              webhook_url: 'https://hooks.example.com/t/SECRET-token-in-url',
+              email: 'vip@example.com',
+            },
+          ],
+          tools: [{ name: 'calendly_me' } as never],
+        },
+      })
+      .where(eq(agents.id, bot2.id));
+    await db.insert(schema.knowledgeFiles).values({
+      workspaceId: WS2,
+      agentId: bot2.id,
+      name: 'Inspect me source',
+      mimeType: 'text/plain',
+      sizeBytes: 40,
+      text: 'Refunds within 30 days.',
+    });
+
+    const [chan] = await db
+      .insert(schema.channels)
+      .values({ workspaceId: WS2, agentId: bot2.id, kind: 'webchat', name: 'Web widget' })
+      .returning();
+    await db.insert(schema.agentWidgets).values({
+      agentId: bot2.id,
+      name: 'Order card',
+      description: 'show when asked for order status',
+      spec: { type: 'card' },
+    });
+    await db.insert(schema.alertRules).values({
+      agentId: bot2.id,
+      kind: 'sentiment',
+      config: { enabled: true, notify: 'pool' },
+    });
+
+    const out = JSON.parse(await inspect().run({ workspace: 'free', agent: 'bot2' }, cctx(CONV2)));
+    expect(out.agent).toBe('Bot2');
+    expect(out.tone).toBe('warm and friendly');
+    expect(out.instructions).toBe('You are a helpful support bot.');
+    expect(out.quick_replies).toEqual(['Tour dates?', 'Merch']);
+    expect(out.sla_minutes).toBe(30);
+    expect(out.csat).toEqual({ enabled: true });
+    expect(out.knowledge).toEqual([
+      'born 1942 in San Francisco',
+      'lead guitarist of the Grateful Dead',
+    ]);
+    expect(out.tools).toEqual(['calendly_me']);
+    expect(out.procedures).toEqual([
+      {
+        name: 'Refund flow',
+        when: 'customer wants a refund',
+        steps: ['check the order', { text: 'issue refund', tool: 'shopify_refund' }],
+      },
+    ]);
+    // webhook destinations report presence only — the URL can carry a token
+    expect(out.collect_forms).toEqual([
+      {
+        name: 'vip_intake',
+        when: 'customer asks for early access',
+        title: null,
+        fields: [{ name: 'email', label: 'Email', type: 'email', required: true }],
+        tags: [],
+        webhook_configured: true,
+        email_notify: 'vip@example.com',
+      },
+    ]);
+    expect(JSON.stringify(out)).not.toContain('SECRET-token');
+    const src = out.knowledge_sources.find((s: { name: string }) => s.name === 'Inspect me source');
+    expect(src).toMatchObject({ kind: 'file', status: 'ready', chars: 23 });
+    expect(out.channels).toContainEqual(
+      expect.objectContaining({ name: 'Web widget', kind: 'webchat' }),
+    );
+    // ids ride along — the model builds /agents/<id>/channels/<ch-id> from them
+    expect((out.channels.find((c: { name: string }) => c.name === 'Web widget') as { id: string }).id).toBe(chan.id);
+    expect(out.agent_id).toBe(bot2.id);
+    expect(out.url).toContain(`/agents/${bot2.id}`);
+    // channel credentials never reach the transcript
+    expect(JSON.stringify(out.channels)).not.toContain('credentials');
+    expect(out.alert_rules).toContainEqual({ kind: 'sentiment', config: { enabled: true, notify: 'pool' } });
+    expect(out.components).toContainEqual({
+      name: 'Order card',
+      description: 'show when asked for order status',
+      autoGreet: false,
+    });
+
+    // unknown agent → error naming the candidates, not a hallucinated blank
+    const miss = JSON.parse(await inspect().run({ workspace: 'free', agent: 'nope' }, cctx(CONV2)));
+    expect(miss.error).toContain("didn't match");
+
+    await db.delete(schema.alertRules).where(eq(schema.alertRules.agentId, bot2.id));
+    await db.delete(schema.agentWidgets).where(eq(schema.agentWidgets.agentId, bot2.id));
+    await db.delete(schema.channels).where(eq(schema.channels.id, chan.id));
+    await db.delete(schema.knowledgeFiles).where(eq(schema.knowledgeFiles.agentId, bot2.id));
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, bot2.id));
+  });
+});
+
+describe('select_agent builtin', () => {
+  const selectAgent = () => BUILTIN_TOOLS.find((b) => b.name === 'select_agent')!;
+  it('stamps the selection on the conversation + publishes a navigate event', async () => {
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    const { bus } = await import('../lib/bus.js');
+    const events: { type: string; data?: unknown }[] = [];
+    const off = bus.subscribe(WS2, (e) => events.push(e));
+
+    const out = await selectAgent().run(
+      { workspace: 'free', agent: 'bot2', section: 'knowledge' },
+      cctx(CONV2),
+    );
+    expect(out).toContain('focused: Bot2');
+    expect(out).toContain(`/agents/${bot2.id}/knowledge`);
+
+    const [conv] = await db.select().from(conversations).where(eq(conversations.id, CONV2));
+    const md = (conv.userProfile as { metadata?: Record<string, unknown> })?.metadata;
+    expect(md?.current_agent).toBe('Bot2');
+    expect(md?.current_agent_id).toBe(bot2.id);
+
+    const nav = events.find((e) => e.type === 'navigate');
+    expect(nav?.data).toEqual({ user_id: USER2, agent_id: bot2.id, path: `/agents/${bot2.id}/knowledge` });
+    off();
+
+    // unknown section → falls back to inbox rather than emitting a bogus path
+    const out2 = await selectAgent().run({ workspace: 'free', agent: 'bot2', section: 'rm -rf' }, cctx(CONV2));
+    expect(out2).toContain(`/agents/${bot2.id}/inbox`);
+    // restore the verified-identity profile the other CONV2 tests rely on
+    await db
+      .update(conversations)
+      .set({ userProfile: { external_id: USER2, email: 'a@x.com', identity_verified: true } })
+      .where(eq(conversations.id, CONV2));
   });
 });
 

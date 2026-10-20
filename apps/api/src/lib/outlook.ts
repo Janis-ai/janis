@@ -142,27 +142,25 @@ export async function getMessage(token: string, id: string): Promise<OutlookMess
   };
 }
 
-/** Send mail via Graph /me/sendMail. Fresh threads carry the caller's
- * subject; replies get Re: + In-Reply-To headers so foreign clients thread. */
+/** Send mail via Graph /me/sendMail. Fresh threads only — replies go
+ * through replyMail: Graph rejects In-Reply-To/References in
+ * internetMessageHeaders (custom headers must start with 'x-'). */
 export async function sendMail(
   token: string,
   opts: {
     /** Shared-mailbox/alias send-as — requires SendAs permission in M365. */
     from?: string;
+    /** Display name on the From header (channel/agent, or "Op via channel"). */
+    fromName?: string;
     to: string;
     subject: string;
     text: string;
-    inReplyTo?: string;
-    references?: string[];
     attachmentLinks?: { name: string; url: string }[];
   },
 ): Promise<{ id?: string } | null> {
   const body = opts.attachmentLinks?.length
     ? `${opts.text}\n\n${opts.attachmentLinks.map((a) => `📎 ${a.name}: ${a.url}`).join('\n')}`
     : opts.text;
-  const headers: { name: string; value: string }[] = [];
-  if (opts.inReplyTo) headers.push({ name: 'In-Reply-To', value: opts.inReplyTo });
-  if (opts.references?.length) headers.push({ name: 'References', value: opts.references.join(' ') });
   const res = await msFetch(token, '/me/sendMail', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -171,8 +169,9 @@ export async function sendMail(
         subject: opts.subject,
         body: { contentType: 'Text', content: body },
         toRecipients: [{ emailAddress: { address: opts.to } }],
-        ...(opts.from ? { from: { emailAddress: { address: opts.from } } } : {}),
-        ...(headers.length ? { internetMessageHeaders: headers } : {}),
+        ...(opts.from
+          ? { from: { emailAddress: { address: opts.from, name: opts.fromName } } }
+          : {}),
       },
       saveToSentItems: true,
     }),
@@ -182,6 +181,49 @@ export async function sendMail(
     throw new Error(`outlook send failed: ${data?.error?.message ?? `HTTP ${res.status}`}`);
   }
   return { id: undefined }; // sendMail 202s with no id — dedup keys off the conv
+}
+
+/** Reply to a stored message via Graph's reply action — the only way to
+ * thread properly (sendMail can't set In-Reply-To). Subject/Re: + threading
+ * are inherited from the original; comment carries the reply body. */
+export async function replyMail(
+  token: string,
+  messageId: string,
+  opts: {
+    to: string;
+    text: string;
+    /** Shared-mailbox/alias send-as — requires SendAs permission in M365. */
+    from?: string;
+    /** Display name on the From header (channel/agent, or "Op via channel"). */
+    fromName?: string;
+    attachmentLinks?: { name: string; url: string }[];
+  },
+): Promise<{ id?: string } | null> {
+  const comment = opts.attachmentLinks?.length
+    ? `${opts.text}\n\n${opts.attachmentLinks.map((a) => `📎 ${a.name}: ${a.url}`).join('\n')}`
+    : opts.text;
+  const res = await msFetch(
+    token,
+    `/me/messages/${encodeURIComponent(messageId)}/reply`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        comment,
+        message: {
+          toRecipients: [{ emailAddress: { address: opts.to } }],
+          ...(opts.from
+            ? { from: { emailAddress: { address: opts.from, name: opts.fromName } } }
+            : {}),
+        },
+      }),
+    },
+  );
+  if (!res.ok && res.status !== 202) {
+    const data = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+    throw new Error(`outlook reply failed: ${data?.error?.message ?? `HTTP ${res.status}`}`);
+  }
+  return { id: undefined };
 }
 
 /** Graph change-notification subscription on the inbox — Microsoft's

@@ -645,6 +645,11 @@ export function channelApiRoutes(db: Db) {
   //   pointed — a CNAME exists aimed at a Janis/Google host, but the request
   //             doesn't arrive yet (mapping/cert still pending, or propagating)
   //   pending — nothing resolves to us
+  // Whether per-channel custom sending domains are offered on this
+  // deployment — each registration burns a slot on the platform Resend
+  // account, so quota-bound plans hide the feature entirely.
+  app.get('/email-domain/status', (c) => c.json({ enabled: env.resendCustomDomains }));
+
   app.get('/:id/domain-check', async (c) => {
     const id = c.req.param('id');
     if (!/^[0-9a-f-]{36}$/i.test(id)) return c.json({ error: 'not found' }, 404);
@@ -713,13 +718,20 @@ export function channelApiRoutes(db: Db) {
         .replace(/[/?#].*$/, '');
       if (!/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(domain) || domain.endsWith(env.emailInboundDomain))
         return c.json({ error: 'enter a domain you own — e.g. mail.acme.com' }, 400);
+      if (!env.resendCustomDomains)
+        return c.json({ error: 'custom sending domains are not available on this deployment' }, 400);
       const creds = row.credentials as ChannelCredentials;
       let d;
       try {
         // idempotent — re-registering an existing domain adopts it
         d = await createOrAdoptResendDomain(domain);
       } catch (e) {
-        return c.json({ error: `resend: ${e instanceof Error ? e.message : e}` }, 502);
+        const msg = e instanceof Error ? e.message : String(e);
+        // Resend's raw "your plan" message reads as the customer's plan —
+        // it's actually the platform account's domain quota.
+        if (/domain limit/i.test(msg))
+          return c.json({ error: 'custom sending domains are temporarily unavailable — try again later' }, 503);
+        return c.json({ error: `resend: ${msg}` }, 502);
       }
       const next = {
         ...creds,

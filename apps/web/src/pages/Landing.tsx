@@ -131,14 +131,15 @@ type PlanCard = {
   base_cents: number;
   included_messages: number;
   overage_per_1k_cents: number | null;
+  yearly_cents?: number | null;
 };
 
 // Fallback if /api/plans is unreachable — the API response is preferred.
 const FALLBACK_PLANS: PlanCard[] = [
-  { key: 'free', name: 'Free', base_cents: 0, included_messages: 250, overage_per_1k_cents: null },
-  { key: 'starter', name: 'Starter', base_cents: 2900, included_messages: 2_000, overage_per_1k_cents: 800 },
-  { key: 'pro', name: 'Pro', base_cents: 9900, included_messages: 20_000, overage_per_1k_cents: 500 },
-  { key: 'scale', name: 'Scale', base_cents: 29900, included_messages: 100_000, overage_per_1k_cents: 300 },
+  { key: 'free', name: 'Free', base_cents: 0, included_messages: 250, overage_per_1k_cents: null, yearly_cents: null },
+  { key: 'starter', name: 'Starter', base_cents: 2900, included_messages: 2_000, overage_per_1k_cents: 800, yearly_cents: 29000 },
+  { key: 'pro', name: 'Pro', base_cents: 9900, included_messages: 20_000, overage_per_1k_cents: 500, yearly_cents: 99000 },
+  { key: 'scale', name: 'Scale', base_cents: 29900, included_messages: 100_000, overage_per_1k_cents: 300, yearly_cents: 299000 },
 ];
 
 const PLAN_NOTES: Record<string, string> = {
@@ -416,6 +417,7 @@ export default function Landing() {
     staleTime: 5 * 60_000,
   });
   const plans = plansQuery.data?.plans?.length ? plansQuery.data.plans : FALLBACK_PLANS;
+  const [interval_, setInterval_] = useState<'month' | 'year'>('month');
   const cta = data ? { to: '/conversations', label: 'Open console' } : { to: '/login', label: 'Get started' };
   const ctaClick = (location: string) => () => track('cta_click', { location });
   // Dogfood the web-chat widget on the marketing site. Same-origin so the
@@ -544,19 +546,47 @@ export default function Landing() {
 
       <section className="landing-pricing" id="pricing">
         <h2>Simple pricing</h2>
-        <p className="muted" style={{ textAlign: 'center', margin: '0 0 24px' }}>
+        <p className="muted" style={{ textAlign: 'center', margin: '0 0 12px' }}>
           Every plan includes the console, unlimited seats and channels, alerts, and digests.
           You pay for messages — not seats. LLM tokens are metered at provider rates on
           our platform key — or bring your own key and the LLM line drops to $0.
         </p>
+        {plans.some((p) => p.yearly_cents) && (
+          <div className="row" style={{ gap: 4, justifyContent: 'center', marginBottom: 24 }}>
+            {(['month', 'year'] as const).map((i) => (
+              <button
+                key={i}
+                className={`btn ${interval_ === i ? 'primary' : ''}`}
+                style={{ padding: '4px 12px' }}
+                onClick={() => setInterval_(i)}
+              >
+                {i === 'month' ? 'Monthly' : 'Annual — pay 10, get 12'}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="landing-grid four">
-          {plans.map((p) => (
+          {plans.map((p) => {
+            const yearly = interval_ === 'year';
+            const cents = yearly ? (p.yearly_cents ?? null) : p.base_cents;
+            return (
             <div key={p.key} className={`card landing-card${p.key === 'pro' ? ' featured' : ''}`}>
               <strong>{p.name}</strong>
               <div className="landing-price">
-                {p.base_cents === 0 ? '$0' : `$${p.base_cents / 100}`}
-                <span className="muted">/mo</span>
+                {cents === null ? (
+                  <span className="muted" style={{ fontSize: 14 }}>monthly only</span>
+                ) : cents === 0 ? (
+                  '$0'
+                ) : (
+                  `$${cents / 100}`
+                )}
+                {cents !== null && <span className="muted">{yearly ? '/yr' : '/mo'}</span>}
               </div>
+              {yearly && cents !== null && cents > 0 && (
+                <p className="muted landing-price-note">
+                  ${p.base_cents / 100}/mo equivalent — pay 10 months, get 12
+                </p>
+              )}
               <p className="muted">{p.included_messages.toLocaleString()} messages/mo</p>
               <p className="muted landing-price-note">
                 {PLAN_NOTES[p.key] ??
@@ -572,7 +602,8 @@ export default function Landing() {
                 {p.key === 'free' ? 'Start free' : cta.label}
               </Link>
             </div>
-          ))}
+            );
+          })}
         </div>
         <p className="landing-fine">
           On Free we stop ingesting messages at the cap — upgrade any time to resume instantly.

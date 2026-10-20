@@ -45,6 +45,9 @@ export const WidgetComponent = z.discriminatedUnion('type', [
           // Interpolated labels carry a full title ("I'm interested in the
           // {title}") — the cap must clear a 120-char product name.
           select_label: s(160).optional(), // tapping sends this as a message
+          // Optional shorter display text for the select button — the sent
+          // message stays select_label. Falls back to select_label.
+          select_button: s(60).optional(),
         }),
       )
       .min(1)
@@ -101,7 +104,13 @@ export const WidgetComponent = z.discriminatedUnion('type', [
       .array(
         z.object({
           label: s(80),
-          state: z.enum(['done', 'current', 'todo']).default('todo'),
+          // A bare {prop} / {prop:modifier} is legal at template-save time —
+          // the resolve path interpolates first, and an unfilled placeholder
+          // strips to the 'todo' default rather than dropping the component
+          // (unknown → "upcoming" is the honest direction to err).
+          state: z
+            .union([z.enum(['done', 'current', 'todo']), z.string().regex(/^\{[a-z][a-z0-9_]*(:[^}]*)?\}$/)])
+            .default('todo'),
           note: s(160).optional(),
         }),
       )
@@ -109,11 +118,42 @@ export const WidgetComponent = z.discriminatedUnion('type', [
       .max(10),
   }),
   // Receipt/summary — label/value rows with an optional bold total.
+  // `summary` rows render AFTER the item rows, above the total — the cost
+  // breakdown (subtotal / shipping / tax / discounts / refunded). They
+  // interpolate against tool props, and empty-valued rows drop out, so a
+  // receipt can list every breakdown line and only nonzero ones show.
   z.object({
     type: z.literal('receipt'),
     title: s(120).optional(),
     rows: z.array(z.object({ label: s(80), value: s(160) })).min(1).max(15),
+    summary: z.array(z.object({ label: s(80), value: s(160) })).max(8).optional(),
     total: z.object({ label: s(80), value: s(60) }).optional(),
+  }),
+  // Plan/pricing table — subscription tiers with monthly+annual lines and
+  // feature bullets, rendered like a billing page rather than product
+  // cards. Built for agents selling plans (or answering "what do you
+  // cost?") — deterministic saved specs, never model-fabricated prices.
+  z.object({
+    type: z.literal('pricing'),
+    title: s(120).optional(),
+    items: z
+      .array(
+        z.object({
+          name: s(60),
+          price: s(30), // "$29/mo"
+          price_alt: s(80).optional(), // "$290/yr — pay 10 months, get 12"
+          blurb: s(200).optional(),
+          features: z.array(s(80)).max(8).optional(),
+          // Featured/current plan styling, mirroring the billing card.
+          highlight: z.boolean().optional(),
+          current: z.boolean().optional(),
+          // Tapping the plan sends this as the customer's message —
+          // "Tell me more about Pro" / "I want to upgrade to Pro".
+          select_label: s(160).optional(),
+        }),
+      )
+      .min(1)
+      .max(6),
   }),
   // Live storefront cart (Shopify only) — widget.js hydrates it from the
   // shop's same-origin /cart.js: real line items with quantity steppers,
@@ -248,7 +288,8 @@ export function stripEmptyStrings(v: unknown): unknown {
 }
 
 const MAX_WIDGETS = 3;
-const WIDGET_LINE = /^WIDGET:\s*(.*)$/i;
+// [\s\S] — the payload can span lines when the model pretty-prints the spec.
+const WIDGET_LINE = /^WIDGET:\s*([\s\S]*)$/i;
 // Saved components — "WIDGET_REF: plans" resolves the agent_widgets row's
 // spec; "WIDGET_REF: tracker {"order_id":"#1932"}" also passes data that
 // fills {prop} placeholders / feeds a bound tool's args. The model writes
@@ -277,9 +318,18 @@ export interface ToolWidgetConfig {
   link_label?: string;
   /** Tapping sends this text as the customer's message (cards only). */
   select_label?: string;
+  /** Shorter text shown ON the select button when select_label is a long
+   *  sentence ("Tell me more…" on the card, "Tell me more about Janis Pro"
+   *  into the chat). Per-row {path} interpolation applies here too. */
+  select_button?: string;
   /** Dot path to the rows array inside the result. Default: the result is
    *  an array, or its first array-valued property. */
   items?: string;
+  /** Dot path to a per-row sort key — the API's default order is rarely the
+   *  answer to the customer's question (Stripe lists newest-first, burying
+   *  the flagship products under recent usage meters). Ascending; prefix
+   *  "-" for descending. Numeric compare when both sides are numbers. */
+  sort?: string;
   /** Widget field → dot path into each row object. cards: title, subtitle,
    *  image, price, link. options: label, description. */
   map?: Record<string, string>;
@@ -386,32 +436,136 @@ function firstCurrencyCode(obj: unknown, depth = 0): string | undefined {
 function mapValue(row: unknown, expr: string, secrets: Record<string, string>): unknown {
   if (expr.includes('{')) {
     const t = expr.replace(/\{\{secrets\.([A-Za-z0-9_]+)\}\}/g, (_, k: string) => secrets[k] ?? '');
-    const out = t.replace(/\{([A-Za-z0-9_.]+)(?::([a-z]+))?\}/g, (_, p: string, mod?: string) => {
-      const v = digPath(row, p);
-      if (mod === 'money') {
-        const parent = p.slice(0, Math.max(0, p.lastIndexOf('.')));
-        // Sibling currencyCode first (MoneyV2), then the row's own, then any
-        // currencyCode in the row — a scalar Money field (ProductVariant.price)
-        // has no sibling, but the row's priceRange still carries the code.
-        const code =
-          digPath(row, parent ? `${parent}.currencyCode` : 'currencyCode') ??
-          digPath(row, 'currencyCode') ??
-          firstCurrencyCode(row);
-        return formatMoney(v, code) ?? '';
+    const out = t.replace(/\{([A-Za-z0-9_.]+)((?::[a-z]+)*)\}/g, (_, p: string, mods?: string) => {
+      // "." addresses the row itself — whole-node modifiers like
+      // :orderline/:trackstate need the object, not a leaf field.
+      const v = p === '.' ? row : digPath(row, p);
+      let cur = v;
+      for (const mod of (mods ?? '').split(':').filter(Boolean)) {
+        if (mod === 'nonzero') {
+          // {path:money:nonzero} — drops the value entirely when it parses to
+          // zero, so summary rows like "Refunded −$0.00" strip instead of
+          // rendering noise. Works alone or after a formatter like :money.
+          const n =
+            typeof cur === 'number'
+              ? cur
+              : Number.parseFloat(String(cur ?? '').replace(/[^0-9.\-]/g, ''));
+          if (!Number.isFinite(n) || Math.abs(n) < 0.005) return '';
+          continue;
+        }
+        if (mod === 'trackstate') {
+          // {orderNode:trackstate} — derives the tracker variant name: a
+          // cancelled order must never render as a pending pipeline, and a
+          // delivered carrier event beats the coarser fulfillment status.
+          const n = cur as Record<string, unknown> | null;
+          if (!n || typeof n !== 'object') return '';
+          if (n.cancelledAt) return 'cancelled';
+          const evs = (Array.isArray(n.fulfillments) ? n.fulfillments : []).flatMap(
+            (f) => ((f as { events?: { nodes?: { status?: unknown }[] } })?.events?.nodes ?? []),
+          );
+          const ev = (s: string) => evs.some((e) => String(e.status ?? '').toLowerCase() === s);
+          if (ev('delivered') || ev('picked_up')) return 'delivered';
+          const ful = String(n.displayFulfillmentStatus ?? '').toUpperCase();
+          // Held orders aren't a pipeline position — they get their own
+          // variant so "on hold" doesn't render as mid-shipment.
+          if (ful === 'ON_HOLD') return 'on_hold';
+          // Nothing to ship (gift cards, digital goods) must not promise a
+          // delivery pipeline: explicit status, or all-digital items while
+          // the order is still open.
+          const items = (
+            (n.lineItems as { nodes?: { requiresShipping?: unknown }[] } | undefined)?.nodes ?? []
+          );
+          const allDigital =
+            items.length > 0 && items.every((i) => i.requiresShipping === false);
+          if (ful === 'FULFILLMENT_NOT_REQUIRED' || (ful === 'UNFULFILLED' && allDigital))
+            return 'no_shipping';
+          // BOPIS/local pickup: a shipping line exists (the pickup point)
+          // but there's no shipping address — nothing travels, so a
+          // Shipped→Delivered pipeline would be a lie.
+          const isPickup = n.shippingAddress === null && n.shippingLine != null;
+          if (isPickup) return ful === 'FULFILLED' ? 'picked_up' : 'pickup';
+          if (ev('in_transit') || ev('out_for_delivery') || ful === 'PARTIALLY_FULFILLED')
+            return 'in_transit';
+          if (ful === 'FULFILLED' || evs.length) return 'shipped';
+          return 'unfulfilled';
+        }
+        if (mod === 'orderline') {
+          // {orderNode:orderline} — one-line status for list subtitles:
+          // Cancelled / Refunded outrank the fulfillment word, which alone
+          // would read "Fulfillment not required" on a cancelled order.
+          const n = cur as Record<string, unknown> | null;
+          if (!n || typeof n !== 'object') return '';
+          if (n.cancelledAt) return 'Cancelled';
+          const fin = String(n.displayFinancialStatus ?? '').toUpperCase();
+          if (fin === 'REFUNDED') return 'Refunded';
+          if (fin === 'PARTIALLY_REFUNDED') return 'Partially refunded';
+          // "Fulfillment not required" reads like an error to a customer —
+          // digital goods just have nothing to ship.
+          if (String(n.displayFulfillmentStatus ?? '').toUpperCase() === 'FULFILLMENT_NOT_REQUIRED')
+            return 'No shipping needed';
+          // Pickup orders never ship — "Unfulfilled" undersells "waiting
+          // for you at the counter".
+          if (n.shippingAddress === null && n.shippingLine != null)
+            return String(n.displayFulfillmentStatus ?? '').toUpperCase() === 'FULFILLED'
+              ? 'Picked up'
+              : 'Awaiting pickup';
+          const s = String(n.displayFulfillmentStatus ?? '')
+            .replace(/[_-]+/g, ' ')
+            .trim()
+            .toLowerCase();
+          return s ? s[0].toUpperCase() + s.slice(1) : '';
+        }
+        if (mod === 'money') {
+          const parent = p.slice(0, Math.max(0, p.lastIndexOf('.')));
+          // Sibling currencyCode first (MoneyV2), then the row's own, then
+          // any currencyCode in the row — a scalar Money field
+          // (ProductVariant.price) has no sibling, but the row's priceRange
+          // still carries the code.
+          const code =
+            digPath(row, parent ? `${parent}.currencyCode` : 'currencyCode') ??
+            digPath(row, 'currencyCode') ??
+            firstCurrencyCode(row);
+          cur = formatMoney(cur, code) ?? '';
+          continue;
+        }
+        // {flag:stock} — 'Out of stock' only when the source flag is a real
+        // false; true/absent (untracked inventory, gift cards) stays silent.
+        if (mod === 'stock') { cur = cur === false ? 'Out of stock' : ''; continue; }
+        // {n:s} — plural suffix: 's' unless the value is exactly 1, so a
+        // subtitle like "{count} item{count:s}" reads "1 item"/"8 items".
+        if (mod === 's') { cur = Number(cur) === 1 ? '' : 's'; continue; }
+        // {path:gidnum} — the numeric tail of a Shopify gid
+        // (gid://shopify/ProductVariant/123 → '123') for the Ajax cart API.
+        if (mod === 'gidnum') {
+          const m = String(cur ?? '').match(/\/(\d+)$/);
+          cur = m ? m[1] : '';
+          continue;
+        }
+        // {status:stepstate} — normalises a raw API status ("in_transit",
+        // "fulfilled") into the status widget's done/current/todo enum, so a
+        // tool's event list can drive a progress tracker's steps.
+        if (mod === 'stepstate') { cur = stepState(cur); continue; }
+        // {ts:date} — ISO-ish timestamps → "Oct 16, 2026" (deterministic
+        // short form; raw API dates are unreadable as subtitles).
+        if (mod === 'date') {
+          const d = new Date(String(cur ?? ''));
+          cur = Number.isNaN(d.getTime())
+            ? ''
+            : d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+          continue;
+        }
+        // {code:paren} — wraps a present value in parens, empty stays empty,
+        // so " −{discounts} {code:paren}" renders "−$5.00 (WELCOME10)".
+        if (mod === 'paren') { cur = String(cur ?? '').trim() ? `(${String(cur).trim()})` : ''; continue; }
+        // {status:pretty} — raw enum/property words → "In transit" —
+        // underscores and SCREAMING_CASE are machine noise in a chat.
+        if (mod === 'pretty') {
+          const s = String(cur ?? '').replace(/[_-]+/g, ' ').trim().toLowerCase();
+          cur = s ? s[0].toUpperCase() + s.slice(1) : '';
+          continue;
+        }
       }
-      // {flag:stock} — 'Out of stock' only when the source flag is a real
-      // false; true/absent (untracked inventory, gift cards) stays silent.
-      if (mod === 'stock') return v === false ? 'Out of stock' : '';
-      // {n:s} — plural suffix: 's' unless the value is exactly 1, so a
-      // subtitle like "{count} item{count:s}" reads "1 item"/"8 items".
-      if (mod === 's') return Number(v) === 1 ? '' : 's';
-      // {path:gidnum} — the numeric tail of a Shopify gid
-      // (gid://shopify/ProductVariant/123 → '123') for the Ajax cart API.
-      if (mod === 'gidnum') {
-        const m = String(v ?? '').match(/\/(\d+)$/);
-        return m ? m[1] : '';
-      }
-      return v == null ? '' : String(v);
+      return cur == null ? '' : String(cur);
     });
     return out.trim() ? out : undefined;
   }
@@ -420,6 +574,26 @@ function mapValue(row: unknown, expr: string, secrets: Record<string, string>): 
 
 const str = (v: unknown): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim().slice(0, 500) : v == null ? undefined : String(v).slice(0, 500);
+
+/** Normalise a provider status word into the status widget's step-state
+ *  enum — terminal-positive words map to done, actively-in-flight words to
+ *  current, everything else (pending, unknown, empty) to todo. */
+const STEP_DONE = new Set([
+  'done', 'delivered', 'fulfilled', 'complete', 'completed', 'closed',
+  'resolved', 'paid', 'success', 'succeeded', 'arrived', 'approved',
+  'confirmed', 'picked_up',
+]);
+const STEP_CURRENT = new Set([
+  'current', 'shipped', 'in_transit', 'in-transit', 'in_progress',
+  'in-progress', 'processing', 'out_for_delivery', 'partially_fulfilled',
+  'active', 'open', 'on_hold',
+]);
+export function stepState(v: unknown): string {
+  const s = String(v ?? '').trim().toLowerCase();
+  if (STEP_DONE.has(s)) return 'done';
+  if (STEP_CURRENT.has(s)) return 'current';
+  return 'todo';
+}
 
 /** Apply cfg.pick to one row — returns a new row with the chosen node at
  *  `into`. Cheapest eligible node wins; when none qualify (all OOS), the
@@ -921,6 +1095,30 @@ export function widgetFromToolResult(
       if (!list.length) return null;
     }
   }
+  // Display ordering — runs after filters, before the 10-card slice, so the
+  // leading cards are the ones the question was about. "-path" descending.
+  if (cfg.sort) {
+    const desc = cfg.sort.startsWith('-');
+    const path = desc ? cfg.sort.slice(1) : cfg.sort;
+    const keyed = (r: unknown): { n?: number; s?: string } => {
+      const v = digPath(r, path);
+      const n = typeof v === 'number' ? v : Number(v);
+      return Number.isFinite(n) ? { n } : { s: String(v ?? '') };
+    };
+    list = [...list].sort((a, b) => {
+      const A = keyed(a);
+      const B = keyed(b);
+      const cmp =
+        A.n !== undefined && B.n !== undefined
+          ? A.n - B.n
+          : A.n !== undefined
+            ? -1
+            : B.n !== undefined
+              ? 1
+              : (A.s ?? '').localeCompare(B.s ?? '');
+      return desc ? -cmp : cmp;
+    });
+  }
   const map = cfg.map ?? {};
   // Label literals stay literal; a {path} in them resolves per-row, so a
   // card's select button can send "I'd like the Blue Tee", not just
@@ -972,6 +1170,7 @@ export function widgetFromToolResult(
                 link: str(mapValue(r, map.link ?? 'link', secrets)),
                 link_label: label(cfg.link_label, r),
                 select_label: label(cfg.select_label, r),
+                select_button: label(cfg.select_button, r),
               };
             })
             .filter((it) => it.title),
@@ -1513,6 +1712,31 @@ export interface WidgetRef {
   data?: Record<string, unknown>;
 }
 
+/** True while a directive's JSON payload is still unterminated — an open
+ *  string or unmatched brackets. Used to absorb pretty-printed multi-line
+ *  specs: models frequently emit "WIDGET: {" then the object over the next
+ *  lines, and a line-at-a-time parser would leak the rest to the customer. */
+function jsonOpen(s: string): boolean {
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (const ch of s) {
+    if (esc) {
+      esc = false;
+      continue;
+    }
+    if (inStr) {
+      if (ch === '\\') esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === '{' || ch === '[') depth++;
+    else if (ch === '}' || ch === ']') depth--;
+  }
+  return depth > 0 || inStr;
+}
+
 /** Strip "WIDGET: {json}" lines from a reply; valid components return for
  *  payload.widgets. Malformed lines are still removed — a broken widget is
  *  better than model markup leaking to the customer — but they count in
@@ -1527,51 +1751,83 @@ export function extractWidgets(text: string): {
   const widgets: WidgetComponent[] = [];
   const refs: WidgetRef[] = [];
   let dropped = 0;
-  const out = text
-    .split('\n')
-    .map((line) => {
-      // The directive can start mid-line ("options: WIDGET: {…}") — the
-      // model loves a colon lead-in. The prose prefix survives; the tail
-      // is consumed as the directive.
-      const dm = /\bWIDGET(?:_REF)?:/i.exec(line);
-      if (!dm) return line;
-      const before = line.slice(0, dm.index).trimEnd();
-      const t = line.slice(dm.index).trim();
-      const ref = t.match(WIDGET_REF_LINE);
-      if (ref) {
-        let data: Record<string, unknown> | undefined;
-        if (ref[2]) {
-          try {
-            const parsed: unknown = JSON.parse(ref[2]);
-            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
-              data = parsed as Record<string, unknown>;
-          } catch {
-            // malformed data object — still resolves the name with no props
-          }
-        }
-        refs.push({ name: normWidgetRef(ref[1]), data });
-        return before;
+  const lines = text.split('\n');
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // The directive can start mid-line ("options: WIDGET: {…}") — the
+    // model loves a colon lead-in. The prose prefix survives; the tail
+    // is consumed as the directive.
+    const dm = /\bWIDGET(?:_REF)?:/i.exec(line);
+    if (!dm) {
+      out.push(line);
+      continue;
+    }
+    const before = line.slice(0, dm.index).trimEnd();
+    let tail = line.slice(dm.index).trim();
+    let ref = tail.match(WIDGET_REF_LINE);
+    let m = ref ? null : tail.match(WIDGET_LINE);
+    let end = i;
+    // Pretty-printed directive — keep absorbing lines while the JSON
+    // payload is unterminated (a blank line, a fresh directive or the cap
+    // ends an abandoned block). Runs even when m matched "WIDGET: {" alone.
+    while (
+      !ref &&
+      jsonOpen(tail) &&
+      end + 1 < lines.length &&
+      end - i < 50 &&
+      lines[end + 1].trim() !== '' &&
+      !/\bWIDGET(?:_REF)?:/i.test(lines[end + 1])
+    ) {
+      end++;
+      tail += '\n' + lines[end];
+      ref = tail.match(WIDGET_REF_LINE);
+      m = ref ? null : tail.match(WIDGET_LINE);
+    }
+    if (!ref && !m) {
+      if (end === i) {
+        // WIDGET-ish word, not a directive — keep verbatim.
+        out.push(line);
+        continue;
       }
-      const m = t.match(WIDGET_LINE);
-      if (!m) return line; // WIDGET-ish word, not a directive — keep verbatim
-      let ok = false;
-      if (widgets.length < MAX_WIDGETS) {
+      // An unterminated/mangled directive block — drop it whole.
+      dropped++;
+      i = end;
+      if (before) out.push(before);
+      continue;
+    }
+    i = end;
+    if (ref) {
+      let data: Record<string, unknown> | undefined;
+      if (ref[2]) {
         try {
-          const parsed = WidgetComponent.safeParse(JSON.parse(m[1]));
-          if (parsed.success) {
-            widgets.push(parsed.data);
-            ok = true;
-          }
+          const parsed: unknown = JSON.parse(ref[2]);
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+            data = parsed as Record<string, unknown>;
         } catch {
-          // malformed JSON — drop the line
+          // malformed data object — still resolves the name with no props
         }
       }
-      if (!ok) dropped++;
-      return before;
-    })
-    .filter((line) => line !== '')
-    .join('\n');
-  return { text: out.trim(), widgets, refs, dropped };
+      refs.push({ name: normWidgetRef(ref[1]), data });
+      if (before) out.push(before);
+      continue;
+    }
+    let ok = false;
+    if (widgets.length < MAX_WIDGETS) {
+      try {
+        const parsed = WidgetComponent.safeParse(JSON.parse(m![1]));
+        if (parsed.success) {
+          widgets.push(parsed.data);
+          ok = true;
+        }
+      } catch {
+        // malformed JSON — drop the block
+      }
+    }
+    if (!ok) dropped++;
+    if (before) out.push(before);
+  }
+  return { text: out.join('\n').trim(), widgets, refs, dropped };
 }
 
 /** Per-item identity — what the component actually shows the customer. */
@@ -1579,7 +1835,7 @@ function widgetItemKeys(w: WidgetComponent): string[] {
   // Itemless components (cart — hydrated client-side) have nothing to key.
   if (w.type === 'cart') return [];
   const items: Record<string, unknown>[] =
-    w.type === 'cards' || w.type === 'options'
+    w.type === 'cards' || w.type === 'options' || w.type === 'pricing'
       ? w.items
       : w.type === 'form'
         ? w.fields

@@ -21,7 +21,11 @@ export interface StreamAlert {
  * EventSource is same-origin (Vite proxy in dev), so the session cookie flows.
  * `onAlert` fires for every alert event (used by the in-app toast).
  */
-export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => void) {
+export function useStream(
+  enabled: boolean,
+  onAlert?: (alert: StreamAlert) => void,
+  opts?: { userId?: string; onNavigate?: (path: string) => void },
+) {
   const qc = useQueryClient();
   useEffect(() => {
     if (!enabled) return;
@@ -83,6 +87,20 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
         // malformed payload — ignore
       }
     });
+    // Concierge select_agent — navigates THIS user's console to the agent
+    // page. user_id targets the session (the stream is workspace-wide);
+    // the path is server-built from an allowlisted section, but we still
+    // only follow same-origin app paths.
+    source.addEventListener('navigate', (e) => {
+      try {
+        const d = JSON.parse((e as MessageEvent).data) as { user_id?: string; path?: string };
+        if (d.user_id && d.user_id === opts?.userId && d.path?.startsWith('/')) {
+          opts?.onNavigate?.(d.path);
+        }
+      } catch {
+        // malformed payload — ignore
+      }
+    });
     // Co-presence — who's viewing each conversation right now.
     source.addEventListener('presence', (e) => {
       try {
@@ -102,5 +120,5 @@ export function useStream(enabled: boolean, onAlert?: (alert: StreamAlert) => vo
       }
     });
     return () => source.close();
-  }, [enabled, qc, onAlert]);
+  }, [enabled, qc, onAlert, opts?.userId, opts?.onNavigate]);
 }

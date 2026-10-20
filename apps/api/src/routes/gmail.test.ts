@@ -165,6 +165,44 @@ describe('gmail poller', () => {
     expect((updated.credentials as ChannelCredentials).gmail_cursor).toBe(1_700_000_005_000);
   });
 
+  it('subject-only mail ingests the subject as the inbound text', async () => {
+    stubFetch({
+      'messages?': () =>
+        new Response(JSON.stringify({ messages: [{ id: 'gm9', threadId: 'thr_9' }] })),
+      'messages/gm9': () =>
+        new Response(
+          JSON.stringify(
+            gmailMessage({
+              id: 'gm9',
+              threadId: 'thr_9',
+              // Earlier than sibling fixtures — the suite shares the channel
+              // cursor and this one must not pull it forward.
+              internalDate: '1700000001000',
+              payload: {
+                mimeType: 'text/plain',
+                headers: [
+                  { name: 'From', value: 'Solo Sender <solo@x.com>' },
+                  { name: 'To', value: MAILBOX },
+                  { name: 'Subject', value: 'hi' },
+                ],
+                body: { data: Buffer.from('').toString('base64url') },
+              },
+            }),
+          ),
+        ),
+    });
+    await sweep(db);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'gmail:solo@x.com'));
+    const [msg] = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.conversationId, conv.id), eq(messages.direction, 'in')));
+    expect(msg.text).toBe('hi');
+  });
+
   it('dedups mail already ingested (overlapping polls)', async () => {
     stubFetch({
       'messages?': () =>

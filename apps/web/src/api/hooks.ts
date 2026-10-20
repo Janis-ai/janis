@@ -107,6 +107,9 @@ export function useConversation(id: string) {
         messages_has_more?: boolean;
         alerts: Alert[];
         suggestions: Suggestion[];
+        // Set when the requested id was merged away (visitor adoption) —
+        // the returned conversation is the survivor.
+        merged_from?: string;
       }>(`/api/conversations/${id}`),
     retry: (count, err) => !(err instanceof ApiError && err.status === 404) && count < 3,
     // SSE invalidation is the fast path; this poll is the safety net for a

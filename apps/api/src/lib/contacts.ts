@@ -5,6 +5,8 @@ import {
   campaignSends,
   channelBindings,
   contactIdentities,
+  contactListMembers,
+  contactLists,
   contacts,
   conversations,
   messages,
@@ -323,4 +325,48 @@ export async function purgeContactData(db: Db, contactId: string): Promise<void>
   await db.delete(campaignSends).where(eq(campaignSends.contactId, contactId));
   await db.delete(contactIdentities).where(eq(contactIdentities.contactId, contactId));
   await db.delete(contacts).where(eq(contacts.id, contactId));
+}
+
+/** GDPR access bundle — everything we hold on the data subject, one JSON
+ *  object. Shared by the console export endpoint and the Shopify
+ *  customers/data_request compliance webhook (which fulfils by email). */
+export async function contactExportBundle(
+  db: Db,
+  contact: typeof contacts.$inferSelect,
+): Promise<Record<string, unknown>> {
+  const [identities, convs, sends, memberships] = await Promise.all([
+    db.select().from(contactIdentities).where(eq(contactIdentities.contactId, contact.id)),
+    db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.contactId, contact.id))
+      .limit(500),
+    db.select().from(campaignSends).where(eq(campaignSends.contactId, contact.id)),
+    db
+      .select({ listId: contactListMembers.listId, name: contactLists.name })
+      .from(contactListMembers)
+      .innerJoin(contactLists, eq(contactListMembers.listId, contactLists.id))
+      .where(eq(contactListMembers.contactId, contact.id)),
+  ]);
+  const msgs = convs.length
+    ? await db
+        .select()
+        .from(messages)
+        .where(inArray(messages.conversationId, convs.map((v) => v.id)))
+        .orderBy(messages.createdAt)
+    : [];
+  const byConv = new Map<string, typeof msgs>();
+  for (const m of msgs) {
+    const list = byConv.get(m.conversationId) ?? [];
+    list.push(m);
+    byConv.set(m.conversationId, list);
+  }
+  return {
+    exported_at: new Date().toISOString(),
+    contact,
+    identities,
+    lists: memberships,
+    campaign_sends: sends,
+    conversations: convs.map((v) => ({ ...v, messages: byConv.get(v.id) ?? [] })),
+  };
 }

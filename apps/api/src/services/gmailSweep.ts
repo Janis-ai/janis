@@ -53,7 +53,9 @@ export async function pollGmailChannel(db: Db, channel: typeof channels.$inferSe
       objectId: creds.email_address,
       senderId: fromAddr,
       name: fromName,
-      text: mail.text,
+      // Subject-only mail arrives with an empty body — the subject is the
+      // content, not a blank line (a truly empty inbound can't be answered).
+      text: mail.text || mail.subject,
       messageId: `gmail:${mail.id}`,
       user: { email: fromAddr },
       payload: {

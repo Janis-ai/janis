@@ -5,12 +5,21 @@ architecture state, recently shipped work, and Mike's working preferences.
 
 ## Stack
 
-npm workspaces monorepo: `apps/api` (Hono + Drizzle, PGlite dev / Postgres prod),
-`apps/web` (React + Vite PWA), `packages/shared` (zod contracts), `packages/sdk`.
+npm workspaces monorepo: `apps/api` (Hono + Drizzle, Postgres dev via
+brew postgresql@18 / Postgres prod), `apps/web` (React + Vite PWA),
+`packages/shared` (zod contracts), `packages/sdk`.
 
 ## Dev servers
 
 - API: `npm run dev -w apps/api` → http://localhost:8787 (tsx watch)
+- Dev DB: real Postgres — `DATABASE_URL=postgres://127.0.0.1:5432/janis_dev`
+  in apps/api/.env (brew postgresql@18, `brew services start postgresql@18`).
+  PGlite is retired locally — a killed-mid-write WAL twice wedged the data
+  dir and the self-heal quarantined + reseeded over live data. The old dirs
+  sit at ~/.janis/pglite* as backups; never open one with a raw
+  `PGlite.create` while a watcher owns it — concurrent access is what
+  corrupts it. To re-import: `migrate-to-pg -w apps/api -- --apply` with
+  PGLITE_DIR pointed at a dir.
 - Web: `npm run dev -w apps/web` → http://localhost:5173 (vite, proxies /api + /auth)
 - Login: `admin@janis.local` / `janis-admin` (env-overridable seed)
 - Demo agent: `npm run demo-agent -w apps/api` (needs built packages/shared + sdk)
@@ -26,8 +35,9 @@ export JANIS_EMAIL_FROM="$(grep '^JANIS_EMAIL_FROM=' .env.production | cut -d= -
 npx tsx scripts/task-summary.ts "Title" "Body"
 ```
 The script doesn't load .env (only index.ts imports loadEnv), so without
-JANIS_EMAIL_FROM the notify leg falls back to alerts@janis.ai and Resend
-403s — janis.ai is NOT verified; inbound.janis.ai IS the verified domain.
+JANIS_EMAIL_FROM the notify leg falls back to the code default. Verified
+Resend domains: janis.ai (send-only, apex MX stays Google), inbound.janis.ai
+(channel inbound + replies), mail.janis.ai (campaigns).
 Emails michael.nathanson@gmail.com from janis@inbound.janis.ai and fires a
 'custom' alert on the concierge rail conversation (lands in the Janis Inbox,
 as a push notification, and on the workspace Slack alert channel).
@@ -59,10 +69,13 @@ as a push notification, and on the workspace Slack alert channel).
   must exist for the visitor's benefit.
 
 ## Gotchas
+- NEVER test against a client's real Slack workspace without Mike's explicit
+  approval — dry replay (`classic-replay.ts`) and scratch workspaces only.
 - Repo lives at ~/repos/janis (moved out of iCloud Drive — sync was corrupting
-  files mid-edit). Do NOT run the API with .pglite inside a synced dir;
-  apps/api/.env sets PGLITE_DIR=~/.janis/pglite.
-- Only ONE tsx watch may run against a PGlite dir at a time; kill extras (pkill -f "tsx watch src/index.ts") before restarting. Boot-time self-heal: createDb probes `select 1` and, when the dir's postmaster.pid holder is dead, quarantines a wedged dir to pglite.broken-<ts> and reopens fresh (corrupt dir → new seed, no boot loop). A LIVE holder still fails loudly — don't run two watchers.
+  files mid-edit). Local data lives in Postgres `janis_dev`, not files.
+- One tsx watch at a time is still correct (two dev servers on one port is
+  always broken) — but Postgres tolerates concurrent connections, so the
+  PGlite dual-writer corruption class is gone.
 
 ## Billing / Stripe
 
@@ -141,7 +154,30 @@ is a day on launch)*
    Stripe webhook re-registration, DNS, CORS tighten, cookie flags. Old
    app stays up for legacy clients.
 2. Verify + export the 17k legacy list (Mongo export) — campaign prep is
-   fiction without it.
+   fiction without it. (2026-10-20: archived in-place on the wordhopapi
+   cluster via scripts/archive-legacy-collections.mjs —
+   slack_integrations_archived 17,294; users_archived 25,917 = only docs
+   with portable contact info out of 12.6M — profile.email 25,787 /
+   google.email 14,752 / slack.user.profile.email 128 / phone fields.
+   Linkage collections also archived whole so joins survive:
+   teams_archived 6,930 / bots_archived 19,437 / slack_channels_archived
+   14,443 / invites_archived 316. Join keys: users.team_id → teams.id,
+   teams.bot.user_id → users.id, bots.owner → users.id,
+   users.slack_integrations.id → slack_integrations.id. NOT archived:
+   channels 16.7M / messages 6.9M / intents / df_queues / statements /
+   apiusers (content+NLU, not linkage). Originals untouched; drop
+   separately. Mongo URI lives in ~/janis-api-old?/.env — the LAST
+   uncommented MONGODB_URI; the first is the dead staging cluster.)
+   Campaign build 2026-10-20: scripts/campaign-segments.mjs segments the
+   archives into ~/Documents/janis-campaign/ (PII — keep out of git):
+   A1_paid_owners 84 / A2_paid_members 82 / B_owners 4,799 /
+   C_engaged 8,597 / D_leads 5,257 = 18,819 contacts; copy + send plan
+   in campaign.md there. NB: real
+   payers are detected via stripe_customer.subscriptions items with
+   amount>0 (175 paid accounts / 169 emails: 140 died 'unpaid', 35
+   left 'active' at freeze); the top-level stripe_subscription field
+   is a $0 tracking shell from a different era — do NOT use it for
+   billing signals.)
 3. IG App Review — submit `instagram_manage_messages` screencast +
    business verification (scope already declared in meta.ts).
 4. Zapier publishing tail — toggle existing Zaps off/on (old polling
@@ -149,11 +185,31 @@ is a day on launch)*
    checkbox.
 5. Twilio — paid account, A2P 10DLC brand + campaign registration, non-US
    regulatory bundles.
-6. Azure app registration → `MS_*` envs (unblocks Outlook — code DONE).
-7. WorkOS account → SSO/SCIM (code DONE, env-gated).
-8. Stripe yearly Prices (live+test) → `STRIPE_*_YEARLY` + `TRIAL_DAYS`
-   envs (checkout code DONE).
-9. `JANIS_SEARCH_API_KEY` — platform web-search tool key (unset, dead).
+6. DONE 2026-10-19 — Azure app reg + `MS_*` envs live; Outlook channel
+   verified end-to-end (Graph /reply threading in lib/outlook.ts).
+7. DONE 2026-10-20 — WorkOS prod env live (API key + client_id verified
+   paired, redirect URI registered, AuthKit subdomain sunny-insight-83).
+   SP-initiated chain verified on prod to the hosted sign-in UI.
+   Leftover: IdP-initiated SSO (user clicks app tile inside Okta) lands on
+   the callback with no state cookie → 'sign-in link expired' by design;
+   decide whether to accept no-state callbacks when a customer asks.
+8. DONE 2026-10-19 — Stripe yearly Prices live+test ($290/$990/$2990 on
+   the existing products), `STRIPE_*_YEARLY` + `TRIAL_DAYS=0` live
+   (trials removed — free tier is the eval path; 01010-4q2), Billing
+   page monthly/annual toggle ships in the same deploy. Verify a real
+   annual checkout before advertising it.
+9. DONE 2026-10-19/20 — `JANIS_SEARCH_BASE_URL` points at self-hosted
+   SearXNG on Cloud Run (`janis-searxng` service, docker/searxng/;
+   Bing+DDG+Mojeek+Wikipedia engines — Google/Startpage CAPTCHA on
+   cloud IPs). Unlimited free search; Brave key path remains as
+   fallback via JANIS_SEARCH_API_KEY. Hardened 2026-10-20: this
+   project does NOT enforce Cloud Run IAM invoker (org policy), so a
+   shared-secret Bearer token is enforced at the container edge —
+   auth-proxy.py on :8080 fronts granian on 127.0.0.1:8081,
+   SEARCH_TOKEN/JANIS_SEARCH_TOKEN pair. min-instances 1 (granian +
+   SearXNG init is ~4min cold; proxy's 30s upstream timeout would 502
+   during boot). Rotate token → update .env+.env.production +
+   redeploy both services.
 
 *B. Quick wins — ALL DONE or moot* (10 plan-meter + /billing/status ✓,
 11 Agents View/Manage ✓, 12 per-event notify prefs grid ✓, 13 DB_POOL_MAX
@@ -197,34 +253,38 @@ drizzle-kit/workbox-build, nothing to drop directly).
     after N, blocklist, per-plan tiers.
 31. Channels tail — shared-email multi-address fan-out (answer_rules
     PARTIAL), WhatsApp template manager UI + business verification,
-    voicemail/IVR/recording consent/transcripts, Outlook (blocked on A6).
+    voicemail/IVR/recording consent/transcripts. (Outlook DONE
+    2026-10-19 — MS_* envs live, Graph /reply threading fixed.)
     (Bubble custom domains + full-page hosted messenger DONE — channel
     claims widget_domain, CNAME→app.janis.ai, scripts/map-domain.sh.)
 32. Autonomous agent-led campaigns — rails exist (send policy, drip
     conditions, conversion attribution); last.
-33. Knowledge-source tail — authenticated sources (per-source request
-    headers JSONB for Notion/GitHub tokens — stored redacted like channel
-    credentials, never echoed to the console; full Drive/Notion OAuth
-    connectors are the bigger lift); conditional re-crawl (ETag/
-    Last-Modified or content hash → skip no-change writes, gives a
-    "changed at" signal); stale-source alert event on knowledge 'degraded'
-    rows (alert-rules system already exists — 'degraded' status +
-    last-good retention shipped 2026-10, so the signal to fire on is
-    already there). Also from the 2026-10-12 audit: SSRF guard on
-    fetchUrlText + helpCentreImport — reuse publiclyFetchable
-    (hostedAgent.ts) plus a DNS resolve (public hostname → private IP is
-    the real hole); URL normalization at add-time (docs.google.com/…/edit
-    → export?format=txt, github.com/…/blob/… → raw.githubusercontent.com)
-    so the two worst silent-index footguns can't be pasted wrong.
-47. Customer-data plumbing gaps (2026-10-12 session): save_user_profile
-    and PATCH /v1/conversations/:id/user write
-    conversations.user_profile only — they never enrich the contact, so
-    agent-collected email/phone can't merge identities or feed campaign
-    reachability (campaigns resolve contact.email). Fix: enrichContact/
-    contactForBinding on save when conv.contact_id exists. Related:
-    first-class collect-data action (Chatbase parity) — conversational
-    or form, custom fields, per-channel toggles, destinations
-    (CRM/webhook/email notify); save_user_profile is the thin version.
+33. Knowledge-source tail — DONE 2026-10-18: authenticated sources
+    (source_headers_enc — AES-256-GCM JSON headers per row; POST
+    knowledge-url + knowledge-import accept `headers`, PATCH
+    knowledge/:fileId rotates/clears; auth headers ride same-host
+    redirect hops only, never projected to console — has_headers flag
+    + an "Auth header" field on the source add form; full Drive/Notion
+    OAuth connectors remain the bigger lift). Also DONE: conditional
+    re-crawl
+    (identical text skips the rewrite; knowledge_files.text_changed_at is
+    the "changed at" signal — migration 0107), stale-source events
+    (ready→degraded fires 'knowledge_source.degraded' + degraded→ready
+    fires 'knowledge_source.recovered' on the workspace event webhook,
+    once per episode), SSRF guard (assertPublicUrl/fetchPublic — literal +
+    DNS-resolve + per-redirect-hop re-checks; fetchUrlText and
+    helpCentreImport both route through it), URL normalization
+    (normalizeSourceUrl rewrites docs.google …/edit → export?format and
+    github blob → raw.githubusercontent at add-time).
+47. Contact enrichment — DONE: save_user_profile enriches the bound
+    contact via enrichContactClaimed (claimed values fill empty fields,
+    differing ones fold to alt_emails/alt_phones, 'self-reported' tag);
+    PATCH /v1/conversations/:id/user enriches via enrichContact
+    (host-asserted, no tag). Tested in hostedAgent.test.ts + v1.test.ts.
+    Related OPEN: first-class collect-data action (Chatbase parity) —
+    conversational or form, custom fields, per-channel toggles,
+    destinations (CRM/webhook/email notify); collect_forms covers the
+    form half.
 48. Procedures/runbooks (Chatbase parity — the interesting borrow):
     numbered plain-language SOPs the agent follows stepwise with tool
     calls invoked inline at named steps, vs hoping system-prompt prose
@@ -234,7 +294,24 @@ drizzle-kit/workbox-build, nothing to drop directly).
     the 2026-10-03 alert matrix did: transcript mirroring fidelity,
     alert delivery + dedup, interactive buttons (approve/assign/
     snooze), context cards, markdown→mrkdwn rendering, takeover from
-    Slack, per-event notify-prefs coverage.
+    Slack, per-event notify-prefs coverage. (2026-10-19 session
+    hardened the concierge half: multi-install card resolution,
+    Janis-logo identity, blocks-vs-text rendering, Approve/Dismiss
+    card rewrite + relay.)
+50. Teams port, staged — Slack surface is ~4k lines (routes/slack.ts +
+    lib/slack.ts + approvals); pipeline underneath is channel-agnostic
+    (handleChannelMessage, channelBindings, pendingActions) so Teams
+    slots in as another channel kind. Slice 1 (~day): teams_webhook
+    channel kind posting alerts/escalations to customer-configured
+    Incoming Webhooks — covers the loudest ask, no install ceremony.
+    Slice 2 (on enterprise demand): Bot Framework app — new activity
+    webhook (JWT validation, <at>-tag mention strip), Teams manifest +
+    per-tenant serviceUrl/conversation-ref storage (no free-form
+    proactive DM; post only where a ref was captured), Adaptive Cards
+    for approvals (Action.Submit → invoke; richer than Block Kit),
+    transcript mirroring into a chosen channel, marketplace review.
+    Build alongside #49 — abstract slackWidgetBlocks/slackMrkdwn into
+    a generic card model rather than retrofitting.
 
 *F. Writing/marketing (non-code)*
 33. Reactivation email sequence — 3 emails (approvals-led), subjects/
@@ -688,11 +765,24 @@ drizzle-kit/workbox-build, nothing to drop directly).
   channel create+delete, outbound send + broadcast, webhook replay, contact
   merge, member invite, workspace update, billing connect/pricing/checkout/
   downgrade. Admin reads via GET /api/workspace/audit-log + Settings card.
-- SSO/SAML: DONE via WorkOS AuthKit (gated on WORKOS_CLIENT_ID/API_KEY).
-  SCIM: code-complete — POST /workos/directory-events verifies the WorkOS
-  HMAC signature (WORKOS_DIRECTORY_WEBHOOK_SECRET), maps directory →
-  workspace via workspaces.config.workos_directory_id, provisions/removes
-  memberships on dsync.user.* events. Untested against a real directory.
+- SSO/SAML: DONE via WorkOS AuthKit (gated on WORKOS_CLIENT_ID/API_KEY) —
+  SP-initiated only (/auth/sso?domain|connection|organization|provider);
+  OAuth begin redirects carry Cache-Control: no-store so browsers can't
+  replay a stale authorize URL (that bug also bit Google/Slack sign-in).
+  Login page shows a Company SSO domain field when /auth/providers.sso.
+  Admin surface (Scale/internal gate, adminOnly): GET/POST
+  /api/workspace/sso[/setup|/disable] — status, WorkOS Admin Portal links
+  ('sso' SAML wizard | 'dsync' directory), self-heals connection/directory
+  ids into workspaces.config.workos{,_directory_id}. lib/workos.ts wraps
+  the REST API; disableSsoIfUngated() runs at every plan-write site in
+  billing.ts + workspace DELETE so a churned workspace can't keep a
+  $125/mo connection billing. ~$125/mo per SSO conn + $125/mo per dsync
+  conn (verify current pricing) — the plan gate is the cost control.
+  SCIM: POST /workos/directory-events verifies the WorkOS HMAC signature
+  (WORKOS_DIRECTORY_WEBHOOK_SECRET), maps directory → workspace via
+  workspaces.config.workos_directory_id, provisions/removes memberships
+  on dsync.user.* events. Untested against a real directory; IdP-initiated
+  login unsupported (no state cookie → callback rejects, by design).
 - RBAC: viewer role — memberships.role 'viewer' is GET-only via a write
   block in sessionAuth (allowlist: own /users/me, /push, /views). Role
   picker + invite role select in Settings.
@@ -705,12 +795,14 @@ drizzle-kit/workbox-build, nothing to drop directly).
 **Env / provider / stack gaps (audited 2026-09-30)**
 - Prod env = .env overlaid by .env.production (deploy-gcp.sh merges →
   /tmp/janis-env.yaml; DATABASE_URL/TWILIO_AUTH_TOKEN also via Secret Manager).
-- Dead everywhere (missing from BOTH envs): MS_CLIENT_ID/SECRET/TENANT/
-  PUSH_TOKEN (Outlook channel code-complete, needs Azure app reg),
-  WORKOS_* ×4 (SSO/SCIM need a WorkOS account), STRIPE_PRICE_*_YEARLY +
-  TRIAL_DAYS (yearly Prices don't exist in Stripe yet — create live+test),
-  RESEND_INBOUND_SECRET (inbound-mail auth unset on the shared domain),
-  JANIS_SEARCH_API_KEY (agent web-search tool dead).
+- Dead everywhere (missing from BOTH envs): RESEND_INBOUND_SECRET
+  (inbound-mail auth unset on the shared domain).
+  JANIS_SEARCH_API_KEY stays unset on purpose — SearXNG BASE_URL+TOKEN is
+  the live search path (see backlog item 9).
+- WorkOS: staging creds in .env (local test path — /auth/sso?provider=
+  GoogleOAuth verified 2026-10-19); PROD env API key + client_id in
+  .env.production — prod env still needs the redirect URI registered +
+  a prod directory-webhook secret before SSO goes live there.
 - Missing locally only (set in .env.production): SLACK_SIGNING_SECRET(+ALT),
   JANIS_SECRETS_KEY (falls back to sha256(SESSION_SECRET) — fine, but
   prod-encrypted secrets can't decrypt locally regardless).
@@ -732,6 +824,21 @@ drizzle-kit/workbox-build, nothing to drop directly).
   marked. Remaining: keep in sync as env.ts grows.
 - Legacy to retire eventually: WORDHOP_API_URL, JANIS_SOCKET_SERVER_URL
   (Heroku relay), LEGACY_SLACK_INTERACTIONS_URL, META_LEGACY_WEBHOOK_URL.
+- Legacy custom alerts (2026-10-20): the new API now owns intent->alert
+  dispatch for migrated bots — runFallback matches DF metadata.intentId
+  against agent.config.legacy.alert_intents and POSTs
+  WORDHOP_API_URL/api/v1/customalert (same downstream as wordhopapi's own
+  eval: queue -> 'custom alert message' -> wordhop-slack j-<uid> channel).
+  Mirrored requests carry x-janis-mirror: 1; wordhopapi skips its own eval
+  when bot.alert_dispatch_mirrored is set in Mongo (Mongoose schema field —
+  non-schema fields are invisible on documents). Flip per agent: import the
+  Mongo subscription union (bot.alerts.intents + channel custom_alerts)
+  into config.legacy.alert_intents, set config.legacy.alert_dispatch=true,
+  and set alert_dispatch_mirrored=true on the Mongo bot doc — together, or
+  alerts either double-post or go silent. This bypasses the legacy
+  paused-channel suppression that dropped Air Tahiti's "Agent" escalations
+  (paused Mongo channel + active PG conv -> user sees the confirmation but
+  no Slack alert).
 
 **Marketing surface (missing)**
 - GA4 (G-G5W5H3CVR2) — funnel events DONE: shared lib/analytics.ts (track +
@@ -934,11 +1041,33 @@ auto-activated — the embedded app's linked state deep-links the merchant
 to themes/current/editor?context=apps&activateAppId=<client_id>/janis-chat.
 Extension uid is stamped in shopify.extension.toml (deploy-generated).
 
-Open phases: 4 =
-order/fulfillment/refund webhooks + catalog/policy knowledge sync;
-5 = AppSubscription billing rail (billingProvider flag per workspace —
-Stripe keeps existing users, Shopify Billing API for listing-acquired);
-6 = listing assets + review.
+Phase 4 DONE — webhooks are API-registered at bind
+(webhookSubscriptionCreate, not toml): orders/create + orders/fulfilled
+attribute orders to chat (Store tab stats), refunds/create,
+products/create|update|delete bump the catalog source, checkouts/update
+fires the abandoned-checkout nudge + 3-touch email sequence (+1h/+24h),
+app_subscriptions/update syncs billing status. Knowledge sync lives in
+lib/shopifySync.ts — each bound shop gets 'shopify://catalog' +
+'shopify://policies' URL-backed knowledge rows the standard
+URL-refresh machinery re-renders every 24h (Admin-GraphQL renderers,
+60-product cap).
+
+Phase 5 DONE — workspaces.billingProvider ('stripe' default /
+'shopify' for listing-acquired). appSubscriptionCreate → confirmationUrl
+flow in lib/shopifyApp.ts (test flag on dev stores); subs carry an
+appUsagePricingDetails line item (cappedAmount per plan —
+PLANS.*.usageCapCents) and sweepShopifyUsage posts
+appUsageRecordCreate deltas every 30min against the stored
+usageLineItemId, cumulative-keyed idempotency. Subs predating the
+usage rail have no usage item — merchant must re-subscribe.
+
+Phase 6 DONE 2026-10-19 — listing assets complete
+(~/Documents/shopify-listing/: 7 screenshots, app-icon-1200, demo mp4,
+listing-copy.md; PCD questionnaire + security policy submitted; review
+walkthrough video recorded), app-check ticked after a dev-store
+embedded session, SUBMITTED FOR REVIEW. Shopify track is now
+reviewer-bound: expect days–weeks; first submissions usually come back
+with feedback requests — watch the Partner Dashboard + email.
 
 Dashboard gaps hit (Shopify migration in progress): GDPR webhooks =
 toml-only; protected-customer-data request UI lives in Partner Dashboard

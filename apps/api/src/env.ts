@@ -33,6 +33,10 @@ export const env = {
   // outbound event webhook (bounces/complaints) — separate Resend webhook
   // registration, so a distinct secret; falls back to the inbound secret.
   resendEventsSecret: process.env.RESEND_EVENTS_SECRET ?? '',
+  // Per-channel custom sending domains — each registration consumes a domain
+  // slot on OUR Resend account (free tier: 3 total). '0' hides the UI and
+  // 400s registrations on plans where infra domains eat the whole quota.
+  resendCustomDomains: process.env.RESEND_CUSTOM_DOMAINS !== '0',
   // ops alerting — Slack incoming webhook for janis.alert incidents, plus
   // the token that authenticates Cloud Monitoring's webhook posts to
   // /ops/alert. Empty webhook = Slack posts skipped.
@@ -107,6 +111,12 @@ export const env = {
   // hosted agents search without the customer configuring a connection.
   // Empty = the tool is hidden from the catalog and never offered to the LLM.
   searchApiKey: process.env.JANIS_SEARCH_API_KEY ?? '',
+  // Self-hosted SearXNG base URL (e.g. https://janis-searxng-xxx.run.app).
+  // When set, web_search queries it instead of Brave — no key or quota.
+  // The endpoint is public-facing but gated by a shared secret checked by
+  // an auth shim in the container — JANIS_SEARCH_TOKEN is the Bearer token.
+  searchBaseUrl: process.env.JANIS_SEARCH_BASE_URL ?? '',
+  searchToken: process.env.JANIS_SEARCH_TOKEN ?? '',
   slackClientId: process.env.SLACK_CLIENT_ID ?? '',
   slackClientSecret: process.env.SLACK_CLIENT_SECRET ?? '',
   slackSigningSecret: process.env.SLACK_SIGNING_SECRET ?? '',
@@ -153,9 +163,6 @@ export const env = {
   // Bridge meta value; the secret verifies session tokens + webhooks.
   shopifyAppApiKey: process.env.SHOPIFY_APP_API_KEY ?? '',
   shopifyAppApiSecret: process.env.SHOPIFY_APP_API_SECRET ?? '',
-  shopifyAppScopes:
-    process.env.SHOPIFY_APP_SCOPES ??
-    'read_orders,write_orders,write_draft_orders,read_products,read_customers,read_legal_policies,write_returns,write_customers,write_discounts,read_checkouts',
   // Note: app-charge test mode is derived per-shop from shop.plan —
   // partnerDevelopment → test:true. No global flag; a forgotten env can't
   // leak test charges into a real merchant install.
@@ -183,6 +190,9 @@ export const env = {
   // channel-update events to self-hosted SDK bots that registered a socket.
   legacySocketUrl:
     process.env.JANIS_SOCKET_SERVER_URL ?? 'https://wordhop-socket-server.herokuapp.com',
+  // Classic-mode Slack ingest — shared secret on POST /slack/classic/receive
+  // (legacy event replay/mirror). Empty disables the endpoint.
+  classicIngestKey: process.env.CLASSIC_SLACK_INGEST_KEY ?? '',
   // Legacy wordhopapi base URL — legacy-SDK traffic is mirrored here so the
   // old dashboard (Mongo transcripts) and wordhop-slack takeovers keep
   // working during the migration. Empty disables forwarding (dev/tests).

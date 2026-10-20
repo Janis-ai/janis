@@ -208,6 +208,7 @@ export async function humanReply(
       senderName: ident.name ?? undefined,
       senderId: ident.name ? user.id : undefined,
       senderAvatar: ident.name ? ident.avatar : undefined,
+      humanAgent: true,
     }); // hosted channel: human → end user
   })();
   if (!delivery.delivered) {

@@ -11,6 +11,7 @@ import { generateSessionToken } from '../lib/crypto.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { env } from '../env.js';
+import { toolsFor } from '../lib/toolExec.js';
 import { agentRoutes } from './agents.js';
 
 let app: Hono;
@@ -379,6 +380,36 @@ describe('tool template install', () => {
     expect(byName('shopify_lookup_order').approval).toBe(true);
     // not in the map → untouched (ungated by catalog default)
     expect(byName('shopify_create_draft_order').approval).toBeUndefined();
+  });
+
+  it('toggles disabled per tool via PATCH /tools/:template', async () => {
+    const id = await newAgentId();
+    await app.request(`/api/agents/${id}/tools/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({
+        template: 'shopify',
+        fields: { shop: 'mystore', token: 'shpat_test' },
+      }),
+    });
+    const res = await app.request(`/api/agents/${id}/tools/shopify`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({
+        disabled: { shopify_list_collections: true, shopify_lookup_order: false },
+      }),
+    });
+    expect(res.status).toBe(200);
+    const { agent } = await res.json();
+    const byName = (n: string) =>
+      agent.config.tools.find((t: { name: string }) => t.name === n);
+    expect(byName('shopify_list_collections').disabled).toBe(true);
+    expect(byName('shopify_lookup_order').disabled).toBeUndefined();
+    // toolsFor hides disabled tools from the model but keeps them configured
+    const [row] = await db.select().from(agents).where(eq(agents.id, id));
+    const names = toolsFor(row).map((t) => t.name);
+    expect(names).toContain('shopify_lookup_order');
+    expect(names).not.toContain('shopify_list_collections');
   });
 
   it('PATCH manages legacy installs by name and stamps the marker', async () => {
@@ -1165,6 +1196,35 @@ describe('knowledge patch + bulk delete', () => {
     expect(row.refreshHours).toBe(48);
   });
 
+  it('GET one file returns its stored text — list stays metadata-only', async () => {
+    const id = await newAgent();
+    const f = await addFile(id, { name: 'Knowledge from Jerry Garcia', text: 'persona note text' });
+    const other = await newAgent();
+    const alien = await addFile(other);
+
+    const listRes = await app.request(`/api/agents/${id}/knowledge`, {
+      headers: { cookie: parentCookie },
+    });
+    const list = await listRes.json();
+    expect(list.files[0].text).toBeUndefined();
+    expect(list.files[0].chars).toBe(17);
+
+    const res = await app.request(`/api/agents/${id}/knowledge/${f.id}`, {
+      headers: { cookie: parentCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.text).toBe('persona note text');
+    expect(body.chars).toBe(17);
+    expect(body.source_url).toBe('https://x.example/page');
+
+    // another agent's file isn't readable through this agent's path
+    const alienRes = await app.request(`/api/agents/${id}/knowledge/${alien.id}`, {
+      headers: { cookie: parentCookie },
+    });
+    expect(alienRes.status).toBe(404);
+  });
+
   it('bulk-delete removes only this agent\'s listed files', async () => {
     const id = await newAgent();
     const other = await newAgent();
@@ -1713,5 +1773,105 @@ describe('try-it scenarios', () => {
     await patchConfig(id, { system_prompt: 'changed' });
     const recount = await get('limit=10');
     expect(recount.counts).toEqual({ all: 3, failing: 1, passing: 0, unrun: 2 });
+  });
+});
+
+describe('platform tools (builtin-tools)', () => {
+  let freeWs: string;
+  let paidWs: string;
+  let freeCookie: string;
+  let paidCookie: string;
+  let freeAgentId: string;
+  let paidAgentId: string;
+
+  beforeAll(async () => {
+    const prevBase = env.searchBaseUrl;
+    env.searchBaseUrl = 'https://searxng.test';
+    const [fw] = await db.insert(workspaces).values({ name: 'Free WS', plan: 'free' }).returning();
+    const [pw] = await db.insert(workspaces).values({ name: 'Paid WS', plan: 'pro' }).returning();
+    freeWs = fw.id;
+    paidWs = pw.id;
+    freeCookie = await cookieFor(freeWs, 'btfree@x.test');
+    paidCookie = await cookieFor(paidWs, 'btpaid@x.test');
+    const mk = async (ws: string, cookie: string, name: string) => {
+      const [a] = await db
+        .insert(agents)
+        .values({ workspaceId: ws, name, config: {} })
+        .returning();
+      return a.id;
+    };
+    freeAgentId = await mk(freeWs, freeCookie, 'Free Bot');
+    paidAgentId = await mk(paidWs, paidCookie, 'Paid Bot');
+    void prevBase;
+  });
+
+  const getTools = (id: string, cookie: string) =>
+    app.request(`/api/agents/${id}/builtin-tools`, { headers: { cookie } }).then((r) => r.json());
+  const patchTool = (id: string, cookie: string, name: string, enabled: boolean) =>
+    app.request(`/api/agents/${id}/builtin-tools`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie },
+      body: JSON.stringify({ name, enabled }),
+    });
+
+  it('lists available platform tools with enabled state', async () => {
+    const r = await getTools(freeAgentId, freeCookie);
+    expect(r.plan).toBe('free');
+    expect(r.tools.map((t: { name: string }) => t.name)).toContain('web_search');
+    expect(r.tools.find((t: { name: string }) => t.name === 'web_search').enabled).toBe(false);
+    // Operator-gated builtins never surface for a customer workspace.
+    expect(r.tools.map((t: { name: string }) => t.name)).not.toContain('create_agent');
+  });
+
+  it('free plan is blocked from enabling (402)', async () => {
+    const r = await patchTool(freeAgentId, freeCookie, 'web_search', true);
+    expect(r.status).toBe(402);
+    const body = await r.json();
+    expect(body.plan_required).toBe(true);
+  });
+
+  it('paid plan toggles on and off', async () => {
+    expect((await patchTool(paidAgentId, paidCookie, 'web_search', true)).status).toBe(200);
+    let r = await getTools(paidAgentId, paidCookie);
+    expect(r.tools.find((t: { name: string }) => t.name === 'web_search').enabled).toBe(true);
+    expect((await patchTool(paidAgentId, paidCookie, 'web_search', false)).status).toBe(200);
+    r = await getTools(paidAgentId, paidCookie);
+    expect(r.tools.find((t: { name: string }) => t.name === 'web_search').enabled).toBe(false);
+  });
+
+  it('rejects unknown and operator-gated names', async () => {
+    expect((await patchTool(paidAgentId, paidCookie, 'nope', true)).status).toBe(404);
+    expect((await patchTool(paidAgentId, paidCookie, 'create_agent', true)).status).toBe(404);
+  });
+
+  it('the generic config PATCH enforces the same gate', async () => {
+    const [fa] = await db.select().from(agents).where(eq(agents.id, freeAgentId));
+    // Smuggling an operator-gated builtin through config is a 400.
+    const bad = await app.request(`/api/agents/${freeAgentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: freeCookie },
+      body: JSON.stringify({ config: { builtin_tools: ['create_agent'] } }),
+    });
+    expect(bad.status).toBe(400);
+    // A valid platform tool on a free plan is a 402.
+    const gated = await app.request(`/api/agents/${freeAgentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: freeCookie },
+      body: JSON.stringify({ config: { builtin_tools: ['web_search'] } }),
+    });
+    expect(gated.status).toBe(402);
+    // Re-writing the SAME allowlist isn't an "addition" — no gate.
+    const [pa] = await db
+      .update(agents)
+      .set({ config: { builtin_tools: ['web_search'] } })
+      .where(eq(agents.id, freeAgentId))
+      .returning();
+    const same = await app.request(`/api/agents/${freeAgentId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', cookie: freeCookie },
+      body: JSON.stringify({ config: { ...(pa.config as object), builtin_tools: ['web_search'] } }),
+    });
+    expect(same.status).toBe(200);
+    void fa;
   });
 });

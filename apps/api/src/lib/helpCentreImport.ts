@@ -31,16 +31,26 @@ export interface HelpCentreImport {
   capped: boolean;
 }
 
-async function get(url: string, accept: string): Promise<Response> {
+// authHeaders — operator-supplied per-import credentials; fetchPublic
+// sends them on same-host hops only (a cross-host redirect drops them).
+async function get(
+  url: string,
+  accept: string,
+  authHeaders?: Record<string, string>,
+): Promise<Response> {
   // SSRF-guarded hop-by-hop fetch — import roots are operator-pasted.
   return (
-    await fetchPublic(url, {
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      headers: {
-        'user-agent': 'JanisKB/1.0 (+knowledge import)',
-        accept,
+    await fetchPublic(
+      url,
+      {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        headers: {
+          'user-agent': 'JanisKB/1.0 (+knowledge import)',
+          accept,
+        },
       },
-    })
+      authHeaders,
+    )
   ).res;
 }
 
@@ -54,13 +64,16 @@ interface ZdArticle {
 /** Probe for Zendesk's public help-centre API — also present on host-mapped
  *  custom domains. Returns null when the origin isn't Zendesk-shaped. A
  *  pasted /hc/<locale>/… URL scopes the listing to that locale. */
-async function zendeskArticles(root: URL): Promise<ZdArticle[] | null> {
+async function zendeskArticles(
+  root: URL,
+  authHeaders?: Record<string, string>,
+): Promise<ZdArticle[] | null> {
   const locale = root.pathname.match(/\/hc\/([a-z]{2}(?:-[a-zA-Z]+)?)(?:\/|$)/)?.[1];
   let pageUrl: string | null =
     `${root.origin}/api/v2/help_center/${locale ? `${locale}/` : ''}articles.json?per_page=100`;
   const out: ZdArticle[] = [];
   for (let page = 0; pageUrl && page < MAX_ZENDESK_PAGES; page++) {
-    const res = await get(pageUrl, 'application/json').catch(() => null);
+    const res = await get(pageUrl, 'application/json', authHeaders).catch(() => null);
     if (!res?.ok) return null;
     const data = (await res.json().catch(() => null)) as
       | { articles?: ZdArticle[]; next_page?: string | null }
@@ -75,9 +88,9 @@ async function zendeskArticles(root: URL): Promise<ZdArticle[] | null> {
 }
 
 /** robots.txt Sitemap: directives, then /sitemap.xml — indexes recurse. */
-async function sitemapUrls(root: URL): Promise<string[]> {
+async function sitemapUrls(root: URL, authHeaders?: Record<string, string>): Promise<string[]> {
   const queue: string[] = [];
-  const robots = await get(`${root.origin}/robots.txt`, 'text/plain,*/*;q=0.5').catch(() => null);
+  const robots = await get(`${root.origin}/robots.txt`, 'text/plain,*/*;q=0.5', authHeaders).catch(() => null);
   if (robots?.ok) {
     for (const line of (await robots.text()).split('\n')) {
       const m = line.match(/^\s*sitemap:\s*(\S+)/i);
@@ -93,7 +106,7 @@ async function sitemapUrls(root: URL): Promise<string[]> {
     if (seen.has(loc)) continue;
     seen.add(loc);
     n++;
-    const res = await get(loc, 'application/xml,text/xml,*/*;q=0.5').catch(() => null);
+    const res = await get(loc, 'application/xml,text/xml,*/*;q=0.5', authHeaders).catch(() => null);
     if (!res?.ok) continue;
     const xml = await res.text();
     const isIndex = /<sitemapindex[\s>]/i.test(xml);
@@ -161,7 +174,7 @@ function inScopeUrl(root: URL, href: string): boolean {
  *  inside its path scope. Discovery only; stub rows are filled by the
  *  sweeper's re-crawl like the sitemap path. Bounded pages+depth keeps the
  *  request-time crawl polite and finite. */
-async function crawlUrls(root: URL): Promise<string[]> {
+async function crawlUrls(root: URL, authHeaders?: Record<string, string>): Promise<string[]> {
   const start = new URL(root.href);
   start.hash = '';
   start.search = '';
@@ -172,7 +185,7 @@ async function crawlUrls(root: URL): Promise<string[]> {
   while (queue.length && visited < MAX_CRAWL_PAGES) {
     const { url, depth } = queue.shift()!;
     visited++;
-    const res = await get(url, 'text/html,*/*;q=0.5').catch(() => null);
+    const res = await get(url, 'text/html,*/*;q=0.5', authHeaders).catch(() => null);
     if (!res?.ok) continue;
     if (!(res.headers.get('content-type') ?? '').toLowerCase().includes('html')) continue;
     found.push(url);
@@ -196,6 +209,7 @@ export async function importHelpCentre(
   agentId: string,
   url: string,
   refreshHours: number,
+  auth: { headers?: Record<string, string>; headersEnc?: string } = {},
 ): Promise<HelpCentreImport> {
   const root = new URL(url);
   const existing = await db
@@ -215,9 +229,12 @@ export async function importHelpCentre(
     agentId,
     mimeType: 'text/url-source',
     refreshHours,
+    // Auth headers persist (encrypted) so the cadence re-crawl authenticates
+    // identically to the import — every row this import creates carries them.
+    ...(auth.headersEnc ? { sourceHeadersEnc: auth.headersEnc } : {}),
   };
 
-  const zd = await zendeskArticles(root);
+  const zd = await zendeskArticles(root, auth.headers);
   if (zd) {
     let imported = 0;
     let skipped = 0;
@@ -255,8 +272,8 @@ export async function importHelpCentre(
 
   // Sitemap first — the site's own page list is the most complete. When it
   // yields nothing under the pasted path, BFS the site's own links instead.
-  const scoped = inScope(root, await sitemapUrls(root));
-  const crawled = scoped.length ? [] : await crawlUrls(root);
+  const scoped = inScope(root, await sitemapUrls(root, auth.headers));
+  const crawled = scoped.length ? [] : await crawlUrls(root, auth.headers);
   const discovered = scoped.length ? scoped : crawled;
   const kind = scoped.length ? 'sitemap' : 'crawl';
   if (!discovered.length) {

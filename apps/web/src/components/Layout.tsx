@@ -429,7 +429,8 @@ export default function Layout() {
   // Build status drives both the nav marks and the setup→live switch:
   // the first live channel turns the guided steps into their section
   // surfaces (same model the builder rail and Overview read).
-  const { data: agentStatus } = useBuildStatus(ctxAgent ?? undefined);
+  const agentStatusQ = useBuildStatus(ctxAgent ?? undefined);
+  const agentStatus = agentStatusQ.data;
   const agentLive = agentStatus?.steps.deploy === 'done';
 
   // /ask — the concierge rail as a full page. The same mounted rail fills the
@@ -1047,7 +1048,7 @@ export default function Layout() {
     },
     [dismiss, soundOn],
   );
-  useStream(hasWorkspace, onAlert);
+  useStream(hasWorkspace, onAlert, { userId: data?.user?.id, onNavigate: navigate });
 
   const logout = async () => {
     await api('/auth/logout', { method: 'POST' });
@@ -1071,10 +1072,10 @@ export default function Layout() {
         body: JSON.stringify({ workspace_id: workspaceId }),
       });
     }
-    // Agent context belongs to the workspace being left — the persisted
-    // id survives qc.clear()+reload and would scope the new workspace's
-    // inbox to an agent it doesn't contain ("No conversations").
-    clearLastAgent();
+    // Agent context persists PER WORKSPACE — the one being left keeps its
+    // remembered agent for when the user comes back, and the destination
+    // restores its own. A foreign id can't leak: useContextAgent validates
+    // against the new workspace's list.
     qc.clear();
     navigate('/conversations');
     window.location.reload();
@@ -1128,7 +1129,7 @@ export default function Layout() {
             onGo={(path) => {
               // The switcher's workspace-header button goes to /conversations —
               // choosing the workspace means leaving the agent's context.
-              if (path === '/conversations') clearLastAgent();
+              if (path === '/conversations' && data.workspace) clearLastAgent(data.workspace.id);
               navigate(path);
             }}
             onSwitchWorkspace={(id) => void switchWorkspace(id)}
@@ -1141,8 +1142,24 @@ export default function Layout() {
             only while an agent is in context. Overview is the dashboard; the
             six BUILD steps are the persistent way into each part (not a
             one-time wizard) with ✓/●/○ status; settings configures it. */}
-        {currentAgent && (
+        {ctxAgent && (
           <div className="agent-nav">
+            {/* Skeleton until BOTH the agent row and its build status are
+                known — rendering steps first and swapping to live sections
+                made the sidebar visibly jump on every agent entry. An
+                errored status query falls back to the setup nav rather
+                than spinning forever. */}
+            {!currentAgent || agentStatusQ.isLoading ? (
+              <>
+                <div className="nav-sec"><Bot size={13} /><span className="nav-skel" style={{ width: '45%' }} /></div>
+                {[70, 55, 62, 48, 66, 40].map((w, i) => (
+                  <div key={i} className="nav-skel-row">
+                    <span className={`nav-skel${i % 3 === 2 ? ' short' : ''}`} style={{ width: `${w}%` }} />
+                  </div>
+                ))}
+              </>
+            ) : (
+            <>
             <div className="nav-sec">
               <Bot size={13} />
               <span>{currentAgent.name}</span>
@@ -1175,6 +1192,8 @@ export default function Layout() {
             })}
             <div className="nav-sec"><span>Configure</span></div>
             <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="icon"><Settings size={18} /></span><span className="label">Agent settings</span></NavLink>
+            </>
+            )}
           </div>
         )}
         {/* The shared customer layer — always the same spots, nested under

@@ -275,6 +275,7 @@ export default function Settings() {
   // Operator identity shown to customers on channels with "show operator
   // name" enabled — display name defaults to the first name when blank.
   const [profile, setProfile] = useState({ display_name: '', avatar_url: '' });
+  const [acctName, setAcctName] = useState('');
   const [profileMsg, setProfileMsg] = useState('');
   const meId = me?.user.id;
   useEffect(() => {
@@ -283,6 +284,7 @@ export default function Settings() {
         display_name: me?.user.display_name ?? '',
         avatar_url: me?.user.avatar_url ?? '',
       });
+      setAcctName(me?.user.name ?? '');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meId]);
@@ -299,6 +301,21 @@ export default function Settings() {
       setProfileMsg('Profile saved.');
     },
     onError: (e) => setProfileMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+  const [acctMsg, setAcctMsg] = useState('');
+  const saveAccount = useMutation({
+    mutationFn: (body: { name: string }) =>
+      api<{ user: WorkspaceUser }>('/api/users/me', {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (d) => {
+      qc.setQueryData<{ user: WorkspaceUser; workspace: unknown }>(['me'], (old) =>
+        old ? { ...old, user: d.user } : old,
+      );
+      setAcctMsg('Saved.');
+    },
+    onError: (e) => setAcctMsg(e instanceof ApiError ? e.message : 'failed'),
   });
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const uploadAvatar = async (file: File) => {
@@ -498,6 +515,7 @@ export default function Settings() {
       {me?.user.role === 'admin' && <DefaultLlmCard />}
       {me?.user.role === 'admin' && <CrmCard />}
       {me?.user.role === 'admin' && <RetentionCard />}
+      {me?.user.role === 'admin' && <SsoCard />}
         </>
       )}
 
@@ -510,6 +528,44 @@ export default function Settings() {
 
       {section === 'me' && (
         <>
+      <div className="card">
+        <strong>Account</strong>
+        <form
+          className="row"
+          style={{ marginTop: 6 }}
+          onSubmit={(e) => {
+            e.preventDefault();
+            const name = acctName.trim();
+            if (name && name !== me?.user.name) saveAccount.mutate({ name });
+          }}
+        >
+          <input
+            style={{ maxWidth: 240 }}
+            value={acctName}
+            onChange={(e) => setAcctName(e.target.value)}
+            placeholder="your name"
+            maxLength={120}
+            required
+          />
+          <button
+            className="btn"
+            disabled={
+              saveAccount.isPending ||
+              !acctName.trim() ||
+              acctName.trim() === me?.user.name
+            }
+          >
+            Save
+          </button>
+        </form>
+        <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
+          {me?.user.email} · {me?.user.role}
+          {me?.user.created_at &&
+            ` · joined ${new Date(me.user.created_at).toLocaleDateString()}`}
+        </div>
+        {acctMsg && <div className="muted" style={{ marginTop: 6 }}>{acctMsg}</div>}
+      </div>
+
       <div className="card">
         <strong>Appearance</strong>
         <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, fontSize: 14 }}>
@@ -1178,6 +1234,153 @@ function RetentionCard() {
         </div>
       )}
       {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
+    </div>
+  );
+}
+
+type SsoStatus = {
+  sso: {
+    configured: boolean;
+    allowed: boolean;
+    plan: string;
+    domain: string | null;
+    organization_id: string | null;
+    connection_status: string | null;
+    directory_linked: boolean;
+    signin_url: string | null;
+    workos_error?: string;
+  };
+};
+
+/** Enterprise SSO / SCIM via WorkOS — Scale-plan gate. Setup runs through
+ *  WorkOS's hosted Admin Portal (each link click mints a fresh URL — the
+ *  customer's IT does the SAML/directory wizard there and we pick the
+ *  resulting connection/directory ids up on the next status poll). */
+function SsoCard() {
+  const qc = useQueryClient();
+  const [confirmEl, confirm] = useConfirm();
+  const { data } = useQuery({
+    queryKey: ['workspace-sso'],
+    queryFn: () => api<SsoStatus>('/api/workspace/sso'),
+  });
+  const sso = data?.sso;
+  const [domain, setDomain] = useState('');
+  const [msg, setMsg] = useState('');
+
+  const setup = useMutation({
+    mutationFn: (intent: 'sso' | 'dsync') =>
+      api<{ portal_url: string }>('/api/workspace/sso/setup', {
+        method: 'POST',
+        body: JSON.stringify({ domain: domain.trim().toLowerCase() || sso?.domain, intent }),
+      }),
+    onSuccess: ({ portal_url }) => {
+      setMsg('Opening the WorkOS setup portal — complete the wizard there, then come back.');
+      window.open(portal_url, '_blank', 'noopener');
+      void qc.invalidateQueries({ queryKey: ['workspace-sso'] });
+    },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+
+  const disable = useMutation({
+    mutationFn: () => api('/api/workspace/sso/disable', { method: 'POST' }),
+    onSuccess: () => {
+      setMsg('SSO disabled — the WorkOS connection was deleted.');
+      void qc.invalidateQueries({ queryKey: ['workspace-sso'] });
+    },
+    onError: (e) => setMsg(e instanceof ApiError ? e.message : 'failed'),
+  });
+
+  if (sso && !sso.configured) return null;
+  return (
+    <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      {confirmEl}
+      <strong>Enterprise SSO</strong>
+      {sso && !sso.allowed ? (
+        <div className="muted" style={{ fontSize: 13 }}>
+          Let employees sign in through your identity provider (Okta, Entra ID, Google
+          Workspace) and sync your directory so leavers lose access automatically.
+          Available on the Scale plan — <a href="/billing">upgrade</a>.
+        </div>
+      ) : (
+        <>
+          <div className="muted" style={{ fontSize: 13 }}>
+            Employees sign in through your identity provider; directory sync
+            deprovisions them automatically when they leave. Setup happens in WorkOS's
+            hosted portal — your IT admin completes the SAML or SCIM wizard there.
+          </div>
+          {!sso?.organization_id ? (
+            <div className="row" style={{ gap: 8 }}>
+              <input
+                className="grow"
+                style={{ maxWidth: 280 }}
+                placeholder="acme.com"
+                value={domain}
+                onChange={(e) => setDomain(e.target.value)}
+              />
+              <button
+                className="btn primary"
+                disabled={setup.isPending || !domain.trim()}
+                onClick={() => setup.mutate('sso')}
+              >
+                {setup.isPending ? 'Preparing…' : 'Set up SSO'}
+              </button>
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 13 }}>
+                <span className="muted">Domain:</span> {sso.domain ?? '—'}{'  '}
+                <span className="muted">SSO:</span>{' '}
+                {sso.connection_status === 'active' ? 'active' : (sso.connection_status ?? 'pending setup')}{'  '}
+                <span className="muted">Directory sync:</span>{' '}
+                {sso.directory_linked ? 'linked' : 'off'}
+              </div>
+              {sso.signin_url && (
+                <div className="muted" style={{ fontSize: 12 }}>
+                  Employee sign-in link: <code>{sso.signin_url}</code>
+                </div>
+              )}
+              {sso.workos_error && (
+                <div className="error">WorkOS: {sso.workos_error}</div>
+              )}
+              <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                {sso.connection_status !== 'active' && (
+                  <button
+                    className="btn"
+                    disabled={setup.isPending}
+                    onClick={() => setup.mutate('sso')}
+                  >
+                    {setup.isPending ? 'Preparing…' : 'Continue SSO setup'}
+                  </button>
+                )}
+                {!sso.directory_linked && (
+                  <button
+                    className="btn"
+                    disabled={setup.isPending}
+                    onClick={() => setup.mutate('dsync')}
+                  >
+                    {setup.isPending ? 'Preparing…' : 'Set up directory sync'}
+                  </button>
+                )}
+                <button
+                  className="btn"
+                  disabled={disable.isPending}
+                  onClick={async () => {
+                    const choice = await confirm(
+                      'Disable SSO? Employees will no longer be able to sign in through your identity provider.',
+                      undefined,
+                      true,
+                    );
+                    if (choice === 'ok') disable.mutate();
+                  }}
+                >
+                  {disable.isPending ? 'Disabling…' : 'Disable SSO'}
+                </button>
+              </div>
+            </>
+          )}
+          {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
+        </>
+      )}
     </div>
   );
 }
