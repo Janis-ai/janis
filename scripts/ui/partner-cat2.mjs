@@ -1,0 +1,14 @@
+import { chromium } from 'playwright';
+import fs from 'fs';
+const OUT = '/tmp/partner';
+const ctx = await chromium.launchPersistentContext('/tmp/partner-profile', { headless: true, channel: 'chrome', viewport: { width: 1600, height: 1400 } });
+const page = ctx.pages()[0] ?? await ctx.newPage();
+await page.goto('https://apps.shopify.com/services/partner-app-submissions/bbc74ee5092894c6b45e93e24db1ede6/en', { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {});
+await page.waitForTimeout(8000);
+await page.locator('text=App category').first().scrollIntoViewIfNeeded();
+await page.locator('button:has-text("Select")').first().click();
+await page.waitForTimeout(3000);
+const opts = await page.evaluate(() => [...document.querySelectorAll('[role="dialog"] label, [role="dialog"] li')].map(e => e.textContent.trim().slice(0, 60)).filter(Boolean));
+console.log(opts.filter(o => /support|chat|inbox|message|help|ai|bot/i.test(o)).join('\n'));
+console.log('---total:', opts.length);
+await ctx.close();

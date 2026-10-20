@@ -1,0 +1,20 @@
+import { chromium } from 'playwright';
+import fs from 'fs';
+const OUT = '/tmp/partner';
+const ctx = await chromium.launchPersistentContext('/tmp/partner-profile', { headless: true, channel: 'chrome', viewport: { width: 1600, height: 1400 } });
+const page = ctx.pages()[0] ?? await ctx.newPage();
+await page.goto('https://apps.shopify.com/services/partner-app-submissions/bbc74ee5092894c6b45e93e24db1ede6/en', { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {});
+await page.waitForTimeout(8000);
+await page.locator('.param-multi-select-languages > button').scrollIntoViewIfNeeded();
+await page.locator('.param-multi-select-languages > button').click();
+await page.waitForTimeout(2000);
+await page.screenshot({ path: `${OUT}/22-lang-open.png` });
+// pick English in the opened dropdown
+const en = page.locator('.param-multi-select-languages label:has-text("English")').first();
+await en.scrollIntoViewIfNeeded().catch(() => {});
+await en.click();
+await page.waitForTimeout(1200);
+const st = await page.evaluate(() => document.querySelector('input[id=":r11:"]')?.checked);
+console.log('english checked:', st);
+await page.screenshot({ path: `${OUT}/23-lang-picked.png` });
+await ctx.close();

@@ -1,0 +1,16 @@
+import { chromium } from 'playwright';
+import { cookies } from './partner-cookies.mjs';
+import fs from 'fs';
+const OUT = '/tmp/partner';
+fs.mkdirSync(OUT, { recursive: true });
+const browser = await chromium.launch({ headless: true, channel: 'chrome' });
+const ctx = await browser.newContext({ viewport: { width: 1600, height: 1400 } });
+await ctx.addCookies(cookies);
+const page = await ctx.newPage();
+await page.goto('https://partners.shopify.com/5256121/apps/435599310849/distribution/app-store', { waitUntil: 'domcontentloaded', timeout: 30000 });
+await page.waitForTimeout(5000);
+await page.locator('button:has-text("Choose")').first().click();
+await page.waitForTimeout(3000);
+await page.screenshot({ path: `${OUT}/08-lang.png` });
+console.log('url:', page.url());
+await browser.close();

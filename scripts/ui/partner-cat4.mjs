@@ -1,0 +1,26 @@
+import { chromium } from 'playwright';
+import fs from 'fs';
+const OUT = '/tmp/partner';
+const ctx = await chromium.launchPersistentContext('/tmp/partner-profile', { headless: true, channel: 'chrome', viewport: { width: 1600, height: 1400 } });
+const page = ctx.pages()[0] ?? await ctx.newPage();
+await page.goto('https://apps.shopify.com/services/partner-app-submissions/bbc74ee5092894c6b45e93e24db1ede6/en', { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {});
+await page.waitForTimeout(8000);
+await page.locator('text=App category').first().scrollIntoViewIfNeeded();
+await page.locator('button:has-text("Select")').first().click();
+await page.waitForTimeout(2500);
+await page.locator('[role="dialog"] input[placeholder*="Search" i]').fill('Chat');
+await page.waitForTimeout(2000);
+await page.locator('[role="dialog"] label:has-text("Chat")').first().click();
+await page.waitForTimeout(1000);
+await page.locator('[role="dialog"] button:has-text("Save")').click();
+await page.waitForTimeout(2500);
+await page.screenshot({ path: `${OUT}/18-cat-done.png` });
+console.log('primary done');
+// Languages: check English
+await page.locator('text=Languages').first().scrollIntoViewIfNeeded();
+const en = page.locator('label:has-text("English")').first();
+await en.click();
+await page.waitForTimeout(800);
+await page.screenshot({ path: `${OUT}/19-lang-check.png` });
+console.log('lang clicked');
+await ctx.close();

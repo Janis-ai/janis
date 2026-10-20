@@ -1,0 +1,15 @@
+import { chromium } from 'playwright';
+import fs from 'fs';
+const OUT = '/tmp/partner';
+fs.mkdirSync(OUT, { recursive: true });
+const ctx = await chromium.launchPersistentContext('/tmp/partner-profile', { headless: true, channel: 'chrome', viewport: { width: 1600, height: 1400 } });
+const page = ctx.pages()[0] ?? await ctx.newPage();
+await page.goto('https://apps.shopify.com/services/partner-app-submissions/bbc74ee5092894c6b45e93e24db1ede6/en', { waitUntil: 'networkidle', timeout: 45000 }).catch(() => {});
+await page.waitForTimeout(8000);
+const btn = page.locator('button:has-text("Save")').first();
+console.log('save btn:', await btn.count());
+await btn.click();
+await page.waitForTimeout(5000);
+await page.screenshot({ path: `${OUT}/15-after-save.png`, fullPage: true });
+console.log('done');
+await ctx.close();
