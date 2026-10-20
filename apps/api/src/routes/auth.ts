@@ -113,6 +113,7 @@ export function authRoutes(db: Db) {
       // the switcher would otherwise show the workspace twice.
       if (ws) list.push({ id: ws.id, name: ws.name, role: 'member', agent_scoped: true });
     }
+    list.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
     return list;
   };
 
