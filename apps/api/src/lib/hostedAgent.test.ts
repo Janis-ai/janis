@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, ungroundedFigures, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { identityBlockReason, type ToolDef } from './toolExec.js';
 import { env } from '../env.js';
 import { extractWidgets } from './widgets.js';
@@ -3009,6 +3009,37 @@ describe('phantom-product guard', () => {
     );
     expect(out).not.toContain('$749.95');
     expect(out).toContain('real alternatives');
+  });
+});
+
+describe('ungroundedFigures', () => {
+  const RESULTS =
+    'NVDA — NVIDIA Corp · NASDAQ\nMarket cap: 5.3T\nPrevious close: 218.09\n' +
+    'https://example.com/nvda';
+
+  it('flags a $-figure absent from the search results', () => {
+    expect(
+      ungroundedFigures(
+        'NVIDIA is currently trading at $218.42 per share, according to Robinhood.',
+        RESULTS,
+      ),
+    ).toEqual(['$218.42']);
+  });
+
+  it('passes figures that appear verbatim in the results', () => {
+    expect(
+      ungroundedFigures('The previous close was $218.09.', RESULTS),
+    ).toEqual([]);
+  });
+
+  it('matches comma-insensitively', () => {
+    expect(ungroundedFigures('Market cap is $1,234.56.', 'cap: 1234.56')).toEqual([]);
+  });
+
+  it('dedupes repeated figures and ignores non-currency text', () => {
+    expect(
+      ungroundedFigures('$5 then $5 again — 20% off list.', 'nothing here'),
+    ).toEqual(['$5']);
   });
 });
 

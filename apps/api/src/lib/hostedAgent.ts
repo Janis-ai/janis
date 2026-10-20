@@ -2382,6 +2382,25 @@ export function buttonLabelOverflow(buttons: ReturnType<typeof extractButtons>['
   return buttons.some((b) => typeof b === 'string' && [...b].length > 20);
 }
 
+/** Currency figures in the reply that don't appear in this turn's tool
+ *  output are invented numbers — "$218.42 from Robinhood" shipped when no
+ *  result contained it. Compared comma-insensitively so "1,234" verifies
+ *  against "1234" in the corpus. */
+export function ungroundedFigures(reply: string, corpus: string): string[] {
+  const haystack = corpus.replace(/[,$\s]/g, '');
+  const bad = new Set<string>();
+  for (const m of reply.matchAll(/\$\s?\d[\d,]*(?:\.\d+)?/g)) {
+    const fig = m[0].replace(/\s/g, '');
+    if (!haystack.includes(fig.replace(/[$,]/g, ''))) bad.add(fig);
+  }
+  return [...bad];
+}
+
+const SEARCH_GROUND_RETRY =
+  'Your previous draft quoted figures that appear nowhere in the search results — those numbers were invented. ' +
+  'Rewrite it: quote only figures that appear verbatim in the results and attribute sources by the actual site ' +
+  'name or URL they came from, or say plainly that the results do not contain that figure. ';
+
 const LINK_GUARD_RETRY =
   'Your previous draft included links that do not work — they were removed, so the reply now points at nothing. ' +
   'Rewrite it: only share a URL that appears in your context, or the site’s own search page ' +
@@ -5258,6 +5277,24 @@ async function replyAsHostedAgent(
         console.warn(`[hosted] unbacked lookup narration conv=${convId} — regenerating`);
         prompt += '\n\n' + LOOKUP_GUARD_RETRY;
         continue;
+      }
+      // Ungrounded figure — a price/quote not present in the search results
+      // it claims to cite ("$218.42 from Robinhood" when no result held it).
+      // Only checked when a web_search actually ran this turn: without a
+      // search, $-figures may legitimately come from the knowledge base or
+      // simple arithmetic. Regenerate once; a survivor ships.
+      const webSearched = gen.toolCalls.some(
+        (t) => t.name === 'web_search' && t.outcome === 'ran',
+      );
+      if (attempt === 0 && reply && webSearched) {
+        const bad = ungroundedFigures(reply, gen.toolTexts.join('\n'));
+        if (bad.length) {
+          console.warn(
+            `[hosted] ungrounded figure(s) ${bad.join(', ')} conv=${convId} — regenerating`,
+          );
+          prompt += `\n\n${SEARCH_GROUND_RETRY}Offending figures: ${bad.join(', ')}.`;
+          continue;
+        }
       }
       // Photo-ID guess — the customer's turn carried an image and the draft
       // names/prices a product or emits product cards without the catalogue
