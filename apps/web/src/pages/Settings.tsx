@@ -149,6 +149,7 @@ export default function Settings() {
       void qc.invalidateQueries({ queryKey: ['slackStatus'] });
       setSlackMsg('Slack workspace disconnected.');
     },
+    onError: (e) => setSlackMsg(e.message),
   });
 
   const [wsName, setWsName] = useState('');

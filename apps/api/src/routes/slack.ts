@@ -5,7 +5,7 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, gt, inArray, isNotNull, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackInstallations, slackPendingInstalls, slackThreads, suggestions, workspaces } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackClassicChannels, slackClassicPrefs, slackInstallations, slackPendingInstalls, slackThreads, suggestions, workspaces } from '../db/schema.js';
 import { env } from '../env.js';
 import { adminOnly, sessionAuth, SESSION_COOKIE, type SessionEnv } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
@@ -58,6 +58,17 @@ async function installationById(
     )
     .limit(1);
   return row;
+}
+
+/** Delete an installation plus its dependent rows. slack_classic_* and
+ * slack_threads all hold notNull FKs on the install row — order matters. */
+async function removeInstallation(db: Db, installationId: string) {
+  await db.transaction(async (tx) => {
+    await tx.delete(slackClassicPrefs).where(eq(slackClassicPrefs.installationId, installationId));
+    await tx.delete(slackClassicChannels).where(eq(slackClassicChannels.installationId, installationId));
+    await tx.delete(slackThreads).where(eq(slackThreads.installationId, installationId));
+    await tx.delete(slackInstallations).where(eq(slackInstallations.id, installationId));
+  });
 }
 
 // channel:ts → processed-at. Slack's overlapping event subscriptions deliver
@@ -809,15 +820,13 @@ export function slackApiRoutes(db: Db) {
         .set({ slackRoutes: next.length ? next : null })
         .where(eq(agents.id, a.id));
     }
-    await db.delete(slackThreads).where(eq(slackThreads.installationId, inst.id));
-    await db.delete(slackInstallations).where(eq(slackInstallations.id, inst.id));
+    await removeInstallation(db, inst.id);
     return c.json({ ok: true });
   });
 
   app.delete('/', adminOnly, async (c) => {
     for (const inst of await installationsFor(db, c.get('workspaceId'))) {
-      await db.delete(slackThreads).where(eq(slackThreads.installationId, inst.id));
-      await db.delete(slackInstallations).where(eq(slackInstallations.id, inst.id));
+      await removeInstallation(db, inst.id);
     }
     return c.json({ ok: true });
   });

@@ -6,7 +6,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alerts, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackInstallations, slackPendingInstalls, slackThreads, users, workspaces } from '../db/schema.js';
+import { agents, alerts, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackClassicChannels, slackClassicPrefs, slackInstallations, slackPendingInstalls, slackThreads, users, workspaces } from '../db/schema.js';
 import { and, eq } from 'drizzle-orm';
 import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
@@ -2494,4 +2494,107 @@ describe('slack concierge (DM to the app)', () => {
     }
     },
   );
+});
+
+describe('disconnect installation', () => {
+  let api: Hono;
+  let cookie: string;
+  let wsId: string;
+  let instId: string;
+  let agentId: string;
+  let adminId: string;
+
+  const req = (path: string, init: RequestInit = {}) =>
+    api.request(path, {
+      ...init,
+      headers: { 'content-type': 'application/json', cookie, ...(init.headers ?? {}) },
+    });
+
+  beforeAll(async () => {
+    api = new Hono().route('/api/slack', slackApiRoutes(db));
+    const [ws] = await db.insert(workspaces).values({ name: 'Disconnect WS' }).returning();
+    wsId = ws.id;
+    const [admin] = await db.insert(users).values({ email: 'dc-admin@x.c', name: 'Admin' }).returning();
+    adminId = admin.id;
+    await db.insert(memberships).values({
+      userId: admin.id,
+      workspaceId: wsId,
+      role: 'admin',
+      acceptedAt: new Date(),
+    });
+    const { token, id } = generateSessionToken();
+    await db.insert(sessions).values({
+      id,
+      userId: admin.id,
+      workspaceId: wsId,
+      expiresAt: new Date(Date.now() + 86400_000),
+    });
+    cookie = `${SESSION_COOKIE}=${token}`;
+    const { hash, preview } = generateApiKey();
+    const [inst] = await db.insert(slackInstallations).values({
+      workspaceId: wsId,
+      teamId: 'T_DC',
+      botToken: 'xoxb-dc',
+      installerUserId: admin.id,
+    }).returning();
+    instId = inst.id;
+    const [agent] = await db.insert(agents).values({
+      workspaceId: wsId,
+      name: 'Dc Bot',
+      apiKeyHash: hash,
+      apiKeyPreview: preview,
+      slackRoutes: [{ installation_id: instId, channel_id: 'CAGENT' }],
+    }).returning();
+    agentId = agent.id;
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'dc-conv' })
+      .returning();
+    await db.insert(slackThreads).values({
+      conversationId: conv.id,
+      installationId: instId,
+      channelId: 'CALERT',
+      ts: '9.9',
+    });
+    await db.insert(slackClassicChannels).values({
+      installationId: instId,
+      sourceChannel: 'messenger:1234',
+      slackChannelId: 'CJCHAN',
+      name: 'j-1234',
+      clientKey: 'ck-dc',
+    });
+    await db.insert(slackClassicPrefs).values({
+      installationId: instId,
+      slackUserId: 'U_OP',
+      clientKey: 'ck-dc',
+    });
+  });
+
+  it('DELETE /:id removes the install plus classic channels, prefs, and threads', async () => {
+    const res = await req(`/api/slack/${instId}`, { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(await db.select().from(slackInstallations).where(eq(slackInstallations.id, instId))).toEqual([]);
+    expect(await db.select().from(slackClassicChannels).where(eq(slackClassicChannels.installationId, instId))).toEqual([]);
+    expect(await db.select().from(slackClassicPrefs).where(eq(slackClassicPrefs.installationId, instId))).toEqual([]);
+    expect(await db.select().from(slackThreads).where(eq(slackThreads.installationId, instId))).toEqual([]);
+    const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
+    expect(agent.slackRoutes).toBeNull(); // last route → inherit workspace default
+  });
+
+  it('an install owned by another workspace is untouched', async () => {
+    const [otherWs] = await db.insert(workspaces).values({ name: 'Foreign WS' }).returning();
+    const [foreign] = await db.insert(slackInstallations).values({
+      workspaceId: otherWs.id,
+      teamId: 'T_FOREIGN',
+      botToken: 'xoxb-f',
+      installerUserId: adminId,
+    }).returning();
+    const res = await req(`/api/slack/${foreign.id}`, { method: 'DELETE' });
+    expect(res.status).toBe(200); // idempotent not-found for this workspace
+    expect(
+      await db.select().from(slackInstallations).where(eq(slackInstallations.id, foreign.id)),
+    ).toHaveLength(1);
+    await db.delete(slackInstallations).where(eq(slackInstallations.id, foreign.id));
+    await db.delete(workspaces).where(eq(workspaces.id, otherWs.id));
+  });
 });
