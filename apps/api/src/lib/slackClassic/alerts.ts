@@ -11,7 +11,6 @@ import { getTranscriptChannel } from './channels.js';
 import { getBulkMessages } from './transcript.js';
 import {
   applyCustomAlertIntentCheck,
-  isPro,
   logSeverityFor,
   resolveAlertSettings,
   suppressionReason,
@@ -110,6 +109,7 @@ function saidAttachment(
 // Plan-dependent append (verbatim): trial ending, delinquent, basic, none.
 function planAttachments(
   cfg: ClassicConfig,
+  pro: boolean,
   wordhopChannel: ClassicChannelRow | undefined,
   install: Installation,
   json: LegacyEvent,
@@ -120,7 +120,7 @@ function planAttachments(
   const janisbot = (cfg.janisbot ?? {}) as { fb_app_id?: string; platform?: string };
   let transcriptLink: string | undefined;
 
-  if (isPro(cfg)) {
+  if (pro) {
     if (
       (janisbot.fb_app_id == null || janisbot.fb_app_id === '') &&
       janisbot.platform === 'messenger'
@@ -348,7 +348,7 @@ async function showAlertToMember(
   const attachments = saidAttachment(type, json, userObject, ctx.install, dmChannelId);
   const actionsAttachment = { text: ' ', callback_id: 'log_buttons', actions: [] as any[] };
   attachments.push(
-    ...planAttachments(cfg, wordhopChannel ?? undefined, ctx.install, json, actionsAttachment),
+    ...planAttachments(cfg, ctx.pro, wordhopChannel ?? undefined, ctx.install, json, actionsAttachment),
   );
   if (actionsAttachment.actions.length > 0) attachments.push(actionsAttachment);
 
@@ -365,7 +365,7 @@ async function showAlertToMember(
   ctx.result.posted.push({ channel: dmChannelId, ts: res.ts, kind: `alert:${type}` });
 
   // doProcessPro — threaded profile card under the alert DM.
-  if (isPro(cfg) && res.message) {
+  if (ctx.pro && res.message) {
     const domain = cfg.teamDomain ?? `${ctx.install.teamName ?? ctx.install.teamId}`;
     const transcriptLink = wordhopChannel
       ? `https://${domain}.slack.com/archives/${wordhopChannel.slackChannelId}${
@@ -392,9 +392,8 @@ export async function showJanisAlert(
     ctx.result.errors.push('alert missing channel');
     return;
   }
-  const cfg = ctx.install.classicConfig as ClassicConfig;
   let wordhopChannel: ClassicChannelRow | null = null;
-  if (isPro(cfg)) {
+  if (ctx.pro) {
     wordhopChannel = await getTranscriptChannel({
       ...ctx,
       sourceChannel: String(json.channel ?? json.sourceChannel),

@@ -385,7 +385,7 @@ describe('dispatchClassicEvent (dry)', () => {
   it('bulk messages → transcript lines into existing j-channel', async () => {
     const [conv] = await db
       .insert(conversations)
-      .values({ agentId: agent.id, externalId: 'messenger:5322' })
+      .values({ agentId: agent.id, externalId: 'messenger:9911' })
       .returning();
     await db.insert(messages).values([
       { conversationId: conv.id, direction: 'in', text: 'hello', payload: { message: { text: 'hello', user: 'u1' } } },
@@ -393,22 +393,22 @@ describe('dispatchClassicEvent (dry)', () => {
     ]);
     await db.insert(slackClassicChannels).values({
       installationId: install.id,
-      sourceChannel: '5322',
-      slackChannelId: 'C5322',
-      name: 'j-5322',
+      sourceChannel: '9911',
+      slackChannelId: 'C9911',
+      name: 'j-9911',
     });
     const r = await dispatchClassicEvent(db, install, 'bulk messages', {
       client_key: 'ck',
-      channel: '5322',
+      channel: '9911',
       team_ids: ['T1'],
     }, { dry: true });
     const lines = r.posted.filter((p) => p.kind.startsWith('transcript:'));
     expect(lines).toHaveLength(2);
-    expect(lines.map((l) => l.channel)).toEqual(['C5322', 'C5322']);
+    expect(lines.map((l) => l.channel)).toEqual(['C9911', 'C9911']);
     // messages now marked processed → second flush posts nothing
     const r2 = await dispatchClassicEvent(db, install, 'bulk messages', {
       client_key: 'ck',
-      channel: '5322',
+      channel: '9911',
       team_ids: ['T1'],
     }, { dry: true });
     expect(r2.posted.filter((p) => p.kind.startsWith('transcript:'))).toHaveLength(0);
@@ -417,7 +417,7 @@ describe('dispatchClassicEvent (dry)', () => {
   it('engage users skips j-channels', async () => {
     const r = await dispatchClassicEvent(db, install, 'engage users', {
       client_key: 'ck',
-      channels: ['C5322'],
+      channels: ['C9911'],
       message: 'broadcast',
       team_ids: ['T1'],
     }, { dry: true });
