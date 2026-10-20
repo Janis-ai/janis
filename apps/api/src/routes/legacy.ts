@@ -131,30 +131,65 @@ export function legacyWebhookRoutes(db: Db) {
   });
 
   // ---- Bot-platform fallbacks ---------------------------------------------
+  // Every fallback call is mirrored verbatim to wordhopapi: on the old stack
+  // these endpoints also wrote Mongo channel rows, queued transcript-channel
+  // posts to wordhop-slack, and fired escalation cards. wordhopapi's response
+  // is AUTHORITATIVE when it arrives: an empty {} means the turn was
+  // intentionally suppressed (paused takeover, standby, plan gate) and our
+  // own DF answer must not leak through — a paused channel is human-owned.
+  // We still run our own DF eval for transcript/usage/alert bookkeeping, and
+  // our answer only stands when the mirror fails or times out.
+
+  const mirrorVerdict = async (
+    mirror: Promise<Response | null>,
+    ours: Record<string, unknown> | null,
+    empty: Record<string, unknown>,
+  ) => {
+    const res = await mirror;
+    if (res?.ok) {
+      const text = await res.text();
+      if (!text) return empty;
+      try {
+        return JSON.parse(text) as Record<string, unknown>;
+      } catch {
+        return ours;
+      }
+    }
+    return ours;
+  };
 
   app.all('/client/:client_key/chatfuel/fallback', async (c) => {
+    const mirror = mirrorToLegacy(c);
     const out = await runFallback(db, c.req.param('client_key'), await normalizeChatfuel(c), 'chatfuel');
-    return c.json(out ?? { messages: [] });
+    return c.json((await mirrorVerdict(mirror, out, {})) ?? { messages: [] });
   });
 
   app.all('/client/:client_key/manychat/fallback', async (c) => {
+    const mirror = mirrorToLegacy(c);
     const { norm, subscriberId } = await normalizeManychat(c);
-    if (!subscriberId) return c.json({ version: 'v2', content: { messages: [], actions: [] } });
+    const empty = { version: 'v2', content: { messages: [], actions: [] } };
+    if (!subscriberId) {
+      await mirror;
+      return c.json(empty);
+    }
     const out = await runFallback(db, c.req.param('client_key'), norm, 'manychat');
-    return c.json(out ?? { version: 'v2', content: { messages: [], actions: [] } });
+    return c.json((await mirrorVerdict(mirror, out, empty)) ?? empty);
   });
 
   app.all('/client/:client_key/sendtouser/fallback', async (c) => {
+    const mirror = mirrorToLegacy(c);
     const out = await runFallback(db, c.req.param('client_key'), await normalizeChatfuel(c), 'chatfuel', true);
-    return c.json(out ?? { messages: [] });
+    return c.json((await mirrorVerdict(mirror, out, {})) ?? { messages: [] });
   });
 
   app.all('/client/:client_key/dialogflow/fallback', async (c) => {
+    const mirror = mirrorToLegacy(c);
     const out = await runFallback(db, c.req.param('client_key'), await normalizeDialogflow(c), 'chatfuel');
-    return c.json(out ?? { messages: [] });
+    return c.json((await mirrorVerdict(mirror, out, {})) ?? { messages: [] });
   });
 
   app.all('/client/:client_key/manychat/app-auth', async (c) => {
+    const mirror = mirrorToLegacy(c);
     const key = c.req.param('client_key');
     const body = (await c.req.json().catch(() => ({}))) as { app_token?: string };
     const agent = await agentByClientKey(db, key);
@@ -166,10 +201,52 @@ export function legacyWebhookRoutes(db: Db) {
         .set({ credentials: { ...(channel.credentials as ChannelCredentials), manychat_token: body.app_token } })
         .where(eq(channels.id, channel.id));
     }
+    await mirror;
     return c.json({ success: true });
   });
 
   return app;
+}
+
+/**
+ * Replay the caller's request verbatim against wordhopapi (same path, query,
+ * headers, body). The legacy /messenger fallback endpoints do far more than
+ * answer: they upsert Mongo channel rows, post transcript entries to
+ * wordhop-slack, evaluate escalation rules, and emit the alert cards a
+ * migrated client's team still watches. Our response to the caller is
+ * authoritative; the mirrored response is discarded.
+ *
+ * The clone() must happen before the body readers below run — callers invoke
+ * mirrorToLegacy first, so the original stream stays consumable by
+ * normalizeChatfuel/normalizeManychat/normalizeDialogflow.
+ * Must be awaited before responding: Cloud Run throttles CPU between
+ * requests, so fire-and-forget fetches may never complete.
+ */
+async function mirrorToLegacy(c: Context): Promise<Response | null> {
+  if (!env.legacyApiUrl) return null;
+  const method = c.req.raw.method;
+  const body =
+    method === 'GET' || method === 'HEAD'
+      ? Promise.resolve(undefined)
+      : c.req.raw.clone().text();
+  const headers = new Headers();
+  c.req.raw.headers.forEach((v, k) => {
+    if (!/^(host|connection|content-length|cf-|x-forwarded)/i.test(k)) headers.set(k, v);
+  });
+  const url = new URL(c.req.url);
+  const target = `${env.legacyApiUrl}${url.pathname}${url.search}`;
+  headers.set('x-janis-mirror', '1');
+  try {
+    return await fetch(target, {
+      method,
+      headers,
+      body: await body,
+      signal: AbortSignal.timeout(8_000),
+    });
+  } catch (err) {
+    console.warn('legacy mirror failed', url.pathname, (err as Error).message);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -423,7 +500,17 @@ async function runFallback(
   const channel = await messengerChannelFor(db, agent.id);
   if (!channel || !norm.userId) return null;
   const creds = channel.credentials as ChannelCredentials;
-  const cfg = (agent.config ?? {}) as { dialogflow?: { project: string; lang?: string }; legacy?: { takeover_timeout?: number } };
+  const cfg = (agent.config ?? {}) as {
+    dialogflow?: { project: string; lang?: string };
+    legacy?: {
+      takeover_timeout?: number;
+      // wordhopapi alert contract: intents subscribed for "custom alert"
+      // posts (bot.alerts.intents ∪ channel custom_alerts) — recorded on the
+      // transcript when matched; the Slack post itself is made by
+      // wordhopapi's own eval on the mirrored call.
+      alert_intents?: { name?: string; id: string }[];
+    };
+  };
 
   let conv = await convForUser(db, channel, norm.userId);
   conv = await pauseLapsed(db, conv, channel.workspaceId, creds, cfg.legacy ?? {});
@@ -507,7 +594,16 @@ async function runFallback(
         await setPaused(db, conv, channel.workspaceId, DF_PAUSE_TAG);
       }
     }
-    if (action === 'alert.custom' || action === 'custom_alert' || p.custom_alert != null) {
+    // Per-intent alert subscriptions (wordhopapi processApiAIResponse):
+    // the DF intentId is matched against subscribed intents imported into
+    // config.legacy.alert_intents — this is the ONLY trigger for intents
+    // like talk.agent that carry no action/parameters. The actual alert
+    // post stays in wordhopapi's own eval on the mirrored call; we only
+    // record the match on the transcript.
+    const intentId = result.metadata?.intentId;
+    const subMatch =
+      intentId != null && (cfg.legacy?.alert_intents ?? []).some((a) => a.id === intentId);
+    if (action === 'alert.custom' || action === 'custom_alert' || p.custom_alert != null || subMatch) {
       events.push({ type: 'custom_alert', conversation_id: conv.externalId, alert_type: result.metadata?.intentName ?? 'custom', text: norm.text });
     }
     if (events.length) await processEvents(db, agent, events);

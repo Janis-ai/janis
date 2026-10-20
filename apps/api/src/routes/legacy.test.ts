@@ -78,9 +78,22 @@ function stubFetches(dfImpl?: () => Response) {
       return new Response('{}', { status: init?.method === 'DELETE' ? 200 : 404 });
     if (u.includes('graph.facebook.com')) return new Response('{}', { status: 200 });
     if (u.includes('api.manychat.com')) return new Response('{}', { status: 200 });
+    // wordhopapi mirror: default to a dead upstream so tests exercise our
+    // own fallback answer; mirror-authoritative cases stub it explicitly.
+    if (u.includes('legacy.test')) return Promise.reject(new Error('upstream down'));
     return new Response('{}', { status: 200 });
   });
 }
+
+const stubLiveMirror = (body = '{}') => {
+  const base = stubFetches();
+  return vi.fn().mockImplementation(async (url: string | URL, init?: RequestInit) => {
+    if (String(url).includes('legacy.test')) {
+      return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return base(url, init);
+  });
+};
 
 const dfCalls = (f: ReturnType<typeof vi.fn>) =>
   f.mock.calls.filter((c) => String(c[0]).includes(':detectIntent'));
@@ -147,6 +160,7 @@ beforeAll(async () => {
 
   env.metaVerifyToken = 'test-verify';
   env.metaAppId = '1242623579085955';
+  env.legacyApiUrl = 'https://legacy.test';
   const { legacyWebhookRoutes } = await import('./legacy.js');
   app = legacyWebhookRoutes(db) as Hono;
 });
@@ -318,6 +332,137 @@ describe('POST /client/:key/manychat/fallback', () => {
     const dfBody = JSON.parse((dfCalls(fetchMock).at(-1)![1] as RequestInit).body as string);
     const ctxNames = (dfBody.queryParams.contexts as { name: string }[]).map((c) => c.name);
     expect(ctxNames.some((n) => n.endsWith('/contexts/vip'))).toBe(true);
+  });
+});
+
+describe('legacy mirror → wordhopapi', () => {
+  it('replays the raw chatfuel fallback call verbatim', async () => {
+    const fetchMock = stubFetches();
+    vi.stubGlobal('fetch', fetchMock);
+    const payload = { 'messenger user id': 'PSID1', 'user input': 'mirror me', mid: 'm.mirror.1' };
+    const res = await postFallback('chatfuel', payload);
+    expect(res.status).toBe(200);
+    const mirror = fetchMock.mock.calls.find((c) => String(c[0]).includes('legacy.test'));
+    expect(mirror).toBeTruthy();
+    // same path + the caller's exact JSON body
+    expect(String(mirror![0])).toBe(
+      `https://legacy.test/client/${CLIENT_KEY}/chatfuel/fallback`,
+    );
+    expect(String(mirror![1]?.body)).toBe(JSON.stringify(payload));
+    expect((mirror![1]?.headers as Headers).get('content-type')).toBe('application/json');
+  });
+
+  it('keeps query params on mirrored GET-style calls', async () => {
+    const fetchMock = stubFetches();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await app.request(
+      `/client/${CLIENT_KEY}/chatfuel/fallback?messenger%20user%20id=PSID1&user%20input=query%20call`,
+      { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' },
+    );
+    expect(res.status).toBe(200);
+    const mirror = fetchMock.mock.calls.find((c) => String(c[0]).includes('legacy.test'));
+    expect(String(mirror![0])).toContain('messenger%20user%20id=PSID1');
+  });
+
+  it('survives a dead wordhopapi without breaking the caller', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string | URL, init?: RequestInit) => {
+      if (String(url).includes('legacy.test')) throw new Error('upstream down');
+      return stubFetches()(url, init);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await postFallback('chatfuel', {
+      'messenger user id': 'PSID1',
+      'user input': 'still works?',
+    });
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('custom alert intent subscriptions', () => {
+  const customalertCalls = (f: ReturnType<typeof vi.fn>) =>
+    f.mock.calls.filter((c) => String(c[0]).includes('/api/v1/customalert'));
+  const mirrorCalls = (f: ReturnType<typeof vi.fn>) =>
+    f.mock.calls.filter((c) => String(c[0]).includes('legacy.test') && !String(c[0]).includes('/api/v1/customalert'));
+
+  const setLegacyCfg = async (extra: Record<string, unknown> | null) => {
+    await db
+      .update(agents)
+      .set({
+        config: {
+          engine: 'monitor',
+          dialogflow: { project: 'test-proj', lang: 'en' },
+          legacy: { client_key: CLIENT_KEY, code_lang: 'chatfuel', ...(extra ?? {}) },
+          greeting_enabled: false,
+        },
+      })
+      .where(eq(agents.id, channel.agentId));
+  };
+
+  it('marks mirrored requests so wordhopapi skips its own alert eval', async () => {
+    const fetchMock = stubFetches();
+    vi.stubGlobal('fetch', fetchMock);
+    await postFallback('chatfuel', { 'messenger user id': 'PSID5', 'user input': 'hi' });
+    const mirror = mirrorCalls(fetchMock).at(-1);
+    expect((mirror![1]?.headers as Headers).get('x-janis-mirror')).toBe('1');
+  });
+
+  it('records the custom_alert event; the mirrored eval owns the Slack post', async () => {
+    const fetchMock = stubFetches();
+    vi.stubGlobal('fetch', fetchMock);
+    await setLegacyCfg({ alert_intents: [{ id: 'i1', name: 'talk.agent' }] });
+    try {
+      const res = await postFallback('chatfuel', { 'messenger user id': 'PSID7', 'user input': 'Agent' });
+      expect(res.status).toBe(200);
+      expect(customalertCalls(fetchMock)).toHaveLength(0);
+      const conv = await convByUser('PSID7');
+      const msgs = await msgsFor(conv.id);
+      expect(msgs.some((m) => (m.flags as { custom_alert?: boolean })?.custom_alert)).toBe(true);
+    } finally {
+      await setLegacyCfg(null);
+    }
+  });
+
+  it('ignores intents without a matching subscription', async () => {
+    const fetchMock = stubFetches();
+    vi.stubGlobal('fetch', fetchMock);
+    await setLegacyCfg({ alert_intents: [{ id: 'other-intent', name: 'nope' }] });
+    try {
+      await postFallback('chatfuel', { 'messenger user id': 'PSID8', 'user input': 'unrelated' });
+      expect(customalertCalls(fetchMock)).toHaveLength(0);
+      const conv = await convByUser('PSID8');
+      const msgs = await msgsFor(conv.id);
+      expect(msgs.some((m) => (m.flags as { custom_alert?: boolean })?.custom_alert)).toBe(false);
+    } finally {
+      await setLegacyCfg(null);
+    }
+  });
+});
+
+describe('mirror-authoritative fallback responses', () => {
+  it('returns wordhopapi’s verbatim answer when the mirror responds', async () => {
+    const fetchMock = stubLiveMirror('{"redirect_to_blocks":["talk.agent"],"messages":[]}');
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await postFallback('chatfuel', { 'messenger user id': 'PSID9M', 'user input': 'Agent' });
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { redirect_to_blocks?: string[] };
+    expect(j.redirect_to_blocks).toEqual(['talk.agent']);
+  });
+
+  it('honors suppression: an empty mirror {} stays silent even though our DF matched', async () => {
+    const fetchMock = stubLiveMirror('{}');
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await postFallback('chatfuel', { 'messenger user id': 'PSID10M', 'user input': 'Agent' });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('{}');
+  });
+
+  it('falls back to our own answer when the mirror fails', async () => {
+    const fetchMock = stubFetches();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await postFallback('chatfuel', { 'messenger user id': 'PSID11M', 'user input': 'hi' });
+    expect(res.status).toBe(200);
+    const j = (await res.json()) as { messages: { text?: string }[] };
+    expect(j.messages[0]?.text).toBe('hi from df');
   });
 });
 
