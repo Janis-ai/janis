@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { identityBlockReason, type ToolDef } from './toolExec.js';
 import { env } from '../env.js';
 import { extractWidgets } from './widgets.js';
@@ -1293,6 +1293,33 @@ describe('repairPricingItems', () => {
     const w = [pricing([{ name: 'Pro', price: 'bash/mo' }])];
     repairPricingItems(w, DOCS, new Set(w));
     expect(w[0].items[0]).toMatchObject({ price: 'bash/mo' });
+  });
+
+  it('overrides prices from the canonical plan table — even on saved specs', () => {
+    const w = [
+      pricing([
+        { name: 'Free', price: 'bash/mo', price_alt: '$0/yr' },
+        { name: 'Starter', price: '9/mo', select_label: 'Tell me more about the Starter plan' },
+        { name: 'Custom Tier', price: '$5/mo' },
+      ]),
+    ];
+    repairPricingItems(w, DOCS, new Set(w), janisPlanPrices());
+    expect(w[0].items[0]).toMatchObject({ price: '$0/mo' });
+    expect(w[0].items[0]).not.toHaveProperty('price_alt');
+    expect(w[0].items[1]).toMatchObject({
+      price: '$29/mo',
+      price_alt: '$290/yr — pay 10 months, get 12',
+      select_button: 'Tell me more…',
+    });
+    // Non-plan names in a saved spec aren't touched — only canonical repair applies.
+    expect(w[0].items[2]).toMatchObject({ price: '$5/mo' });
+  });
+
+  it('canonical items still get economics language stripped', () => {
+    const w = [pricing([{ name: 'Pro', price: '9/mo', blurb: 'cost plus margin on usage' }])];
+    repairPricingItems(w, DOCS, new Set(w), janisPlanPrices());
+    expect(w[0].items[0]).toMatchObject({ price: '$99/mo' });
+    expect(w[0].items[0]).not.toHaveProperty('blurb');
   });
 });
 

@@ -1577,23 +1577,55 @@ function priceNearName(name: string, corpus: string): string | undefined {
  *  with no price beats one quoting an invented number. Internal-economics
  *  terms are stripped from bullets and blurbs. `skip` holds ref-resolved
  *  specs — saved components are deterministic by construction. */
+/** The operator concierge's own plan prices come from the platform's PLANS
+ *  table — authoritative over both the model's memory AND a saved spec that
+ *  was persisted from a broken model draft. Keyed by lowercase plan name. */
+export function janisPlanPrices(): Map<string, { price: string; price_alt?: string }> {
+  const m = new Map<string, { price: string; price_alt?: string }>();
+  for (const p of Object.values(PLANS)) {
+    if (p.hidden) continue;
+    const entry: { price: string; price_alt?: string } = { price: `$${p.baseCents / 100}/mo` };
+    if (p.baseCents > 0)
+      entry.price_alt = `$${((p.baseCents * 10) / 100).toLocaleString('en-US')}/yr — pay 10 months, get 12`;
+    m.set(p.name.toLowerCase(), entry);
+  }
+  return m;
+}
+
 export function repairPricingItems(
   widgets: WidgetComponent[],
   docs: { name: string; text: string }[],
   skip: Set<WidgetComponent> = new Set(),
+  canonical?: Map<string, { price: string; price_alt?: string }>,
 ): void {
   const corpus = docs.map((d) => `${d.name}\n${d.text}`).join('\n');
-  if (!corpus.trim()) return;
   const lower = corpus.toLowerCase();
   for (const w of widgets) {
-    if (w.type !== 'pricing' || skip.has(w)) continue;
+    if (w.type !== 'pricing') continue;
+    const skipped = skip.has(w);
     for (const item of w.items) {
-      if (item.price && !verbatimIn(item.price, lower)) {
+      const canon = item.name ? canonical?.get(item.name.trim().toLowerCase()) : undefined;
+      if (canon) {
+        // Platform truth wins — applies to ref-resolved saved specs too:
+        // a spec saved from a broken model draft keeps serving "bash/mo"
+        // forever otherwise.
+        item.price = canon.price;
+        if (canon.price_alt) item.price_alt = canon.price_alt;
+        else delete item.price_alt;
+        if (
+          item.select_label &&
+          !item.select_button &&
+          item.select_label.trim().toLowerCase().startsWith('tell me more')
+        )
+          item.select_button = 'Tell me more…';
+      }
+      if (skipped && !canon) continue;
+      if (!canon && item.price && !verbatimIn(item.price, lower)) {
         const found = item.name ? priceNearName(item.name, corpus) : undefined;
         if (found) item.price = found;
         else delete item.price;
       }
-      if (item.price_alt && !verbatimIn(item.price_alt, lower)) delete item.price_alt;
+      if (!canon && item.price_alt && !verbatimIn(item.price_alt, lower)) delete item.price_alt;
       if (item.features?.length) {
         const kept = item.features.filter((f) => !INTERNAL_ECONOMICS.test(f));
         if (kept.length) item.features = kept;
@@ -5551,7 +5583,12 @@ async function replyAsHostedAgent(
     // customer acts on. Verify each price verbatim against the corpus,
     // re-resolve from the plan name, or drop it; internal-economics terms
     // (margin/wholesale) never belong on a customer's price card.
-    repairPricingItems(widgets, allDocs, refResolved);
+    repairPricingItems(
+      widgets,
+      allDocs,
+      refResolved,
+      agent.workspaceId === env.operatorWorkspaceId ? janisPlanPrices() : undefined,
+    );
     // Catalog-shaped card items must trace to this run's tool output —
     // "here are both items" backed by a model-typed six-product carousel is
     // a hallucination the customer acts on. Dropped entirely → regenerate.
