@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, ungroundedFigures, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, matchSavedComponent, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, deniesLiveData, ungroundedFigures, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { identityBlockReason, type ToolDef } from './toolExec.js';
 import { env } from '../env.js';
 import { extractWidgets } from './widgets.js';
@@ -3040,6 +3040,45 @@ describe('ungroundedFigures', () => {
     expect(
       ungroundedFigures('$5 then $5 again — 20% off list.', 'nothing here'),
     ).toEqual(['$5']);
+  });
+});
+
+describe('matchSavedComponent', () => {
+  const specs = new Map([
+    ['plans', { description: 'Janis subscription plans and pricing — use when the visitor asks what Janis costs, what plans or products we offer, or to compare tiers.' }],
+    ['order-status', { description: 'order lookup — use when the customer asks where their order is' }],
+  ]);
+
+  it('routes "list products" to the plans component', () => {
+    expect(matchSavedComponent('list products', specs)).toBe('plans');
+  });
+
+  it('routes a pricing ask too', () => {
+    expect(matchSavedComponent('what does Janis cost?', specs)).toBe('plans');
+    expect(matchSavedComponent('compare your plans', specs)).toBe('plans');
+  });
+
+  it('returns null when nothing matches', () => {
+    expect(matchSavedComponent('what is the weather today', specs)).toBeNull();
+    expect(matchSavedComponent('NVDA price', specs)).toBeNull();
+  });
+
+  it('ignores stopwords and short tokens', () => {
+    // "what" and "is" alone must never match
+    expect(matchSavedComponent('what is it', specs)).toBeNull();
+  });
+});
+
+describe('deniesLiveData', () => {
+  it('flags real-time capability denials', () => {
+    expect(deniesLiveData("I don't have access to real-time financial data feeds.")).toBe(true);
+    expect(deniesLiveData('I cannot provide a live ticker for NVDA.')).toBe(true);
+    expect(deniesLiveData('there is no real-time stock data available to me')).toBe(true);
+  });
+
+  it('passes answers that just give the data', () => {
+    expect(deniesLiveData('NVDA is trading at $218.42 as of market close.')).toBe(false);
+    expect(deniesLiveData('The search results show yesterday\'s close at $218.09.')).toBe(false);
   });
 });
 

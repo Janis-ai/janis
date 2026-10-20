@@ -177,6 +177,33 @@ export function harvestProducedIds(result: string, into: Set<string>): void {
   for (const m of result.matchAll(NUMERIC_ID)) into.add(m[0]);
 }
 
+/**
+ * Hard boundary against invented resource ids — the broad version of the
+ * provider-id arm of identityBlockReason, applied to EVERY tool (not just
+ * identity-bound ones). A prod_/price_/cus_-style arg that was neither
+ * produced by an earlier tool result nor present in the run context is a
+ * hallucination — "prod_default" 404s at Stripe and the model then
+ * fabricates an apology instead of using a working path. Numeric ids are
+ * not checked: they collide with legitimate literals (limits, quantities).
+ */
+export function fabricatedIdReason(
+  args: Record<string, unknown>,
+  producedIds: ReadonlySet<string>,
+  seenIds: ReadonlySet<string>,
+): string | null {
+  const vals = Object.values(args).filter((v): v is string => typeof v === 'string');
+  for (const v of vals) {
+    for (const m of v.matchAll(PROVIDER_ID)) {
+      if (!producedIds.has(m[0]) && !seenIds.has(m[0])) {
+        return `fabricated id: "${m[0]}" was never returned by a tool or present in context — ` +
+          'resource ids must come from a real lookup or the conversation; call the matching list/search tool first, ' +
+          'or answer from your saved components and knowledge instead of guessing an id';
+      }
+    }
+  }
+  return null;
+}
+
 function jsonArg(v: string): unknown {
   const t = v.trim();
   if (!t.startsWith('{') && !t.startsWith('[')) return v;

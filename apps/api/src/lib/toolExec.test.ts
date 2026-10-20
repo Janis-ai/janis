@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   callTool,
+  fabricatedIdReason,
   harvestProducedIds,
   identityBlockReason,
   toolsFor,
@@ -57,6 +58,44 @@ describe('identityBlockReason', () => {
         VERIFIED,
         new Set(),
       ),
+    ).toBeNull();
+  });
+});
+
+describe('fabricatedIdReason', () => {
+  it('blocks a provider id that was never produced or seen', () => {
+    const r = fabricatedIdReason(
+      { product_id: 'prod_default' },
+      new Set(),
+      new Set(),
+    );
+    expect(r).toContain('prod_default');
+    expect(r).toContain('fabricated');
+  });
+
+  it('passes ids produced by an earlier tool result', () => {
+    expect(
+      fabricatedIdReason(
+        { product_id: 'prod_VKx9gGkJ1' },
+        new Set(['prod_VKx9gGkJ1']),
+        new Set(),
+      ),
+    ).toBeNull();
+  });
+
+  it('passes ids that appeared in prompt or inbound context', () => {
+    expect(
+      fabricatedIdReason(
+        { product_id: 'prod_DOCID99' },
+        new Set(),
+        new Set(['prod_DOCID99']),
+      ),
+    ).toBeNull();
+  });
+
+  it('ignores non-id args and numeric literals', () => {
+    expect(
+      fabricatedIdReason({ q: 'NVDA stock', limit: 5 }, new Set(), new Set()),
     ).toBeNull();
   });
 });

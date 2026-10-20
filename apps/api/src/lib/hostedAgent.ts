@@ -18,7 +18,7 @@ import { bus } from './bus.js';
 import { PLANS, planFor } from './plans.js';
 import type { AttachmentRef } from './channels.js';
 import { getUpload } from './uploads.js';
-import { callTool, harvestProducedIds, identityBlockReason, missingTemplateArgs, toolsFor, type ToolDef } from './toolExec.js';
+import { callTool, fabricatedIdReason, harvestProducedIds, identityBlockReason, missingTemplateArgs, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
@@ -417,6 +417,51 @@ function widgetDigest(w: SavedWidgetDef & { name: string; toolDef?: ToolDef }): 
     .join('; ');
   const when = w.description?.trim() ? ` — use when: ${w.description.trim()}` : '';
   return `- ${w.name} (${s.type}${detail ? `: ${detail}` : ''}${meta ? ` — ${meta}` : ''}${when})`;
+}
+
+const COMPONENT_STOPWORDS = new Set([
+  'what', 'whats', 'does', 'your', 'yours', 'ours', 'have', 'with', 'this',
+  'that', 'they', 'them', 'their', 'there', 'about', 'would', 'could',
+  'should', 'please', 'show', 'tell', 'give', 'want', 'need', 'like',
+]);
+/** Keyword match between the inbound ask and a saved component's name +
+ *  use-when text. The "emit the ref" prompt guidance loses to a model that
+ *  reaches for a tool — "list products" called stripe_list_prices with an
+ *  invented prod_ id while a 'plans' component sat matching its use-when.
+ *  A matched component gets named in the prompt as a directive instead of
+ *  being left to the model's discretion. */
+export function matchSavedComponent(
+  ask: string | undefined,
+  specs: Iterable<[string, { description?: string }]>,
+): string | null {
+  if (!ask) return null;
+  const askTokens = new Set(
+    ask
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length >= 4 && !COMPONENT_STOPWORDS.has(t)),
+  );
+  if (!askTokens.size) return null;
+  let best: string | null = null;
+  let bestScore = 0;
+  for (const [name, def] of specs) {
+    const haystack = new Set(
+      `${name} ${def.description ?? ''}`
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter(Boolean),
+    );
+    let score = 0;
+    for (const t of askTokens) if (haystack.has(t)) score++;
+    if (score > bestScore) {
+      best = name;
+      bestScore = score;
+    }
+  }
+  // One distinctive-token hit suffices — "list products" yields only
+  // "products" as a matchable token. The use-when text is the owner's own
+  // declaration of coverage, so a hit is the intended routing signal.
+  return bestScore >= 1 ? best : null;
 }
 
 /** Resolve a WIDGET_REF to a renderable component:
@@ -2396,6 +2441,20 @@ export function ungroundedFigures(reply: string, corpus: string): string[] {
   return [...bad];
 }
 
+/** "I don't have access to real-time data" — a capability denial. When
+ *  web_search is offered this turn it's a lie the model tells before
+ *  checking its schema; the regen loop calls it out. */
+export function deniesLiveData(reply: string): boolean {
+  return /(?:don'?t|do not|can'?t|cannot|no|lack|unable to|without)[^.\n]{0,80}\b(?:real[- ]?time|live)\b[^.\n]{0,60}\b(?:data|access|feed|price|quote|info|stock|ticker|updates?|results?)\b/i.test(
+    reply,
+  );
+}
+
+const LIVE_DATA_RETRY =
+  'Your previous draft told the customer you lack real-time data — but the web_search tool is available to you ' +
+  'right now and you never called it. Call web_search for the fact they asked for and answer from what it returns; ' +
+  'only if the results genuinely lack the data may you say so, naming what they did show.';
+
 const SEARCH_GROUND_RETRY =
   'Your previous draft quoted figures that appear nowhere in the search results — those numbers were invented. ' +
   'Rewrite it: quote only figures that appear verbatim in the results and attribute sources by the actual site ' +
@@ -3202,6 +3261,15 @@ export async function complete(
   // Provider ids surfaced by tool results this run — the only ids
   // identity-scoped tools may accept (see identityBlockReason).
   const producedIds = new Set<string>();
+  // Provider-id-shaped tokens the model legitimately saw outside tool
+  // results (prompt context, customer messages) — fabricatedIdReason
+  // checks args against this plus producedIds. Inbound only: the model's
+  // own past replies can't vouch for an id it may have invented.
+  const seenIds = new Set<string>();
+  harvestProducedIds(system, seenIds);
+  for (const m of msgs) {
+    if (m.role !== 'assistant') harvestProducedIds(contentText(m.content), seenIds);
+  }
   const toolUrls: string[] = [];
   // Raw result corpus — card-item verification checks catalog fields
   // (variant ids, titles) trace to real output, not model memory.
@@ -3500,6 +3568,11 @@ export async function complete(
                 ctx?.identity?.ids,
               )
             : null;
+        // Invented resource ids ("prod_default") fail downstream at the
+        // provider with a 400 the model narrates as an outage — block
+        // pre-flight so the error teaches it to list/search or answer
+        // from saved components instead.
+        const fabricated = ctx?.testRun ? null : fabricatedIdReason(args, producedIds, seenIds);
         const memoHit = ctx?.testRun ? undefined : ctx?.toolMemo?.get(callKey);
         if (memoHit) {
           // Regeneration replay — the same call already ran this run; serve
@@ -3516,9 +3589,9 @@ export async function complete(
           result = gated
             ? 'approval_required: this action needs a human teammate to approve it before it runs — it is now queued for review; tell the customer it is pending approval rather than calling the tool again'
             : `simulated: ${call.function.name} returned successfully (test run — no real request was made)`;
-        } else if (denied) {
+        } else if (denied ?? fabricated) {
           outcome = 'failed';
-          result = `error: ${denied}`;
+          result = `error: ${denied ?? fabricated}`;
         } else {
           // Server-side customer-facing builtins — dispatched on name
           // before the workspace-builtin / HTTP-tool fallthrough.
@@ -5058,6 +5131,16 @@ async function replyAsHostedAgent(
       (builtins.some((b) => b.name === 'web_search')
         ? '\nYou have a web_search tool — call it whenever an answer needs something current or outside your knowledge (news, weather, releases, schedules, outside-world facts like stocks or sports) BEFORE saying you lack real-time data. It is only for the outside world — questions about your own product, prices, features or knowledge are answered from your knowledge base, tools and saved components, never from a web search. Answer only from what it returns — if the results don\'t contain the fact, say what they did show or run one narrower query; never quote a figure or name a source no result contained.'
         : '');
+    // Saved-component routing — a keyword hit between the ask and a
+    // component's use-when becomes a named directive. Soft guidance left
+    // the choice to the model, which kept reaching for tools instead.
+    const matchedComponent = matchSavedComponent(lastInboundText, refSpecs);
+    if (matchedComponent) {
+      prompt +=
+        `\nThe visitor's latest message matches your saved component "${matchedComponent}" — ` +
+        `answer their ask by emitting "WIDGET_REF: ${matchedComponent}" this turn (with whatever ` +
+        'short text fits alongside it). Do not substitute a tool call for the same information.';
+    }
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;
     const onStall = () => {
@@ -5286,6 +5369,21 @@ async function replyAsHostedAgent(
       const webSearched = gen.toolCalls.some(
         (t) => t.name === 'web_search' && t.outcome === 'ran',
       );
+      // Capability denial while web_search sat unused in the schema —
+      // "I don't have real-time data" is checked lazily, never against
+      // the tools actually offered. Regenerate once; if it still denies
+      // after being told, it ships.
+      if (
+        attempt === 0 &&
+        reply &&
+        !webSearched &&
+        builtins.some((b) => b.name === 'web_search') &&
+        deniesLiveData(reply)
+      ) {
+        console.warn(`[hosted] live-data denial with web_search available conv=${convId} — regenerating`);
+        prompt += '\n\n' + LIVE_DATA_RETRY;
+        continue;
+      }
       if (attempt === 0 && reply && webSearched) {
         const bad = ungroundedFigures(reply, gen.toolTexts.join('\n'));
         if (bad.length) {
