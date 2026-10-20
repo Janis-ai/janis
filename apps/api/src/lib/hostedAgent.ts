@@ -2476,10 +2476,40 @@ const LIVE_DATA_RETRY =
   'right now and you never called it. Call web_search for the fact they asked for and answer from what it returns; ' +
   'only if the results genuinely lack the data may you say so, naming what they did show.';
 
+/** A named source in "according to/from <X>" that doesn't appear in the
+ *  results is an invented citation — "$529.07 from the AMD Investor
+ *  Relations site" shipped when no such page was a result. A phrase counts
+ *  as a source when it carries a ≥5-char token absent from the corpus
+ *  (long tokens are the distinctive ones — "market" alone appearing in
+ *  "market cap" must not bless a bogus source). */
+export function ungroundedSource(reply: string, corpus: string): string[] {
+  const hay = corpus.toLowerCase();
+  const bad = new Set<string>();
+  for (const m of reply.matchAll(
+    /(?:according to|as reported by|based on|per|from|via)\s+(?:the\s+|official\s+)*([^\n,.;]{2,60})/gi,
+  )) {
+    const phrase = m[1]
+      .replace(/\b(?:website|site|data|reports?|results?|page)\b.*$/i, '')
+      .trim();
+    if (!phrase || phrase.length < 3) continue;
+    const GENERIC = new Set(['search', 'results', 'internet', 'online', 'sources', 'google', 'latest', 'current', 'recent', 'public']);
+    const tokens = phrase
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length >= 5 && !GENERIC.has(t));
+    // No distinctive token → a generic attribution ("search results",
+    // "the web") — let it be. A distinctive token that IS in the corpus
+    // → the citation is real. Otherwise it's invented.
+    if (tokens.length && !tokens.some((t) => hay.includes(t))) bad.add(phrase);
+  }
+  return [...bad];
+}
+
 const SEARCH_GROUND_RETRY =
-  'Your previous draft quoted figures that appear nowhere in the search results — those numbers were invented. ' +
+  'Your previous draft quoted figures or named a source that appear nowhere in the search results — those were invented. ' +
   'Rewrite it: quote only figures that appear verbatim in the results and attribute sources by the actual site ' +
-  'name or URL they came from, or say plainly that the results do not contain that figure. ';
+  'name or URL they came from; when results disagree on a number, say so and give the range. ' +
+  'If the results do not contain the fact, say plainly that they do not. ';
 
 const LINK_GUARD_RETRY =
   'Your previous draft included links that do not work — they were removed, so the reply now points at nothing. ' +
@@ -5150,7 +5180,7 @@ async function replyAsHostedAgent(
       // NVDA's snippet gave market cap, not a price, and the model invented
       // "$215.32 from Robinhood" rather than say the search came up short.
       (builtins.some((b) => b.name === 'web_search')
-        ? '\nYou have a web_search tool — call it whenever an answer needs something current or outside your knowledge (news, weather, releases, schedules, outside-world facts like stocks or sports) BEFORE saying you lack real-time data. It is only for the outside world — questions about your own product, prices, features or knowledge are answered from your knowledge base, tools and saved components, never from a web search. Answer only from what it returns — if the results don\'t contain the fact, say what they did show or run one narrower query; never quote a figure or name a source no result contained.'
+        ? '\nYou have a web_search tool — call it whenever an answer needs something current or outside your knowledge (news, weather, releases, schedules, outside-world facts like stocks or sports) BEFORE saying you lack real-time data. It is only for the outside world — questions about your own product, prices, features or knowledge are answered from your knowledge base, tools and saved components, never from a web search. Answer only from what it returns — if the results don\'t contain the fact, say what they did show or run one narrower query; never quote a figure or name a source no result contained. When results disagree on a figure (stale indexes quote different prices), say so and give the range with the sources\' names — never present one snippet\'s number as the live value.'
         : '');
     // Saved-component routing — a keyword hit between the ask and a
     // component's use-when becomes a named directive. Soft guidance left
@@ -5413,11 +5443,14 @@ async function replyAsHostedAgent(
         const figureCorpus =
           gen.toolTexts.join('\n') + '\n' + allDocs.map((d) => d.text).join('\n');
         const bad = ungroundedFigures(reply, figureCorpus);
-        if (bad.length) {
+        // Sources attribute to the search results only — knowledge docs
+        // can't vouch for "according to <site>" after a web search.
+        const badSrc = ungroundedSource(reply, gen.toolTexts.join('\n'));
+        if (bad.length || badSrc.length) {
           console.warn(
-            `[hosted] ungrounded figure(s) ${bad.join(', ')} conv=${convId} — regenerating`,
+            `[hosted] ungrounded figure(s)/source(s) ${[...bad, ...badSrc].join(', ')} conv=${convId} — regenerating`,
           );
-          prompt += `\n\n${SEARCH_GROUND_RETRY}Offending figures: ${bad.join(', ')}.`;
+          prompt += `\n\n${SEARCH_GROUND_RETRY}Offending: ${[...bad, ...badSrc].join(', ')}.`;
           continue;
         }
       }

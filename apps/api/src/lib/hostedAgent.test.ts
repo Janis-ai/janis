@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, matchSavedComponent, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, deniesLiveData, ungroundedFigures, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, matchSavedComponent, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, deniesLiveData, ungroundedFigures, ungroundedSource, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
 import { identityBlockReason, type ToolDef } from './toolExec.js';
 import { env } from '../env.js';
 import { extractWidgets } from './widgets.js';
@@ -3089,6 +3089,35 @@ describe('deniesLiveData', () => {
   it('passes answers that just give the data', () => {
     expect(deniesLiveData('NVDA is trading at $218.42 as of market close.')).toBe(false);
     expect(deniesLiveData('The search results show yesterday\'s close at $218.09.')).toBe(false);
+  });
+});
+
+describe('ungroundedSource', () => {
+  const RESULTS =
+    'AMD Stock Price | Advanced Micro Devices Inc. Stock Quote\n' +
+    'marketwatch.com/investing/stock/amd — 546.09\n' +
+    'TradingView — NASDAQ-AMD — 542.40 USD';
+
+  it('flags an invented attribution', () => {
+    expect(
+      ungroundedSource(
+        'AMD was trading at $529.07, according to the AMD Investor Relations website.',
+        RESULTS,
+      ),
+    ).toEqual(['AMD Investor Relations']);
+  });
+
+  it('passes a source that is in the results', () => {
+    expect(
+      ungroundedSource('AMD is trading at $546.09 per MarketWatch.', RESULTS),
+    ).toEqual([]);
+    expect(ungroundedSource('According to TradingView, AMD is at $542.40.', RESULTS)).toEqual([]);
+  });
+
+  it('ignores generic attributions', () => {
+    expect(
+      ungroundedSource('According to search results, it is up today.', RESULTS),
+    ).toEqual([]);
   });
 });
 
