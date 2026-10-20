@@ -435,11 +435,16 @@ export function matchSavedComponent(
   specs: Iterable<[string, { description?: string }]>,
 ): string | null {
   if (!ask) return null;
+  // Crude plural tolerance — "plan" in the ask must match "plans" in the
+  // use-when. Only a trailing s is stripped: "pricing" keeps its stem so
+  // "price of NVDA" doesn't route to a plans component.
+  const stem = (t: string) => (t.length > 4 && t.endsWith('s') ? t.slice(0, -1) : t);
   const askTokens = new Set(
     ask
       .toLowerCase()
       .split(/[^a-z0-9]+/)
-      .filter((t) => t.length >= 4 && !COMPONENT_STOPWORDS.has(t)),
+      .filter((t) => t.length >= 4 && !COMPONENT_STOPWORDS.has(t))
+      .map(stem),
   );
   if (!askTokens.size) return null;
   let best: string | null = null;
@@ -449,7 +454,8 @@ export function matchSavedComponent(
       `${name} ${def.description ?? ''}`
         .toLowerCase()
         .split(/[^a-z0-9]+/)
-        .filter(Boolean),
+        .filter(Boolean)
+        .map(stem),
     );
     let score = 0;
     for (const t of askTokens) if (haystack.has(t)) score++;
@@ -5385,7 +5391,13 @@ async function replyAsHostedAgent(
         continue;
       }
       if (attempt === 0 && reply && webSearched) {
-        const bad = ungroundedFigures(reply, gen.toolTexts.join('\n'));
+        // Corpus = search results + the knowledge corpus — a KB-grounded
+        // price (e.g. "$29/mo" from the plans article) is valid even on a
+        // turn where a search ran for something else; checking tool output
+        // alone flagged those as invented.
+        const figureCorpus =
+          gen.toolTexts.join('\n') + '\n' + allDocs.map((d) => d.text).join('\n');
+        const bad = ungroundedFigures(reply, figureCorpus);
         if (bad.length) {
           console.warn(
             `[hosted] ungrounded figure(s) ${bad.join(', ')} conv=${convId} — regenerating`,

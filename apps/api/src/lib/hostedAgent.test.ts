@@ -3058,6 +3058,10 @@ describe('matchSavedComponent', () => {
     expect(matchSavedComponent('compare your plans', specs)).toBe('plans');
   });
 
+  it('tolerates plural mismatch — singular ask hits plural use-when', () => {
+    expect(matchSavedComponent('what does the Pro plan include', specs)).toBe('plans');
+  });
+
   it('returns null when nothing matches', () => {
     expect(matchSavedComponent('what is the weather today', specs)).toBeNull();
     expect(matchSavedComponent('NVDA price', specs)).toBeNull();
