@@ -785,6 +785,13 @@
       "when": 1792518316438,
       "tag": "0111_classic-intro-posted",
       "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1792526046035,
+      "tag": "0112_slack-member-links",
+      "breakpoints": true
     }
   ]
 }

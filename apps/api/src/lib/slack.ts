@@ -15,6 +15,7 @@ import {
   messages,
   pendingActions,
   slackInstallations,
+  slackMemberLinks,
   slackThreads,
   users,
 } from '../db/schema.js';
@@ -592,22 +593,35 @@ function alertBlocks(
 }
 
 /**
- * Resolve a Janis member to their Slack user id, cached on users.slackUserId.
- * Uses users.lookupByEmail (scope: users:read.email) — Slack user ids are
- * workspace-scoped so the cache is keyed on this installation's mapping.
+ * Resolve a Janis member to their Slack user id for THIS installation.
+ * Slack ids are scoped to the Slack team, so the authoritative cache is
+ * slack_member_links (per installation); users.slackUserId — a single
+ * global column — survives only as a fallback for installs that predate
+ * the link table.
  */
 async function memberToSlackUser(
   db: Db,
   inst: Installation,
   memberId: string,
 ): Promise<string | null> {
+  const [link] = await db
+    .select({ slackUserId: slackMemberLinks.slackUserId })
+    .from(slackMemberLinks)
+    .where(
+      and(
+        eq(slackMemberLinks.installationId, inst.id),
+        eq(slackMemberLinks.userId, memberId),
+      ),
+    )
+    .limit(1);
+  if (link) return link.slackUserId;
+
   const [member] = await db
     .select({ id: users.id, email: users.email, slackUserId: users.slackUserId })
     .from(users)
     .where(eq(users.id, memberId))
     .limit(1);
   if (!member) return null;
-  if (member.slackUserId) return member.slackUserId;
   // lookupByEmail ignores JSON bodies — the email must go on the query string.
   const res = await slackApi<{ user: { id: string } }>(
     inst.botToken,
@@ -617,9 +631,19 @@ async function memberToSlackUser(
   ).catch(() => null);
   const slackId = res?.ok && res.user ? res.user.id : null;
   if (slackId) {
-    await db.update(users).set({ slackUserId: slackId }).where(eq(users.id, member.id));
+    await db
+      .insert(slackMemberLinks)
+      .values({ installationId: inst.id, slackUserId: slackId, userId: member.id })
+      .onConflictDoNothing();
+    if (!member.slackUserId) {
+      await db.update(users).set({ slackUserId: slackId }).where(eq(users.id, member.id));
+    }
+    return slackId;
   }
-  return slackId;
+  // Legacy cache as last resort — may hold an id from a different Slack
+  // team, in which case Slack calls against it fail with user_not_found
+  // exactly as they did before the link table existed.
+  return member.slackUserId;
 }
 
 /** Who an alert post should ping: the assignee's Slack mention, every member
@@ -1749,10 +1773,12 @@ export async function findThread(db: Db, channelId: string, threadTs: string) {
 }
 
 /**
- * Map a Slack user to a Janis member — ONLY by verified identity: the stored
- * users.slackUserId link, or their Slack profile email matched against
- * accepted workspace members (which then caches the link). No fallback: an
- * unresolvable Slack user must NOT act as the installer or an admin.
+ * Map a Slack user to a Janis member — ONLY by verified identity: a stored
+ * slack_member_links row for this installation, the installation's own
+ * installer (installerSlackUserId → installerUserId, recorded at OAuth),
+ * a legacy users.slackUserId hit, or their Slack profile email matched
+ * against accepted workspace members. No other fallback: an unresolvable
+ * Slack user must NOT act as the installer or an admin.
  */
 export async function slackUserToMember(
   db: Db,
@@ -1773,9 +1799,46 @@ export async function slackUserToMember(
       )
       .limit(1);
 
-  // Fast path — identity linked on a previous lookup.
+  const linkIt = (userId: string) =>
+    db
+      .insert(slackMemberLinks)
+      .values({ installationId: inst.id, slackUserId, userId })
+      .onConflictDoNothing();
+
+  // Fast path — identity already linked on this installation.
+  const [link] = await db
+    .select({ userId: slackMemberLinks.userId })
+    .from(slackMemberLinks)
+    .where(
+      and(
+        eq(slackMemberLinks.installationId, inst.id),
+        eq(slackMemberLinks.slackUserId, slackUserId),
+      ),
+    )
+    .limit(1);
+  if (link) {
+    const [member] = await memberWhere(eq(users.id, link.userId));
+    if (member) return member.user;
+  }
+
+  // The installer is a member by construction — the OAuth grant recorded
+  // both sides of the pair. Covers installers whose Slack email differs
+  // from their Janis email (users.info can't reach them).
+  if (inst.installerSlackUserId === slackUserId && inst.installerUserId) {
+    const [member] = await memberWhere(eq(users.id, inst.installerUserId));
+    if (member) {
+      await linkIt(member.user.id);
+      return member.user;
+    }
+  }
+
+  // Legacy global cache — a users.slackUserId match is only ever written
+  // by a successful resolution, so a hit is a valid link for this install.
   const [linked] = await memberWhere(eq(users.slackUserId, slackUserId));
-  if (linked) return linked.user;
+  if (linked) {
+    await linkIt(linked.user.id);
+    return linked.user;
+  }
 
   const info = await slackApi<{ user: { profile?: { email?: string } } }>(
     inst.botToken,
@@ -1787,7 +1850,10 @@ export async function slackUserToMember(
     const [member] = await memberWhere(eq(users.email, email));
     if (member) {
       // Cache the link so future actions skip the users.info call.
-      await db.update(users).set({ slackUserId }).where(eq(users.id, member.user.id));
+      await linkIt(member.user.id);
+      if (!member.user.slackUserId) {
+        await db.update(users).set({ slackUserId }).where(eq(users.id, member.user.id));
+      }
       return member.user;
     }
   }

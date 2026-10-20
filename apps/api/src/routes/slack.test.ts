@@ -6,7 +6,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alerts, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackClassicChannels, slackClassicPrefs, slackInstallations, slackPendingInstalls, slackThreads, users, workspaces } from '../db/schema.js';
+import { agents, alerts, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackClassicChannels, slackClassicPrefs, slackInstallations, slackMemberLinks, slackPendingInstalls, slackThreads, users, workspaces } from '../db/schema.js';
 import { and, eq } from 'drizzle-orm';
 import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
@@ -1974,6 +1974,62 @@ describe('slack concierge (DM to the app)', () => {
     );
     expect(refusal).toBeTruthy();
     expect(String(refusal!.body.text)).toContain("isn't linked");
+  });
+
+  it('the installer resolves even when their Slack email differs from Janis', async () => {
+    // Slack user ids are team-scoped and the installer's Slack profile email
+    // may differ from their Janis email — the OAuth installer pair is the
+    // link. Regression: this exact case produced "isn't linked" refusals.
+    const [installer] = await db
+      .insert(users)
+      .values({ email: 'installer@x.c', name: 'Installer', slackUserId: 'U_OTHER_TEAM' })
+      .returning();
+    await db.insert(memberships).values({
+      userId: installer.id,
+      workspaceId: wsId,
+      role: 'admin',
+      acceptedAt: new Date(),
+    });
+    await db
+      .update(slackInstallations)
+      .set({ installerUserId: installer.id, installerSlackUserId: 'U_INST9' })
+      .where(eq(slackInstallations.teamId, 'T_DM'));
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async (url: string) => {
+        if (String(url).includes('users.info')) {
+          return new Response('{"ok":true,"user":{"profile":{"email":"different@gmail.c"}}}', {
+            status: 200,
+          });
+        }
+        return new Response('{"ok":true,"ts":"8.9"}', { status: 200 });
+      }),
+    );
+    const res = await dm('U_INST9', 'hi janis');
+    expect(res.status).toBe(200);
+
+    const [link] = await db
+      .select()
+      .from(slackMemberLinks)
+      .where(
+        and(
+          eq(slackMemberLinks.slackUserId, 'U_INST9'),
+          eq(slackMemberLinks.userId, installer.id),
+        ),
+      );
+    expect(link).toBeTruthy();
+
+    const [binding] = await db
+      .select()
+      .from(channelBindings)
+      .where(
+        and(
+          eq(channelBindings.channelId, convChannelId),
+          eq(channelBindings.platformUserId, `u:${installer.id}:tslackdm`),
+        ),
+      );
+    expect(binding).toBeTruthy();
   });
 
   it('duplicate DM deliveries ingest once', async () => {

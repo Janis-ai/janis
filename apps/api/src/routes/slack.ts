@@ -5,7 +5,7 @@ import { getCookie, setCookie, deleteCookie } from 'hono/cookie';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, gt, inArray, isNotNull, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackClassicChannels, slackClassicPrefs, slackInstallations, slackPendingInstalls, slackThreads, suggestions, workspaces } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackClassicChannels, slackClassicPrefs, slackInstallations, slackMemberLinks, slackPendingInstalls, slackThreads, suggestions, workspaces } from '../db/schema.js';
 import { env } from '../env.js';
 import { adminOnly, sessionAuth, SESSION_COOKIE, type SessionEnv } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
@@ -66,6 +66,7 @@ async function removeInstallation(db: Db, installationId: string) {
   await db.transaction(async (tx) => {
     await tx.delete(slackClassicPrefs).where(eq(slackClassicPrefs.installationId, installationId));
     await tx.delete(slackClassicChannels).where(eq(slackClassicChannels.installationId, installationId));
+    await tx.delete(slackMemberLinks).where(eq(slackMemberLinks.installationId, installationId));
     await tx.delete(slackThreads).where(eq(slackThreads.installationId, installationId));
     await tx.delete(slackInstallations).where(eq(slackInstallations.id, installationId));
   });
@@ -661,6 +662,16 @@ export function slackApiRoutes(db: Db) {
         installerUserToken: row.installerUserToken,
       })
       .returning();
+    if (inst.installerUserId && inst.installerSlackUserId) {
+      await db
+        .insert(slackMemberLinks)
+        .values({
+          installationId: inst.id,
+          slackUserId: inst.installerSlackUserId,
+          userId: inst.installerUserId,
+        })
+        .onConflictDoNothing();
+    }
     await chooseAlertChannel(db, inst);
     return c.json({ claimed: true, team_name: row.teamName });
   });
@@ -961,6 +972,7 @@ export function slackPublicRoutes(db: Db) {
         );
       }
       await db.delete(slackThreads).where(eq(slackThreads.installationId, existing.id));
+      await db.delete(slackMemberLinks).where(eq(slackMemberLinks.installationId, existing.id));
       await db.delete(slackInstallations).where(eq(slackInstallations.id, existing.id));
     }
 
@@ -1003,6 +1015,16 @@ export function slackPublicRoutes(db: Db) {
         migrated: existing?.migrated ?? false,
       })
       .returning();
+    if (inst.installerUserId && inst.installerSlackUserId) {
+      await db
+        .insert(slackMemberLinks)
+        .values({
+          installationId: inst.id,
+          slackUserId: inst.installerSlackUserId,
+          userId: inst.installerUserId,
+        })
+        .onConflictDoNothing();
+    }
     await chooseAlertChannel(db, inst);
     return c.redirect(`${env.webOrigin}/settings?slack=connected`);
   });

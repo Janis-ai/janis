@@ -708,6 +708,33 @@ export const slackClassicPrefs = pgTable(
   ],
 );
 
+// Per-installation Slack↔member link. Slack user ids are scoped to the
+// Slack team, so a single users.slackUserId column can't hold them all —
+// one Janis user installs/uses multiple Slack workspaces with different
+// Slack ids (and sometimes different Slack emails). This table is the
+// authoritative map; users.slackUserId remains as a legacy fallback.
+export const slackMemberLinks = pgTable(
+  'slack_member_links',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    installationId: uuid('installation_id')
+      .notNull()
+      .references(() => slackInstallations.id),
+    slackUserId: text('slack_user_id').notNull(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('slack_member_links_install_slack').on(
+      t.installationId,
+      t.slackUserId,
+    ),
+    index('slack_member_links_install_user').on(t.installationId, t.userId),
+  ],
+);
+
 // Slack OAuth grants that completed with no Janis session (the public
 // "Add to Slack" flow / Marketplace listing install). Held here until the
 // installer signs in and POST /api/slack/claim binds it to their workspace.
