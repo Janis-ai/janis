@@ -69,6 +69,15 @@ export function legacyWebhookRoutes(db: Db) {
     } catch {
       return c.text('bad json', 400);
     }
+    // Non-Meta bodies (e.g. wordhopapi's `message-type: chat response`
+    // takeover emits) reach this edge when JANIS_MESSENGER_WEBHOOK_URL
+    // points at webhook.janis.ai — they parse to no entries and would
+    // otherwise 200 away silently. Log them so the dead leg is visible.
+    if (!Array.isArray(body.entry)) {
+      console.log(
+        `messenger webhook: non-meta body keys=[${Object.keys(body).join(',')}] message-type=${c.req.header('message-type') ?? '-'}`,
+      );
+    }
 
     for (const entry of body.entry ?? []) {
       const pageId = String(entry.id ?? '');

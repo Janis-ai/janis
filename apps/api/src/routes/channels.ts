@@ -1241,8 +1241,6 @@ export function channelWebhookRoutes(db: Db) {
       }
     }
     const msgs = parseMetaWebhook(body);
-    let handled = 0;
-    let legacyOwned = false;
     for (const msg of msgs) {
       const channel = await findChannelByObjectId(db, msg.objectId);
       if (channel) {
@@ -1261,24 +1259,46 @@ export function channelWebhookRoutes(db: Db) {
           }
         }
         await handleChannelMessage(db, channel, msg);
-        handled++;
-        // Channel belongs to a legacy-imported agent — the event also goes
-        // to the legacy stack so Mongo transcripts + Slack takeovers work.
-        const [a] = await db
-          .select({ metadata: agents.metadata })
-          .from(agents)
-          .where(eq(agents.id, channel.agentId))
-          .limit(1);
-        const meta = (a?.metadata ?? {}) as Record<string, unknown>;
-        // janis_only: the bot carries legacy_client_key purely for classic
-        // Slack resolution — it must NOT mirror events into wordhopapi.
-        if (meta.legacy_client_key && meta.janis_only !== true) legacyOwned = true;
       }
     }
-    // Legacy coexistence: while old and new Janis share the Meta app, relay
-    // events for pages we don't own — or pages whose bots still live in the
-    // legacy dashboard/Slack — to the old system (raw body + signature).
-    if (env.metaLegacyWebhookUrl && (handled < msgs.length || legacyOwned)) {
+    // Legacy coexistence: forward the raw delivery to the old system unless
+    // every page it names is a confirmed new-Janis-only channel. The parser
+    // drops echoes, receipts and handover events, so the decision must key
+    // off entry[].id — an echo-only batch used to parse to zero messages
+    // and die at the old msg-level gate, which is what cut legacy Mongo
+    // 'out' docs when this endpoint became the webhook edge. Unknown pages
+    // forward too: wordhopapi drops what it doesn't own, same as before.
+    const entries = (body.entry ?? []) as Record<string, unknown>[];
+    let relay = entries.length === 0;
+    const verdicts: string[] = [];
+    for (const entry of entries) {
+      const pageId = String(entry.id ?? '');
+      const channel = await findChannelByObjectId(db, pageId);
+      if (!channel) {
+        relay = true;
+        verdicts.push(`${pageId}:unowned`);
+        break;
+      }
+      const [a] = await db
+        .select({ metadata: agents.metadata })
+        .from(agents)
+        .where(eq(agents.id, channel.agentId))
+        .limit(1);
+      const meta = (a?.metadata ?? {}) as Record<string, unknown>;
+      // janis_only: the bot carries legacy_client_key purely for classic
+      // Slack resolution — it must NOT mirror events into wordhopapi. An
+      // agent with no legacy_client_key is new-Janis-only by definition.
+      const legacyOwned = !!(meta.legacy_client_key && meta.janis_only !== true);
+      verdicts.push(`${pageId}:${legacyOwned ? 'legacy' : 'janis-only'}`);
+      if (legacyOwned) {
+        relay = true;
+        break;
+      }
+    }
+    console.log(
+      `meta webhook relay: entries=${entries.length} msgs=${msgs.length} ${verdicts.join(' ')} relay=${relay}`,
+    );
+    if (env.metaLegacyWebhookUrl && relay) {
       fetch(env.metaLegacyWebhookUrl, {
         method: 'POST',
         headers: {
@@ -1286,7 +1306,13 @@ export function channelWebhookRoutes(db: Db) {
           'x-hub-signature-256': c.req.header('x-hub-signature-256') ?? '',
         },
         body: raw,
-      }).catch(() => {});
+      })
+        .then((r) => {
+          if (!r.ok) console.warn(`meta relay → legacy failed: http ${r.status}`);
+        })
+        .catch((e) =>
+          console.warn('meta relay → legacy error:', e instanceof Error ? e.message : e),
+        );
     }
     return c.json({ ok: true });
   });
