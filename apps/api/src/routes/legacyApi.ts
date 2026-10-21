@@ -5,7 +5,7 @@ import { agents, channelBindings, channels, conversations, messages } from '../d
 import { bus } from '../lib/bus.js';
 import { toMessage } from '../lib/serializers.js';
 import type { ChannelCredentials } from '../lib/channels.js';
-import { findChannelByObjectId } from '../lib/channels.js';
+import { fetchPlatformProfile, findChannelByObjectId } from '../lib/channels.js';
 import { isLegacyPaid, reportLegacyUsage } from '../lib/legacyBilling.js';
 import { detectIntentV1, type LegacyContext, type ServiceAccount } from '../lib/dialogflow.js';
 import { env } from '../env.js';
@@ -131,6 +131,45 @@ async function findOrCreateConv(
   return conv;
 }
 
+/** Merge name/photo into a conversation that only has the id stub. Legacy
+ * bodies sometimes carry `user_profile` (icon-emoji + expired signed image);
+ * otherwise resolve from the platform. Key-level merge preserves any keys a
+ * concurrent request just wrote. */
+async function enrichProfile(
+  db: Db,
+  channel: ChannelRow,
+  conv: ConversationRow,
+  msg: Record<string, unknown>,
+): Promise<void> {
+  const profile = (conv.userProfile ?? {}) as { name?: string; id?: string };
+  if (profile.name) return;
+  const fromMsg = (msg.user_profile ?? null) as {
+    name?: string;
+    first_name?: string;
+    last_name?: string;
+    image?: string;
+  } | null;
+  const fetched = fromMsg?.name
+    ? {}
+    : await fetchPlatformProfile(channel, String(profile.id ?? ''));
+  const patch = Object.fromEntries(
+    Object.entries({
+      name: fromMsg?.name ?? (fetched as { name?: string }).name,
+      first_name: fromMsg?.first_name ?? (fetched as { first_name?: string }).first_name,
+      last_name: fromMsg?.last_name ?? (fetched as { last_name?: string }).last_name,
+      picture_url: fromMsg?.image ?? (fetched as { picture_url?: string }).picture_url,
+      profile_fetched_at: (fetched as { profile_fetched_at?: string }).profile_fetched_at,
+    }).filter(([, v]) => v != null && v !== ''),
+  );
+  if (!Object.keys(patch).length) return;
+  await db
+    .update(conversations)
+    .set({
+      userProfile: sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || ${JSON.stringify(patch)}::jsonb`,
+    })
+    .where(eq(conversations.id, conv.id));
+}
+
 /** Store one transcript row; a raced duplicate mid resolves to undefined. */
 async function storeMessage(
   db: Db,
@@ -250,6 +289,9 @@ export function legacyApiRoutes(db: Db) {
     const channel = await channelFor(db, agent, msg);
     if (!channel) return c.json({ error: 'no channel' }, 404);
     const conv = await findOrCreateConv(db, agent, channel, channelId);
+    // Awaited like the forward below — Cloud Run throttles CPU between
+    // requests, so fire-and-forget profile enrichment may never run.
+    await enrichProfile(db, channel, conv, msg);
 
     await storeMessage(db, agent, conv, 'in', msg);
     void reportLegacyUsage(db, agent, conv);

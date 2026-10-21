@@ -348,25 +348,64 @@ describe('fetchPlatformProfile', () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it('fetches messenger name and picture with the right fields', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          first_name: 'Jane',
-          last_name: 'Doe',
-          profile_pic: 'https://cdn.example/pic.jpg',
-        }),
-      ),
-    );
+  it('fetches messenger name and picture (deprecated fields avoided)', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('?fields=name')) {
+        return Promise.resolve(new Response(JSON.stringify({ name: 'Jane Doe' })));
+      }
+      if (url.includes('/picture')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: { url: 'https://cdn.example/pic.jpg' } })),
+        );
+      }
+      return Promise.resolve(new Response('{}', { status: 400 }));
+    });
     vi.stubGlobal('fetch', fetchMock);
     const p = await fetchPlatformProfile(ch('messenger'), 'PSID1');
     expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('PSID1?fields=first_name,last_name,profile_pic'),
+      expect.stringContaining('PSID1?fields=name'),
+      expect.anything(),
+    );
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining('first_name'),
       expect.anything(),
     );
     expect(p.name).toBe('Jane Doe');
+    expect(p.first_name).toBe('Jane');
+    expect(p.last_name).toBe('Doe');
     expect(p.picture_url).toBe('https://cdn.example/pic.jpg');
     expect(p.profile_fetched_at).toBeTruthy();
+  });
+
+  it('falls back to the conversations edge for foreign-scoped PSIDs', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('/conversations?user_id=')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              data: [
+                {
+                  participants: {
+                    data: [
+                      { id: 'PSID1', name: 'Jane Doe' },
+                      { id: 'PG1', name: 'Page' },
+                    ],
+                  },
+                },
+              ],
+            }),
+          ),
+        );
+      }
+      return Promise.resolve(new Response('{}', { status: 400 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const p = await fetchPlatformProfile(ch('messenger'), 'PSID1');
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('conversations?user_id=PSID1'),
+      expect.anything(),
+    );
+    expect(p.name).toBe('Jane Doe');
   });
 
   it('fetches instagram name/username/picture', async () => {

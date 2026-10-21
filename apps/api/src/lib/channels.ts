@@ -1802,31 +1802,68 @@ export async function fetchPlatformProfile(
   if (!creds.access_token || ['whatsapp', 'email', 'gmail'].includes(channel.kind)) {
     return {};
   }
+  // Meta deprecated first_name/last_name/profile_pic on the User Profile
+  // API — requesting them errors the whole call. `name` is all that survives.
   const fields =
     channel.kind === 'instagram'
       ? 'name,username,profile_pic'
-      : 'first_name,last_name,profile_pic';
+      : 'name';
   try {
     const res = await fetch(
       `${GRAPH}/${platformUserId}?fields=${fields}&access_token=${creds.access_token}`,
       { signal: AbortSignal.timeout(5_000) },
     );
-    if (!res.ok) return {};
-    const d = (await res.json()) as {
+    let d = (res.ok ? await res.json() : null) as {
       name?: string;
       first_name?: string;
       last_name?: string;
       username?: string;
       profile_pic?: string;
-    };
+    } | null;
+
+    // PSIDs issued under another app's scope (Chatfuel/ManyChat relayed
+    // users) can't be looked up directly — but the page's conversation
+    // thread still names its participants.
+    if (!d?.name && channel.kind === 'messenger' && creds.page_id) {
+      const convRes = await fetch(
+        `${GRAPH}/${creds.page_id}/conversations?user_id=${platformUserId}&fields=participants&access_token=${creds.access_token}`,
+        { signal: AbortSignal.timeout(5_000) },
+      ).catch(() => null);
+      if (convRes?.ok) {
+        const cd = (await convRes.json()) as {
+          data?: { participants?: { data?: { id?: string; name?: string }[] } }[];
+        };
+        const person = (cd.data?.[0]?.participants?.data ?? []).find(
+          (p) => String(p.id) === String(platformUserId),
+        );
+        if (person?.name) d = { name: person.name };
+      }
+    }
+    if (!d) return {};
+
+    // /picture still resolves for PSIDs owned by this app.
+    let pictureUrl = d.profile_pic;
+    if (!pictureUrl && channel.kind === 'messenger') {
+      const picRes = await fetch(
+        `${GRAPH}/${platformUserId}/picture?redirect=false&access_token=${creds.access_token}`,
+        { signal: AbortSignal.timeout(5_000) },
+      ).catch(() => null);
+      if (picRes?.ok) {
+        const pic = (await picRes.json()) as { data?: { url?: string } };
+        if (pic.data?.url) pictureUrl = pic.data.url;
+      }
+    }
+
     const name =
       d.name ?? ([d.first_name, d.last_name].filter(Boolean).join(' ') || undefined);
+    if (!name && !pictureUrl) return {};
+    const parts = (name ?? '').split(' ');
     return {
       name,
-      first_name: d.first_name,
-      last_name: d.last_name,
+      first_name: d.first_name ?? (parts[0] || undefined),
+      last_name: d.last_name ?? (parts.length > 1 ? parts[parts.length - 1] : undefined),
       username: d.username,
-      picture_url: d.profile_pic,
+      picture_url: pictureUrl,
       profile_fetched_at: new Date().toISOString(),
     };
   } catch {
