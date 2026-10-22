@@ -673,7 +673,15 @@ function SlackAlerts({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
   const installations = slack?.installations ?? [];
   const routes = agent.slack_routes;
   const qc = useQueryClient();
-  const [msg, setMsg] = useState('');
+  const [msg, setMsg] = useState(
+    new URLSearchParams(window.location.search).get('slack') === 'connected'
+      ? 'Slack connected.'
+      : '',
+  );
+  // OAuth returns here — the API lands the installer back on the ?return path.
+  const slackInstallHref = `/api/slack/install?return=${encodeURIComponent(
+    window.location.pathname + window.location.search,
+  )}`;
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['agents'] });
     void qc.invalidateQueries({ queryKey: ['slackChannels'] });
@@ -710,7 +718,7 @@ function SlackAlerts({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
       {!slack.connected ? (
         isAdmin ? (
           slack.configured ? (
-            <a className="btn primary" style={{ display: 'inline-block', marginTop: 8 }} href="/api/slack/install">Connect Slack</a>
+            <a className="btn primary" style={{ display: 'inline-block', marginTop: 8 }} href={slackInstallHref}>Connect Slack</a>
           ) : (
             <div className="muted">
               Set SLACK_CLIENT_ID / SLACK_CLIENT_SECRET on the API to enable Slack alerts.
@@ -743,7 +751,7 @@ function SlackAlerts({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
                 Turn off Slack alerts
               </button>
               {slack.configured && (
-                <a className="btn" href="/api/slack/install">Add workspace</a>
+                <a className="btn" href={slackInstallHref}>Add workspace</a>
               )}
             </div>
           ) : (
@@ -779,7 +787,7 @@ function SlackAlerts({ agent, isAdmin }: { agent: Agent; isAdmin: boolean }) {
                   + Add destination
                 </button>
                 {slack.configured && (
-                  <a className="btn" href="/api/slack/install">Add workspace</a>
+                  <a className="btn" href={slackInstallHref}>Add workspace</a>
                 )}
               </div>
             </>

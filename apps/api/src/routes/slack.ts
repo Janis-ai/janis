@@ -148,6 +148,24 @@ function verifyState<T>(token: string): T | null {
   }
 }
 
+// Install links carry the console page they started on (?return=/agents/…/settings?sub=escalation)
+// so the OAuth callback can drop the installer back where they were. Same-origin
+// paths only — the callback prepends webOrigin, so anything not a plain /path
+// (or a //scheme-relative host) would be an open redirect.
+function sanitizeReturnPath(raw: string | undefined | null): string | null {
+  if (!raw || raw.length > 500) return null;
+  if (!raw.startsWith('/') || raw.startsWith('//')) return null;
+  if (/[\\\x00-\x1f\x7f]/.test(raw)) return null;
+  return raw;
+}
+
+function withSlackConnectedFlag(path: string): string {
+  const hashIdx = path.indexOf('#');
+  const base = hashIdx === -1 ? path : path.slice(0, hashIdx);
+  const hash = hashIdx === -1 ? '' : path.slice(hashIdx);
+  return `${base}${base.includes('?') ? '&' : '?'}slack=connected${hash}`;
+}
+
 /** Soft session check for public routes — resolves the active workspace when
  *  the installing browser happens to be signed in, without requiring it. */
 async function sessionWorkspace(
@@ -616,9 +634,12 @@ export function slackApiRoutes(db: Db) {
   });
 
   // Navigate here in the browser (top-level GET → session cookie is sent).
+  // ?return=<console path> rides the signed state so the callback can send the
+  // installer back to the tab they started on (workspace or agent settings).
   app.get('/install', adminOnly, (c) => {
     if (!env.slackClientId) return c.json({ error: 'SLACK_CLIENT_ID not configured' }, 503);
-    const state = `dir.${signState({ w: c.get('workspaceId'), u: c.get('user').id })}`;
+    const r = sanitizeReturnPath(c.req.query('return'));
+    const state = `dir.${signState({ w: c.get('workspaceId'), u: c.get('user').id, ...(r ? { r } : {}) })}`;
     return c.redirect(oauthUrl(state));
   });
 
@@ -848,12 +869,15 @@ export function slackApiRoutes(db: Db) {
 /** Relay a signed payload verbatim to wordhop-slack and pass its response
  * through — legacy surfaces (dialogs, menus, slash commands) keep working
  * while the app's request URLs point at us. */
-async function forwardToLegacySlack(raw: string): Promise<Response> {
+async function forwardToLegacySlack(
+  raw: string,
+  contentType = 'application/x-www-form-urlencoded',
+): Promise<Response> {
   if (!env.legacySlackInteractionsUrl) return Response.json({ ok: true });
   try {
     const res = await fetch(env.legacySlackInteractionsUrl, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { 'content-type': contentType },
       body: raw,
       signal: AbortSignal.timeout(2500), // Slack's 3s ack budget
     });
@@ -887,7 +911,8 @@ export function slackPublicRoutes(db: Db) {
   // callback parks the grant until the installer signs in.
   app.get('/add', (c) => {
     if (!env.slackClientId) return c.text('Slack app not configured', 503);
-    return c.redirect(oauthUrl(`pub.${signState({ p: 1 })}`));
+    const r = sanitizeReturnPath(c.req.query('return'));
+    return c.redirect(oauthUrl(`pub.${signState({ p: 1, ...(r ? { r } : {}) })}`));
   });
 
   // OAuth redirect target. State shapes: 'dir.<signed{w,u}>' (in-session
@@ -900,15 +925,19 @@ export function slackPublicRoutes(db: Db) {
 
     let workspaceId: string | undefined;
     let userId: string | undefined;
+    let returnPath: string | null = null;
     if (state.startsWith('dir.')) {
-      const s = verifyState<{ w?: string; u?: string }>(state.slice(4));
+      const s = verifyState<{ w?: string; u?: string; r?: string }>(state.slice(4));
       if (!s?.w || !s.u) return c.text('invalid OAuth state', 400);
       workspaceId = s.w;
       userId = s.u;
+      returnPath = sanitizeReturnPath(s.r);
     } else if (state === '') {
       // Marketplace listing install — no state; resolves via session/pending.
     } else if (state.startsWith('pub.')) {
-      if (!verifyState<{ p?: number }>(state.slice(4))) return c.text('invalid OAuth state', 400);
+      const s = verifyState<{ p?: number; r?: string }>(state.slice(4));
+      if (!s) return c.text('invalid OAuth state', 400);
+      returnPath = sanitizeReturnPath(s.r);
     } else {
       return c.text('invalid OAuth state', 400);
     }
@@ -1026,7 +1055,9 @@ export function slackPublicRoutes(db: Db) {
         .onConflictDoNothing();
     }
     await chooseAlertChannel(db, inst);
-    return c.redirect(`${env.webOrigin}/settings?slack=connected`);
+    return c.redirect(
+      `${env.webOrigin}${returnPath ? withSlackConnectedFlag(returnPath) : '/settings?slack=connected'}`,
+    );
   });
 
   // Events API: thread replies become human messages
@@ -1089,19 +1120,22 @@ export function slackPublicRoutes(db: Db) {
       'member_left_channel',
       'team_join',
     ]);
-    const evTeamInstall =
-      body.team_id &&
-      (ev?.type === 'message' ||
-        ev?.type === 'app_mention' ||
-        CLASSIC_SYNC_EVENT_TYPES.has(ev?.type ?? ''))
-        ? (
-            await db
-              .select()
-              .from(slackInstallations)
-              .where(eq(slackInstallations.teamId, body.team_id))
-              .limit(1)
-          )[0]
-        : undefined;
+    const evTeamInstall = body.team_id
+      ? (
+          await db
+            .select()
+            .from(slackInstallations)
+            .where(eq(slackInstallations.teamId, body.team_id))
+            .limit(1)
+        )[0]
+      : undefined;
+
+    // No install row = a legacy wordhop-slack customer (Mongo-only). The one
+    // Slack app fronts both systems, so hand the event to the classic app
+    // verbatim — concierge/commands/interactions already fan out this way.
+    if (body.team_id && !evTeamInstall) {
+      return forwardToLegacySlack(raw, 'application/json');
+    }
 
     // Classic workspace-event sync (legacy slack_bot.js 1275-1458): channel
     // lifecycle + membership events keep the classic channel registry in

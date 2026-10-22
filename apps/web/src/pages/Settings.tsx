@@ -77,6 +77,11 @@ export default function Settings() {
       : '',
   );
   const [alertChannelName, setAlertChannelName] = useState('janis-alerts');
+  // OAuth returns to this page — the API lands the installer back on the
+  // ?return path with slack=connected appended.
+  const slackInstallHref = `/api/slack/install?return=${encodeURIComponent(
+    window.location.pathname + window.location.search,
+  )}`;
 
   const addUser = useMutation({
     mutationFn: (body: { email: string; name?: string; role?: string }) =>
@@ -666,13 +671,13 @@ export default function Settings() {
             ))}
             {slack.configured && (
               <div style={{ marginTop: 10 }}>
-                <a className="btn" href="/api/slack/install">Connect another Slack workspace</a>
+                <a className="btn" href={slackInstallHref}>Connect another Slack workspace</a>
               </div>
             )}
             {slackMsg && <div className="muted" style={{ marginTop: 8 }}>{slackMsg}</div>}
           </>
         ) : slack?.configured ? (
-          <a className="btn primary" href="/api/slack/install">Connect Slack</a>
+          <a className="btn primary" href={slackInstallHref}>Connect Slack</a>
         ) : (
           <div className="muted">
             Set SLACK_CLIENT_ID / SLACK_CLIENT_SECRET / SLACK_SIGNING_SECRET on the API to enable

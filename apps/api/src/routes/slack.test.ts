@@ -1258,8 +1258,8 @@ describe('public OAuth install', () => {
       }),
     );
 
-  const pubState = async () => {
-    const res = await api.request('/slack/add');
+  const pubState = async (ret?: string) => {
+    const res = await api.request(`/slack/add${ret ? `?return=${encodeURIComponent(ret)}` : ''}`);
     return new URL(res.headers.get('location')!).searchParams.get('state')!;
   };
 
@@ -1449,6 +1449,46 @@ describe('public OAuth install', () => {
       .from(slackInstallations)
       .where(eq(slackInstallations.teamId, 'T_DIR'));
     expect(inst.workspaceId).toBe(adminWsId);
+  });
+
+  it('in-session install returns to the ?return path with slack=connected', async () => {
+    stubOAuth('T_RET');
+    const ret = '/agents/agent-1/settings?sub=escalation';
+    const start = await api.request(`/api/slack/install?return=${encodeURIComponent(ret)}`, {
+      headers: { cookie: adminCookie },
+    });
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(state)}`,
+    );
+    expect(res.headers.get('location')).toBe(
+      `${env.webOrigin}/agents/agent-1/settings?sub=escalation&slack=connected`,
+    );
+  });
+
+  it('a signed-in /slack/add installer is returned to the ?return path', async () => {
+    stubOAuth('T_RET2');
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(await pubState('/agents/agent-9/settings'))}`,
+      { headers: { cookie: adminCookie } },
+    );
+    expect(res.headers.get('location')).toBe(
+      `${env.webOrigin}/agents/agent-9/settings?slack=connected`,
+    );
+  });
+
+  it('hostile return paths fall back to /settings', async () => {
+    for (const [i, ret] of ['//evil.com/x', 'https://evil.com', 'javascript:alert(1)', '\\\\evil'].entries()) {
+      stubOAuth(`T_EVIL_${i}`);
+      const start = await api.request(`/api/slack/install?return=${encodeURIComponent(ret)}`, {
+        headers: { cookie: adminCookie },
+      });
+      const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+      const res = await api.request(
+        `/slack/oauth/callback?code=C&state=${encodeURIComponent(state)}`,
+      );
+      expect(res.headers.get('location')).toBe(`${env.webOrigin}/settings?slack=connected`);
+    }
   });
 
   it('sessionless reinstall of a connected team refreshes the token in place', async () => {
