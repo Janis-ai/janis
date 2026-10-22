@@ -434,6 +434,18 @@ describe('guardReplyLinks', () => {
     expect(exists).toHaveBeenCalledWith('agent', '586895f3-8285-4a95-ae2d-b18f389d838d', undefined);
   });
 
+  it('strips a placeholder-url inside a code span without leaving empty backticks', async () => {
+    // Copilot incident: the model emitted `` `https://app.janis.ai/agents/{agent_id}/tests` ``
+    // — the url was stripped but the bare `` `` `` span shipped to the operator.
+    const r = await guardReplyLinks(
+      'find them under the Test tab at:\n`https://app.janis.ai/agents/{agent_id}/tests`\n(Replace {agent_id} with your agent.)',
+      blessed,
+    );
+    expect(r.stripped.length).toBeGreaterThan(0);
+    expect(r.text).not.toContain('``');
+    expect(r.text).toContain('{agent_id}'); // the plain-text note survives
+  });
+
   it('strips /agents/new/<id> when the id is not a real agent', async () => {
     const exists = vi.fn(async () => false);
     const r = await guardReplyLinks(
