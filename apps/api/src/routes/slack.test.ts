@@ -1408,6 +1408,37 @@ describe('public OAuth install', () => {
     expect(((await (await claim(pid)).json()) as { claimed: boolean }).claimed).toBe(false);
   });
 
+  it('welcomes the installer with a DM after claim', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string | URL) => {
+      if (String(url).includes('oauth.v2.access')) {
+        return slackOk({
+          access_token: 'xoxb-T_WELCOME',
+          team: { id: 'T_WELCOME', name: 'Team Welcome' },
+          authed_user: { id: 'U_WELCOME', access_token: 'xoxp-T_WELCOME' },
+        });
+      }
+      if (String(url).includes('conversations.open')) {
+        return slackOk({ channel: { id: 'D_WELCOME' } });
+      }
+      return slackOk({ channels: [] });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const oauth = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(await pubState())}`,
+    );
+    await claim(pendingCookieOf(oauth));
+    // welcomeInstallerDm is fire-and-forget — give it a tick to post.
+    for (let i = 0; i < 50 && !fetchMock.mock.calls.some(([u]) => String(u).includes('chat.postMessage')); i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const urls = fetchMock.mock.calls.map(([u]) => String(u));
+    expect(urls.some((u) => u.includes('conversations.open'))).toBe(true);
+    const post = fetchMock.mock.calls.find(([u]) => String(u).includes('chat.postMessage'));
+    expect(post).toBeDefined();
+    expect(String(post![1]?.body)).toContain('Welcome to Janis');
+    expect(String(post![1]?.body)).toContain('Team Welcome');
+  });
+
   it('refuses an expired pending install', async () => {
     const [p] = await db
       .insert(slackPendingInstalls)

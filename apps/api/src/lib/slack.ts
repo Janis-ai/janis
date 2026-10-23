@@ -821,6 +821,36 @@ export async function removeMemberFromAlertChannels(
 }
 
 /**
+ * Post-install welcome DM to the installer — the app's first hello so a
+ * fresh Slack team discovers the concierge in DM and the /janis commands.
+ * Fire-and-forget at the bind site; failure must not break OAuth/claim.
+ */
+export async function welcomeInstallerDm(inst: Installation): Promise<void> {
+  if (!inst.installerSlackUserId) return;
+  const text =
+    `Welcome to Janis — *${inst.teamName ?? 'your Slack team'}* is connected. ` +
+    `A few ways to reach me:\n` +
+    `• *DM me* anything — I'm the same concierge as Ask Janis in the console\n` +
+    `• */janis* in any channel shows controls\n` +
+    `• ${env.webOrigin} for agents, inbox, alerts and settings`;
+  const opened = await slackApi<{ channel: { id: string } }>(
+    inst.botToken,
+    'conversations.open',
+    { users: inst.installerSlackUserId },
+  ).catch(() => null);
+  if (!opened?.ok || !opened.channel?.id) {
+    console.error('slack welcome dm open failed:', opened?.error ?? 'no channel');
+    return;
+  }
+  const res = await slackApi(inst.botToken, 'chat.postMessage', {
+    channel: opened.channel.id,
+    text,
+    unfurl_links: false,
+  });
+  if (!res.ok) console.error('slack welcome dm post failed:', res.error);
+}
+
+/**
  * DM fallback for assignees who can't be invited to the alert channel —
  * opens an app DM (im:write) and posts a one-line pointer.
  */

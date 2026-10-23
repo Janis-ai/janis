@@ -29,6 +29,7 @@ import {
   slackWidgetBlocks,
   verifyAvatarSig,
   verifySlackSignature,
+  welcomeInstallerDm,
 } from '../lib/slack.js';
 import { fetchAvatar } from '../lib/avatar.js';
 import { membershipFor } from '../lib/members.js';
@@ -729,6 +730,7 @@ export function slackApiRoutes(db: Db) {
         .onConflictDoNothing();
     }
     await chooseAlertChannel(db, inst);
+    void welcomeInstallerDm(inst).catch(() => {});
     return c.json({ claimed: true, team_name: row.teamName });
   });
 
@@ -1108,6 +1110,8 @@ export function slackPublicRoutes(db: Db) {
         .onConflictDoNothing();
     }
     await chooseAlertChannel(db, inst);
+    // Re-installs (token refresh) already said hello once.
+    if (!existing) void welcomeInstallerDm(inst).catch(() => {});
     return c.redirect(
       `${env.webOrigin}${returnPath ? withSlackConnectedFlag(returnPath) : '/settings?slack=connected'}`,
     );
