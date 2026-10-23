@@ -112,7 +112,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   });
 
   const link = useMutation({
-    mutationFn: (body: { kind: string; page_id?: string; phone_number_id?: string }) =>
+    mutationFn: (body: { kind: string; page_id?: string; phone_number_id?: string; takeover?: boolean }) =>
       api<{ channel: Channel }>('/api/meta/link', {
         method: 'POST',
         body: JSON.stringify({ connect_id: connectId, agent_id: agentId, ...body }),
@@ -1195,6 +1195,21 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                         ) : (
                           <span className="muted">Messenger on {msgr.agent_name}</span>
                         )
+                      ) : pg.bound ? (
+                        <>
+                          <span className="muted" title={`bound to ${pg.bound.agent_name}`}>
+                            on {pg.bound.workspace_name} · {pg.bound.agent_name}
+                          </span>
+                          <button className="btn" disabled={link.isPending}
+                            onClick={async () => {
+                              if (await confirm(
+                                `Take Messenger over from ${pg.bound!.workspace_name}? ${pg.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
+                                [{ key: 'ok', label: 'Take over' }, { key: 'cancel', label: 'Cancel' }],
+                              ) === 'ok') link.mutate({ kind: 'messenger', page_id: pg.id, takeover: true });
+                            }}>
+                            Take over
+                          </button>
+                        </>
                       ) : (
                         <button className="btn" disabled={link.isPending}
                           onClick={() => link.mutate({ kind: 'messenger', page_id: pg.id })}>
@@ -1211,6 +1226,21 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                           ) : (
                             <span className="muted">Instagram on {igCh.agent_name}</span>
                           )
+                        ) : pg.instagram.bound ? (
+                          <>
+                            <span className="muted" title={`bound to ${pg.instagram.bound.agent_name}`}>
+                              on {pg.instagram.bound.workspace_name} · {pg.instagram.bound.agent_name}
+                            </span>
+                            <button className="btn" disabled={link.isPending}
+                              onClick={async () => {
+                                if (await confirm(
+                                  `Take Instagram over from ${pg.instagram!.bound!.workspace_name}? ${pg.instagram!.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
+                                  [{ key: 'ok', label: 'Take over' }, { key: 'cancel', label: 'Cancel' }],
+                                ) === 'ok') link.mutate({ kind: 'instagram', page_id: pg.id, takeover: true });
+                              }}>
+                              Take over
+                            </button>
+                          </>
                         ) : (
                           <button className="btn" disabled={link.isPending}
                             onClick={() => link.mutate({ kind: 'instagram', page_id: pg.id })}>
@@ -1244,6 +1274,21 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                           ) : (
                             <span className="muted">WhatsApp on {wa.agent_name}</span>
                           )
+                        ) : n.bound ? (
+                          <>
+                            <span className="muted" title={`bound to ${n.bound.agent_name}`}>
+                              on {n.bound.workspace_name} · {n.bound.agent_name}
+                            </span>
+                            <button className="btn" disabled={link.isPending}
+                              onClick={async () => {
+                                if (await confirm(
+                                  `Take WhatsApp over from ${n.bound!.workspace_name}? ${n.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
+                                  [{ key: 'ok', label: 'Take over' }, { key: 'cancel', label: 'Cancel' }],
+                                ) === 'ok') link.mutate({ kind: 'whatsapp', phone_number_id: n.id, takeover: true });
+                              }}>
+                              Take over
+                            </button>
+                          </>
                         ) : (
                           <button className="btn" disabled={link.isPending}
                             onClick={() => link.mutate({ kind: 'whatsapp', phone_number_id: n.id })}>

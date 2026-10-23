@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { eq } from 'drizzle-orm';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
@@ -8,6 +9,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import {
   agents,
+  campaigns,
   channelBindings,
   channels,
   conversations,
@@ -27,6 +29,7 @@ let db: Db;
 let app: Hono;
 let cookie: string;
 let agentId: string;
+let wsId: string;
 
 const b64url = (b: Buffer | string) =>
   (typeof b === 'string' ? Buffer.from(b) : b).toString('base64url');
@@ -57,6 +60,7 @@ beforeAll(async () => {
     .route('/api/meta', metaApiRoutes(db));
 
   const [ws] = await db.insert(workspaces).values({ name: 'Test' }).returning();
+  wsId = ws.id;
   const { hash, preview } = generateApiKey();
   const [agent] = await db
     .insert(agents)
@@ -175,5 +179,99 @@ describe('meta connect', () => {
     });
     expect(res.status).toBe(302);
     expect(res.headers.get('set-cookie') ?? '').not.toContain('janis_meta_agent=');
+  });
+});
+
+describe('meta link conflicts + takeover', () => {
+  const graphMock = (pages: unknown[]) =>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown) => {
+        const u = String(url);
+        const body = u.includes('/me/accounts')
+          ? { data: pages }
+          : u.includes('/me/businesses')
+            ? { data: [] }
+            : {};
+        return new Response(JSON.stringify(body), { status: 200 });
+      }),
+    );
+
+  const link = (extra: Record<string, unknown> = {}) =>
+    app.request('/api/meta/link', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ connect_id: 'x', agent_id: agentId, kind: 'messenger', page_id: 'pg1', ...extra }),
+    });
+
+  it('annotates foreign bindings, blocks a dup link, and takes over cleanly', async () => {
+    graphMock([{ id: 'pg1', name: 'George', access_token: 'pagetok' }]);
+    // The data-deletion suite above wiped this workspace's meta_connections
+    // row — put it back so /pending + /link can re-discover assets.
+    await db
+      .insert(metaConnections)
+      .values({ workspaceId: wsId, userToken: 'tok', metaUserId: 'mu-fresh' });
+
+    // Foreign workspace owns a messenger channel bound to pg1.
+    const [fws] = await db.insert(workspaces).values({ name: 'Foreign Co' }).returning();
+    const { hash, preview } = generateApiKey();
+    const [fagent] = await db
+      .insert(agents)
+      .values({ workspaceId: fws.id, name: 'TheirBot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    const [fch] = await db
+      .insert(channels)
+      .values({
+        workspaceId: fws.id,
+        agentId: fagent.id,
+        kind: 'messenger',
+        name: 'FB',
+        credentials: { page_id: 'pg1', access_token: 'old' },
+      })
+      .returning();
+    const [fconv] = await db
+      .insert(conversations)
+      .values({ agentId: fagent.id, externalId: 'fb:u9' })
+      .returning();
+    await db
+      .insert(channelBindings)
+      .values({ channelId: fch.id, conversationId: fconv.id, platformUserId: 'u9' });
+
+    // /pending flags the page with its owner across workspaces.
+    const pending = (await (
+      await app.request('/api/meta/pending', { headers: { cookie } })
+    ).json()) as { pages: { bound: { workspace_name: string; agent_name: string } | null }[] };
+    expect(pending.pages[0].bound).toEqual({ workspace_name: 'Foreign Co', agent_name: 'TheirBot' });
+
+    // Plain link → 409 with who owns it, no dup row.
+    const blocked = await link();
+    expect(blocked.status).toBe(409);
+    const bb = (await blocked.json()) as { needs_takeover?: boolean; bound_to?: { workspace_name: string } };
+    expect(bb.needs_takeover).toBe(true);
+    expect(bb.bound_to?.workspace_name).toBe('Foreign Co');
+    const stillOne = await db.select().from(channels).where(eq(channels.id, fch.id));
+    expect(stillOne).toHaveLength(1);
+
+    // Campaign-backed foreign channel can't be taken over.
+    await db
+      .insert(campaigns)
+      .values({ workspaceId: fws.id, channelId: fch.id, name: 'Camp', text: 'hi', status: 'draft' });
+    expect((await link({ takeover: true })).status).toBe(409);
+    expect(await db.select().from(channels).where(eq(channels.id, fch.id))).toHaveLength(1);
+    await db.delete(campaigns).where(eq(campaigns.channelId, fch.id));
+
+    // Takeover: foreign channel + dependents gone, new row bound here.
+    const ok = await link({ takeover: true });
+    expect(ok.status).toBe(201);
+    expect(await db.select().from(channels).where(eq(channels.id, fch.id))).toHaveLength(0);
+    expect(await db.select().from(channelBindings).where(eq(channelBindings.channelId, fch.id))).toHaveLength(0);
+    const mine = (await db.select().from(channels)).filter(
+      (c) => (c.credentials as { page_id?: string }).page_id === 'pg1',
+    );
+    expect(mine).toHaveLength(1);
+    expect(mine[0].workspaceId).not.toBe(fws.id);
+
+    // Bound to my own workspace now — even takeover won't move it again.
+    expect((await link({ takeover: true })).status).toBe(409);
   });
 });

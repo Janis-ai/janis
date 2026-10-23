@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, or, sql } from 'drizzle-orm';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env, requestOrigin, requestWebOrigin } from '../env.js';
@@ -14,10 +14,12 @@ import {
   channels,
   contactIdentities,
   metaConnections,
+  workspaces,
 } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toChannel } from '../lib/serializers.js';
-import { setGetStartedButton, type ChannelCredentials } from '../lib/channels.js';
+import { invalidateChannelCache, setGetStartedButton, type ChannelCredentials } from '../lib/channels.js';
+import { audit } from '../lib/audit.js';
 
 const GRAPH = 'https://graph.facebook.com/v21.0';
 const STATE_COOKIE = 'janis_meta_state';
@@ -99,6 +101,9 @@ const linkBody = z.object({
   kind: z.enum(['messenger', 'instagram', 'whatsapp']),
   page_id: z.string().optional(),
   phone_number_id: z.string().optional(),
+  // Take over a binding owned by another workspace — removes that channel
+  // row (same as a manual disconnect there) and binds the asset here.
+  takeover: z.boolean().optional(),
 });
 
 /** Console endpoints mounted at /api/meta (session auth, incl. OAuth callbacks). */
@@ -232,15 +237,65 @@ export function metaApiRoutes(db: Db) {
       return c.json({ error: 'connect session expired — start again' }, 404);
     }
     const { pages, wabas } = found.assets;
+    // Cross-workspace bindings for the discovered assets — a page already
+    // wired to another Janis workspace is flagged so the picker can call it
+    // out and offer a takeover instead of silently double-binding (the
+    // inbound dispatcher resolves the first matching row; a dup would
+    // route messages to whichever workspace won the race).
+    const extIds = [
+      ...pages.map((pg) => pg.id),
+      ...pages.map((pg) => pg.instagram_business_account?.id).filter((v): v is string => !!v),
+      ...wabas.flatMap((w) => w.phone_numbers.map((n) => n.id)),
+    ];
+    const boundBy = new Map<string, { workspace_name: string; agent_name: string }>();
+    if (extIds.length) {
+      const rows = await db
+        .select({
+          wsName: workspaces.name,
+          agentName: agents.name,
+          pageId: sql<string>`${channels.credentials}->>'page_id'`,
+          phoneId: sql<string>`${channels.credentials}->>'phone_number_id'`,
+        })
+        .from(channels)
+        .innerJoin(agents, eq(channels.agentId, agents.id))
+        .innerJoin(workspaces, eq(channels.workspaceId, workspaces.id))
+        .where(
+          and(
+            sql`${channels.workspaceId} <> ${c.get('workspaceId')}`,
+            or(
+              ...extIds.map(
+                (id) =>
+                  sql`(${channels.credentials}->>'page_id' = ${id} or ${channels.credentials}->>'phone_number_id' = ${id})`,
+              ),
+            ),
+          ),
+        );
+      for (const r of rows) {
+        const v = { workspace_name: r.wsName, agent_name: r.agentName };
+        if (r.pageId) boundBy.set(r.pageId, v);
+        if (r.phoneId) boundBy.set(r.phoneId, v);
+      }
+    }
     return c.json({
       pages: pages.map((pg) => ({
         id: pg.id,
         name: pg.name,
         instagram: pg.instagram_business_account
-          ? { id: pg.instagram_business_account.id, username: pg.instagram_business_account.username }
+          ? {
+              id: pg.instagram_business_account.id,
+              username: pg.instagram_business_account.username,
+              bound: boundBy.get(pg.instagram_business_account.id) ?? null,
+            }
           : null,
+        bound: boundBy.get(pg.id) ?? null,
       })),
-      whatsapp: wabas,
+      whatsapp: wabas.map((w) => ({
+        ...w,
+        phone_numbers: w.phone_numbers.map((n) => ({
+          ...n,
+          bound: boundBy.get(n.id) ?? null,
+        })),
+      })),
     });
   });
 
@@ -263,6 +318,71 @@ export function metaApiRoutes(db: Db) {
       .limit(1);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
 
+    // An asset can only be bound once — the webhook dispatcher resolves the
+    // first matching channel row. Same-workspace conflicts always 409 (the
+    // UI routes that through Disconnect); cross-workspace conflicts 409 too
+    // unless takeover=true, which deletes the other workspace's channel row
+    // (same cleanup as a manual disconnect, including the campaign guard).
+    const resolveConflict = async (extId: string) => {
+      const rows = await db
+        .select({
+          id: channels.id,
+          wsId: channels.workspaceId,
+          agentName: agents.name,
+          wsName: workspaces.name,
+        })
+        .from(channels)
+        .innerJoin(agents, eq(channels.agentId, agents.id))
+        .innerJoin(workspaces, eq(channels.workspaceId, workspaces.id))
+        .where(
+          sql`(${channels.credentials}->>'page_id' = ${extId} or ${channels.credentials}->>'phone_number_id' = ${extId})`,
+        );
+      if (!rows.length) return null;
+      const mine = rows.find((r) => r.wsId === c.get('workspaceId'));
+      if (mine) {
+        return { status: 409, body: { error: `already connected to ${mine.agentName} in this workspace` } };
+      }
+      const b = rows[0];
+      if (!body.takeover) {
+        return {
+          status: 409,
+          body: {
+            error: `already connected to ${b.agentName} on ${b.wsName}`,
+            bound_to: { workspace_name: b.wsName, agent_name: b.agentName },
+            needs_takeover: true,
+          },
+        };
+      }
+      for (const r of rows) {
+        const [{ n }] = await db
+          .select({ n: sql<number>`count(*)::int` })
+          .from(campaigns)
+          .where(eq(campaigns.channelId, r.id));
+        if (n > 0) {
+          return {
+            status: 409,
+            body: { error: `can't take over — ${r.agentName} on ${r.wsName} sends ${n} campaign${n === 1 ? '' : 's'} through it` },
+          };
+        }
+      }
+      for (const r of rows) {
+        await db.delete(contactIdentities).where(eq(contactIdentities.channelId, r.id));
+        await db.delete(channelBindings).where(eq(channelBindings.channelId, r.id));
+        await db.delete(channels).where(eq(channels.id, r.id));
+      }
+      invalidateChannelCache();
+      await audit(db, {
+        workspaceId: c.get('workspaceId'),
+        userId: c.get('user').id,
+        userName: c.get('user').name,
+        action: 'meta.channel-takeover',
+        targetType: 'channel',
+        targetId: extId,
+        meta: { from_workspace: b.wsName, from_agent: b.agentName, removed: rows.length },
+      });
+      return null;
+    };
+
     let name = '';
     let pageToken = '';
     const credentials: ChannelCredentials = {
@@ -282,6 +402,9 @@ export function metaApiRoutes(db: Db) {
       // A user token scoped whatsapp_business_messaging can send; a system-user
       // token is more durable for production — can be swapped later.
       credentials.access_token = userToken;
+
+      const conflict = await resolveConflict(num.id);
+      if (conflict) return c.json(conflict.body, conflict.status as 409);
 
       const [row] = await db
         .insert(channels)
@@ -314,6 +437,9 @@ export function metaApiRoutes(db: Db) {
       credentials.page_id = page.id;
     }
     credentials.access_token = pageToken;
+
+    const conflict = await resolveConflict(credentials.page_id!);
+    if (conflict) return c.json(conflict.body, conflict.status as 409);
 
     const [row] = await db
       .insert(channels)

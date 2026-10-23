@@ -8,9 +8,24 @@ import { CodeBlock } from './bits';
 import { useConfirm } from './Prompt';
 import { friendlyError } from '../lib/friendlyError';
 
+interface BoundAsset {
+  workspace_name: string;
+  agent_name: string;
+}
+
 export interface PendingAssets {
-  pages: { id: string; name: string; instagram: { id: string; username?: string } | null }[];
-  whatsapp: { id: string; name?: string; phone_numbers: { id: string; display_phone_number?: string }[] }[];
+  pages: {
+    id: string;
+    name: string;
+    instagram: { id: string; username?: string; bound?: BoundAsset | null } | null;
+    /** Bound to a channel on ANOTHER workspace — picker offers a takeover. */
+    bound?: BoundAsset | null;
+  }[];
+  whatsapp: {
+    id: string;
+    name?: string;
+    phone_numbers: { id: string; display_phone_number?: string; bound?: BoundAsset | null }[];
+  }[];
 }
 
 export const KIND_LABEL: Record<string, string> = {
