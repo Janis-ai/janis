@@ -32,6 +32,7 @@ import ChannelPage from './pages/ChannelPage';
 import ShopifyApp from './pages/ShopifyApp';
 import ShopifyLink from './pages/ShopifyLink';
 import ShopifyClaim from './pages/ShopifyClaim';
+import SlackLegacy from './pages/SlackLegacy';
 import { finishOpenRouterCallback } from './lib/openrouterAuth';
 import { reportClientError } from './lib/errorReporter';
 
@@ -197,6 +198,9 @@ export default function App() {
             interstitial like the OAuth callbacks. */}
         <Route path="/shopify-link" element={<RequireAuth><ShopifyLink /></RequireAuth>} />
         <Route path="/shopify-claim" element={<RequireAuth><ShopifyClaim /></RequireAuth>} />
+        {/* Legacy-team Slack install collision — the parked grant waits here
+            for the keep/migrate/start-fresh decision. */}
+        <Route path="/slack/legacy" element={<RequireAuth><SlackLegacy /></RequireAuth>} />
         <Route path="/help/:agentId" element={<HelpCenter />} />
         <Route path="/help/:agentId/:articleId" element={<HelpArticle />} />
         <Route

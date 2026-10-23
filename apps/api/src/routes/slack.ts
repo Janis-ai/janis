@@ -34,6 +34,8 @@ import { fetchAvatar } from '../lib/avatar.js';
 import { membershipFor } from '../lib/members.js';
 import { agentSend, humanReply, internalNote, resume, takeover, TakeoverError, teachAgent } from '../services/takeover.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
+import { legacyTeamState } from '../lib/legacyMongo.js';
+import { sendEmail } from '../lib/notify.js';
 import { makeClassicCtx } from '../lib/slackClassic/index.js';
 import { classicIncoming, handleClassicSlash, handleClassicCallback, handleClassicFilesUploaded, handleClassicWorkspaceEvent } from '../lib/slackClassic/relay.js';
 import type { ClassicResult } from '../lib/slackClassic/types.js';
@@ -647,9 +649,13 @@ export function slackApiRoutes(db: Db) {
   // Marketplace listing or landing-page button) to this workspace. The
   // pending row id rides an httpOnly cookie set at OAuth callback; the app
   // shell calls this opportunistically after login — no-op when absent.
+  //
+  // Legacy teams (a live Mongo slack_integrations doc — or a lookup that
+  // can't be verified) need an explicit `decision` before the row is
+  // consumed: 'keep' stays on classic wordhop-slack, 'migrate' flags the
+  // grant for the assisted cutover, 'new' binds anyway and severs classic.
   app.post('/claim', adminOnly, async (c) => {
     const pendingId = getCookie(c, PENDING_COOKIE);
-    deleteCookie(c, PENDING_COOKIE, { path: '/' });
     if (!pendingId) return c.json({ claimed: false });
     const [row] = await db
       .select()
@@ -661,8 +667,37 @@ export function slackApiRoutes(db: Db) {
         ),
       )
       .limit(1);
-    if (!row) return c.json({ claimed: false });
+    if (!row) {
+      deleteCookie(c, PENDING_COOKIE, { path: '/' });
+      return c.json({ claimed: false });
+    }
+    const { decision } = (await c.req.json().catch(() => ({}))) as {
+      decision?: 'keep' | 'migrate' | 'new';
+    };
+    const legacy = await legacyTeamState(row.teamId);
+    if (legacy !== 'none' && !decision) {
+      // The cookie+row survive — the interstitial re-posts with a decision.
+      return c.json({ claimed: false, legacy, team_name: row.teamName });
+    }
+    if (decision === 'migrate') {
+      // Assisted cutover: keep the parked grant flagged for ops — a row
+      // written before the team's channels/subs are imported would serve
+      // an empty classic relay and sever the team all the same.
+      await db
+        .update(slackPendingInstalls)
+        .set({ decision: 'migrate' })
+        .where(eq(slackPendingInstalls.id, row.id));
+      deleteCookie(c, PENDING_COOKIE, { path: '/' });
+      void sendEmail(
+        [env.opsNotifyEmail],
+        `Legacy Slack migration requested: ${row.teamName ?? row.teamId}`,
+        `Workspace ${c.get('workspaceId')} (user ${c.get('user').id}) asked to move Slack team ${row.teamId} (${row.teamName ?? '—'}) onto new Janis as classic-mode.\n\nPending install ${row.id} holds the fresh bot token — run the file-based import for this team, then bind it.`,
+      ).catch((e) => console.error('migration-request email failed:', e));
+      return c.json({ claimed: false, migration: 'requested' });
+    }
+    deleteCookie(c, PENDING_COOKIE, { path: '/' });
     await db.delete(slackPendingInstalls).where(eq(slackPendingInstalls.id, row.id));
+    if (decision === 'keep') return c.json({ claimed: false, kept: true });
     // The team may have been bound meanwhile (someone else claimed it, or a
     // session-bound reinstall) — never double-bind.
     const [existing] = await db
@@ -962,6 +997,9 @@ export function slackPublicRoutes(db: Db) {
     if (!data.ok || !data.access_token || !data.team) {
       return c.text(`slack oauth failed: ${data.error ?? 'unknown'}`, 400);
     }
+    // Hoisted so closures below keep the narrowing.
+    const team = data.team;
+    const accessToken = data.access_token;
 
     // Public flows fall back to a soft session — a signed-in installer binds
     // to their active workspace without a dir. state.
@@ -978,14 +1016,14 @@ export function slackPublicRoutes(db: Db) {
     const [existing] = await db
       .select()
       .from(slackInstallations)
-      .where(eq(slackInstallations.teamId, data.team.id))
+      .where(eq(slackInstallations.teamId, team.id))
       .limit(1);
     if (existing) {
       if (!workspaceId) {
         await db
           .update(slackInstallations)
           .set({
-            botToken: data.access_token,
+            botToken: accessToken,
             installerSlackUserId: data.authed_user?.id ?? existing.installerSlackUserId,
             installerUserToken: data.authed_user?.access_token ?? existing.installerUserToken,
           })
@@ -1005,15 +1043,15 @@ export function slackPublicRoutes(db: Db) {
       await db.delete(slackInstallations).where(eq(slackInstallations.id, existing.id));
     }
 
-    // New team, nobody signed in — park the grant; the installer claims it
-    // into their workspace after sign-in via POST /api/slack/claim.
-    if (!workspaceId) {
+    // Park a completed grant until an admin session decides what to do with
+    // it — POST /api/slack/claim binds it into their workspace.
+    const parkGrant = async (redirect: string) => {
       const [pending] = await db
         .insert(slackPendingInstalls)
         .values({
-          teamId: data.team.id,
-          teamName: data.team.name ?? null,
-          botToken: data.access_token,
+          teamId: team.id,
+          teamName: team.name ?? null,
+          botToken: accessToken,
           installerSlackUserId: data.authed_user?.id ?? null,
           installerUserToken: data.authed_user?.access_token ?? null,
           expiresAt: new Date(Date.now() + PENDING_TTL_MS),
@@ -1026,16 +1064,31 @@ export function slackPublicRoutes(db: Db) {
         maxAge: PENDING_TTL_MS / 1000,
         secure: env.apiOrigin.startsWith('https'),
       });
-      return c.redirect(`${env.webOrigin}/login?slack=pending`);
+      return c.redirect(`${env.webOrigin}${redirect}`);
+    };
+
+    // Legacy guard: the same Slack app fronts classic wordhop-slack
+    // customers. A team with a live Mongo install must never get a silent
+    // new-mode row — that severs its classic traffic with no way back from
+    // either UI. Park the grant and let the interstitial decide; a failed
+    // lookup parks too (fail closed, not into a severed install).
+    if ((await legacyTeamState(team.id)) !== 'none') {
+      return parkGrant(workspaceId ? '/slack/legacy' : '/login?slack=pending');
+    }
+
+    // New team, nobody signed in — park the grant; the installer claims it
+    // into their workspace after sign-in via POST /api/slack/claim.
+    if (!workspaceId) {
+      return parkGrant('/login?slack=pending');
     }
 
     const [inst] = await db
       .insert(slackInstallations)
       .values({
         workspaceId,
-        teamId: data.team.id,
-        teamName: data.team.name ?? null,
-        botToken: data.access_token,
+        teamId: team.id,
+        teamName: team.name ?? null,
+        botToken: accessToken,
         installerUserId: userId || null,
         installerSlackUserId: data.authed_user?.id ?? null,
         installerUserToken: data.authed_user?.access_token ?? null,

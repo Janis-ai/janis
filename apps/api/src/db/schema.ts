@@ -746,6 +746,9 @@ export const slackPendingInstalls = pgTable('slack_pending_installs', {
   installerSlackUserId: text('installer_slack_user_id'),
   installerUserToken: text('installer_user_token'),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  // Installer's choice on the legacy interstitial — 'migrate' means ops
+  // runs the file-based classic import for this team, then binds the grant.
+  decision: text('decision'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

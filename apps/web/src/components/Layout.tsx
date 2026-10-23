@@ -1000,8 +1000,16 @@ export default function Layout() {
   useEffect(() => {
     if (!hasWorkspace || claimedSlack.current || data?.user.role !== 'admin') return;
     claimedSlack.current = true;
-    void api<{ claimed?: boolean; team_name?: string }>('/api/slack/claim', { method: 'POST' })
+    void api<{ claimed?: boolean; team_name?: string; legacy?: string }>('/api/slack/claim', {
+      method: 'POST',
+    })
       .then((r) => {
+        if (r?.legacy) {
+          // Team still runs on classic Janis — binding needs an explicit
+          // choice on the interstitial before the grant is consumed.
+          navigate('/slack/legacy');
+          return;
+        }
         if (r?.claimed) {
           setToasts((t) => [
             ...t,

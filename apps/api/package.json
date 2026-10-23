@@ -30,6 +30,7 @@
     "drizzle-orm": "^0.45.3",
     "hono": "^4.13.11",
     "mammoth": "^1.12.2",
+    "mongodb": "^7.7.0",
     "pdf-parse": "^2.4.5",
     "postgres": "^3.4.5",
     "stripe": "^22.6.2",

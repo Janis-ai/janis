@@ -197,6 +197,15 @@ export const env = {
   // old dashboard (Mongo transcripts) and wordhop-slack takeovers keep
   // working during the migration. Empty disables forwarding (dev/tests).
   legacyApiUrl: process.env.WORDHOP_API_URL ?? '',
+  // Read-only handle on the legacy Mongo — at Slack OAuth time it answers
+  // "does this team still run on classic Janis?" so a slack_integrations
+  // customer can't silently flip onto new-mode routing. Empty treats every
+  // team as non-legacy (dev/tests).
+  legacyMongoUri: process.env.LEGACY_MONGODB_URI ?? '',
+  // Ops mailbox for assisted legacy-migration requests from the Slack
+  // interstitial — defaults to our own inbound channel so requests land
+  // in the Janis inbox, not a personal address.
+  opsNotifyEmail: process.env.OPS_NOTIFY_EMAIL ?? 'janis@inbound.janis.ai',
   // Legacy wordhop-slack interactivity endpoint — Slack apps have a single
   // Interactivity URL, so once the real Janis app points at this service we
   // fan out payloads we don't recognize (legacy dialogs, training buttons,

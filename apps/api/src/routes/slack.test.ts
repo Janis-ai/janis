@@ -11,6 +11,7 @@ import { and, eq } from 'drizzle-orm';
 import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { slackApiRoutes, slackPublicRoutes } from './slack.js';
+import { setLegacyTeamLookup } from '../lib/legacyMongo.js';
 import { findThread, mirrorToSlack, postSlackAlert, removeMemberFromAlertChannels, resetChannelScanCache, slackMrkdwn, slackToCanonical, slackWidgetBlocks, syncMemberToAlertChannels } from '../lib/slack.js';
 import { env } from '../env.js';
 
@@ -29,6 +30,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.unstubAllGlobals();
+  setLegacyTeamLookup(undefined);
   // channel scans cache per bot token — tests reuse token strings
   resetChannelScanCache();
 });
@@ -1272,6 +1274,16 @@ describe('public OAuth install', () => {
       headers: { cookie: `${adminCookie}; janis_slack_pending=${pendingId}` },
     });
 
+  const claimWith = (pendingId: string, decision: string) =>
+    api.request('/api/slack/claim', {
+      method: 'POST',
+      headers: {
+        cookie: `${adminCookie}; janis_slack_pending=${pendingId}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ decision }),
+    });
+
   beforeAll(async () => {
     env.slackClientId = 'CID';
     env.slackClientSecret = 'SEC';
@@ -1551,6 +1563,109 @@ describe('public OAuth install', () => {
     expect(
       await db.select().from(slackThreads).where(eq(slackThreads.installationId, inst0.id)),
     ).toHaveLength(0);
+  });
+
+  it('parks a legacy-team install and refuses a decisionless claim', async () => {
+    setLegacyTeamLookup(async (t) => (t === 'T_LEGACY' ? 'live' : 'none'));
+    stubOAuth('T_LEGACY');
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(await pubState())}`,
+    );
+    expect(res.status).toBe(302);
+    const pid = pendingCookieOf(res);
+    expect(pid).toBeTruthy();
+    // nothing bound — the row waits for the interstitial's explicit choice
+    expect(
+      await db.select().from(slackInstallations).where(eq(slackInstallations.teamId, 'T_LEGACY')),
+    ).toHaveLength(0);
+    const body = (await (await claim(pid)).json()) as { claimed: boolean; legacy?: string };
+    expect(body.claimed).toBe(false);
+    expect(body.legacy).toBe('live');
+    expect(
+      await db.select().from(slackPendingInstalls).where(eq(slackPendingInstalls.id, pid)),
+    ).toHaveLength(1);
+  });
+
+  it('an in-session install on a legacy team lands on the interstitial', async () => {
+    setLegacyTeamLookup(async () => 'live');
+    stubOAuth('T_DIRLEG');
+    const start = await api.request('/api/slack/install', { headers: { cookie: adminCookie } });
+    const state = new URL(start.headers.get('location')!).searchParams.get('state')!;
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(state)}`,
+      { headers: { cookie: adminCookie } },
+    );
+    expect(res.headers.get('location')).toBe(`${env.webOrigin}/slack/legacy`);
+    expect(
+      await db.select().from(slackInstallations).where(eq(slackInstallations.teamId, 'T_DIRLEG')),
+    ).toHaveLength(0);
+  });
+
+  it('fails closed when the legacy lookup itself errors', async () => {
+    setLegacyTeamLookup(async () => 'unknown');
+    stubOAuth('T_UNK');
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(await pubState())}`,
+    );
+    const pid = pendingCookieOf(res);
+    expect(pid).toBeTruthy();
+    const body = (await (await claim(pid)).json()) as { claimed: boolean; legacy?: string };
+    expect(body.claimed).toBe(false);
+    expect(body.legacy).toBe('unknown');
+    expect(
+      await db.select().from(slackInstallations).where(eq(slackInstallations.teamId, 'T_UNK')),
+    ).toHaveLength(0);
+  });
+
+  it("'keep' consumes the grant without binding", async () => {
+    setLegacyTeamLookup(async () => 'live');
+    const [p] = await db
+      .insert(slackPendingInstalls)
+      .values({ teamId: 'T_KEEP', botToken: 'xoxb-keep', expiresAt: new Date(Date.now() + 3600_000) })
+      .returning();
+    const res = await claimWith(p.id, 'keep');
+    expect(await res.json()).toEqual({ claimed: false, kept: true });
+    expect(
+      await db.select().from(slackPendingInstalls).where(eq(slackPendingInstalls.id, p.id)),
+    ).toHaveLength(0);
+    expect(
+      await db.select().from(slackInstallations).where(eq(slackInstallations.teamId, 'T_KEEP')),
+    ).toHaveLength(0);
+  });
+
+  it("'migrate' flags the grant for the assisted cutover instead of binding", async () => {
+    setLegacyTeamLookup(async () => 'live');
+    const [p] = await db
+      .insert(slackPendingInstalls)
+      .values({ teamId: 'T_MIGR', botToken: 'xoxb-migr', expiresAt: new Date(Date.now() + 3600_000) })
+      .returning();
+    const res = await claimWith(p.id, 'migrate');
+    expect(await res.json()).toEqual({ claimed: false, migration: 'requested' });
+    const [row] = await db
+      .select()
+      .from(slackPendingInstalls)
+      .where(eq(slackPendingInstalls.id, p.id));
+    expect(row.decision).toBe('migrate');
+    expect(
+      await db.select().from(slackInstallations).where(eq(slackInstallations.teamId, 'T_MIGR')),
+    ).toHaveLength(0);
+  });
+
+  it("'new' binds a legacy team explicitly — the interstitial's informed choice", async () => {
+    setLegacyTeamLookup(async () => 'live');
+    vi.stubGlobal('fetch', vi.fn(async () => slackOk({ channels: [] })));
+    const [p] = await db
+      .insert(slackPendingInstalls)
+      .values({ teamId: 'T_FRESH', botToken: 'xoxb-fresh', expiresAt: new Date(Date.now() + 3600_000) })
+      .returning();
+    const res = await claimWith(p.id, 'new');
+    expect(((await res.json()) as { claimed: boolean }).claimed).toBe(true);
+    const [inst] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, 'T_FRESH'));
+    expect(inst.mode).toBe('new');
+    expect(inst.workspaceId).toBe(adminWsId);
   });
 });
 
