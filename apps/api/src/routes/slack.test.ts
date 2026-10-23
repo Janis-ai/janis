@@ -1530,7 +1530,7 @@ describe('public OAuth install', () => {
       .values({ teamId: 'T_KEEPDUAL', botToken: 'xoxb-keep', expiresAt: new Date(Date.now() + 3600_000) })
       .returning();
     const res = await claimWith(p.id, 'keep');
-    expect(await res.json()).toEqual({ claimed: false, kept: true });
+    expect(await res.json()).toEqual({ claimed: false, kept: true, return_path: null });
     expect(
       await db.select().from(slackInstallations).where(eq(slackInstallations.id, inst.id)),
     ).toHaveLength(0);
@@ -1544,7 +1544,7 @@ describe('public OAuth install', () => {
     const pid = pendingCookieOf(oauth);
     const res = await claim(pid);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ claimed: true, team_name: 'Team T_CLAIM' });
+    expect(await res.json()).toEqual({ claimed: true, team_name: 'Team T_CLAIM', return_path: null });
     const [inst] = await db
       .select()
       .from(slackInstallations)
@@ -1804,10 +1804,19 @@ describe('public OAuth install', () => {
     setLegacyTeamLookup(async () => 'live');
     const [p] = await db
       .insert(slackPendingInstalls)
-      .values({ teamId: 'T_KEEP', botToken: 'xoxb-keep', expiresAt: new Date(Date.now() + 3600_000) })
+      .values({
+        teamId: 'T_KEEP',
+        botToken: 'xoxb-keep',
+        expiresAt: new Date(Date.now() + 3600_000),
+        returnPath: '/agents/abc/settings?sub=escalation',
+      })
       .returning();
     const res = await claimWith(p.id, 'keep');
-    expect(await res.json()).toEqual({ claimed: false, kept: true });
+    expect(await res.json()).toEqual({
+      claimed: false,
+      kept: true,
+      return_path: '/agents/abc/settings?sub=escalation',
+    });
     expect(
       await db.select().from(slackPendingInstalls).where(eq(slackPendingInstalls.id, p.id)),
     ).toHaveLength(0);
@@ -1899,7 +1908,7 @@ describe('public OAuth install', () => {
       })
       .returning();
     const res = await claimWith(p.id, 'migrate');
-    expect(await res.json()).toEqual({ claimed: false, migration: 'done', team_name: 'Migrating' });
+    expect(await res.json()).toEqual({ claimed: false, migration: 'done', team_name: 'Migrating', return_path: null });
 
     // bound as a classic-mode install, grant consumed
     const [inst] = await db
@@ -1975,7 +1984,7 @@ describe('public OAuth install', () => {
       .values({ teamId: 'T_MIGERR', botToken: 'xoxb-err', expiresAt: new Date(Date.now() + 3600_000) })
       .returning();
     const res = await claimWith(p.id, 'migrate');
-    expect(await res.json()).toEqual({ claimed: false, migration: 'requested' });
+    expect(await res.json()).toEqual({ claimed: false, migration: 'requested', return_path: null });
     const [row] = await db
       .select()
       .from(slackPendingInstalls)

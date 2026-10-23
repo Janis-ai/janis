@@ -753,6 +753,10 @@ export const slackPendingInstalls = pgTable('slack_pending_installs', {
   // Installer's choice on the legacy interstitial — 'migrate' means ops
   // runs the file-based classic import for this team, then binds the grant.
   decision: text('decision'),
+  // The console page the install started on (?return= on /api/slack/install)
+  // — carried through the parked grant so claim/chooser outcomes can land
+  // the installer back where they launched (e.g. the Escalation tab).
+  returnPath: text('return_path'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 

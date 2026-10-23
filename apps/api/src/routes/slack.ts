@@ -696,7 +696,7 @@ export function slackApiRoutes(db: Db) {
           `Slack migration complete — ${row.teamName ?? row.teamId}`,
           `Your Slack workspace ${row.teamName ?? row.teamId} now runs on the new Janis — same classic experience (transcripts, alerts, commands), managed from ${env.webOrigin}/settings.\n\nImported: ${stats.agents} agent${stats.agents === 1 ? '' : 's'}${stats.agentsNoEngine ? ` (${stats.agentsNoEngine} had no Dialogflow credentials — imported as monitor-only)` : ''}, ${stats.transcripts} transcript channel${stats.transcripts === 1 ? '' : 's'}${stats.training ? `, ${stats.training} training` : ''}${stats.memberDms ? `, ${stats.memberDms} member DM prefs` : ''}.${stats.dmUnresolved ? ` ${stats.dmUnresolved} DM pref doc(s) couldn't be resolved to a member.` : ''}${stats.alertChannel ? ` Alerts post to #${stats.alertChannel}.` : ''}\n\nAgents run on their existing Dialogflow engine — nothing changed about how they answer. You can convert any agent to the hosted engine from its Settings tab when you're ready.${stats.marked ? '' : '\n\nNote: the legacy flag could not be set — if classic behavior seems doubled, contact support.'}`,
         ).catch((e) => console.error('migration-complete email failed:', e));
-        return c.json({ claimed: false, migration: 'done', team_name: row.teamName });
+        return c.json({ claimed: false, migration: 'done', team_name: row.teamName, return_path: row.returnPath });
       } catch (e) {
         console.error('auto-migration failed; falling back to assisted:', e);
       }
@@ -713,7 +713,7 @@ export function slackApiRoutes(db: Db) {
         `Legacy Slack migration requested: ${row.teamName ?? row.teamId}`,
         `Workspace ${c.get('workspaceId')} (user ${c.get('user').id}) asked to move Slack team ${row.teamId} (${row.teamName ?? '—'}) onto new Janis as classic-mode.\n\nPending install ${row.id} holds the fresh bot token — run the file-based import for this team, then bind it.`,
       ).catch((e) => console.error('migration-request email failed:', e));
-      return c.json({ claimed: false, migration: 'requested' });
+      return c.json({ claimed: false, migration: 'requested', return_path: row.returnPath });
     }
     deleteCookie(c, PENDING_COOKIE, { path: '/' });
     await db.delete(slackPendingInstalls).where(eq(slackPendingInstalls.id, row.id));
@@ -735,7 +735,7 @@ export function slackApiRoutes(db: Db) {
           await db.delete(slackInstallations).where(eq(slackInstallations.id, inst.id));
         }
       }
-      return c.json({ claimed: false, kept: true });
+      return c.json({ claimed: false, kept: true, return_path: row.returnPath });
     }
     // The team may have been bound meanwhile (someone else claimed it, or a
     // session-bound reinstall) — never double-bind.
@@ -744,7 +744,7 @@ export function slackApiRoutes(db: Db) {
       .from(slackInstallations)
       .where(eq(slackInstallations.teamId, row.teamId))
       .limit(1);
-    if (existing) return c.json({ claimed: false, already_connected: true });
+    if (existing) return c.json({ claimed: false, already_connected: true, return_path: row.returnPath });
     const [inst] = await db
       .insert(slackInstallations)
       .values({
@@ -769,7 +769,7 @@ export function slackApiRoutes(db: Db) {
     }
     await chooseAlertChannel(db, inst);
     void welcomeInstallerDm(inst).catch(() => {});
-    return c.json({ claimed: true, team_name: row.teamName });
+    return c.json({ claimed: true, team_name: row.teamName, return_path: row.returnPath });
   });
 
   app.get('/channels', async (c) => {
@@ -1061,6 +1061,7 @@ export function slackPublicRoutes(db: Db) {
           installerSlackUserId: data.authed_user?.id ?? null,
           installerUserToken: data.authed_user?.access_token ?? null,
           expiresAt: new Date(Date.now() + PENDING_TTL_MS),
+          returnPath,
         })
         .returning();
       setCookie(c, PENDING_COOKIE, pending.id, {

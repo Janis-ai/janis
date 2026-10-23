@@ -1,0 +1,1 @@
+ALTER TABLE "slack_pending_installs" ADD COLUMN "return_path" text;

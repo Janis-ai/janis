@@ -21,6 +21,7 @@ export default function SlackLegacy() {
   const [busy, setBusy] = useState<Decision | null>(null);
   const [error, setError] = useState('');
   const [outcome, setOutcome] = useState<'kept' | 'requested' | 'done' | null>(null);
+  const [returnHref, setReturnHref] = useState('/settings?slack=connected');
 
   const decide = async (decision: Decision) => {
     setBusy(decision);
@@ -31,11 +32,22 @@ export default function SlackLegacy() {
         kept?: boolean;
         migration?: string;
         legacy?: string;
+        return_path?: string | null;
       }>('/api/slack/claim', { method: 'POST', body: JSON.stringify({ decision }) });
-      if (r.claimed) navigate('/settings?slack=connected');
+      // The page the install launched from (Escalation tab etc.) — same
+      // slack=connected flagging the OAuth callback applies to ?return.
+      const back = (() => {
+        const p = r.return_path ?? '';
+        if (!p.startsWith('/') || p.startsWith('//')) return '/settings?slack=connected';
+        const [path, hash] = p.split('#');
+        return `${path}${path.includes('?') ? '&' : '?'}slack=connected${hash ? `#${hash}` : ''}`;
+      })();
+      if (r.claimed) navigate(back);
       else if (r.kept) setOutcome('kept');
-      else if (r.migration === 'done') setOutcome('done');
-      else if (r.migration) setOutcome('requested');
+      else if (r.migration === 'done') {
+        setReturnHref(back);
+        setOutcome('done');
+      } else if (r.migration) setOutcome('requested');
       else setError('Nothing pending — this link may have expired. Connect Slack again.');
     } catch (e) {
       setError(e instanceof ApiError ? friendlyError(e.message).text : 'Something went wrong');
@@ -75,9 +87,9 @@ export default function SlackLegacy() {
             <a
               className="btn primary"
               style={{ display: 'block', textAlign: 'center' }}
-              href="/settings?slack=connected"
+              href={returnHref}
             >
-              Open Slack settings
+              Back to where you were
             </a>
           </>
         )}
