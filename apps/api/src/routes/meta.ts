@@ -13,7 +13,9 @@ import {
   channelBindings,
   channels,
   contactIdentities,
+  memberships,
   metaConnections,
+  users,
   workspaces,
 } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -93,6 +95,28 @@ async function discoverAssets(
     }
   }
   return { pages: pagesRes.data ?? [], wabas };
+}
+
+/** {workspace_name, agent_name, owner_email} — enough for an admin holding
+ *  Page access to recognize which Janis account a foreign binding lives in. */
+interface BoundInfo {
+  workspace_name: string;
+  agent_name: string;
+  owner_email: string | null;
+}
+
+/** First admin of a workspace = the account that owns the binding. */
+async function ownerEmails(db: Db, wsIds: string[]): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!wsIds.length) return out;
+  const rows = await db
+    .select({ wsId: memberships.workspaceId, email: users.email })
+    .from(memberships)
+    .innerJoin(users, eq(memberships.userId, users.id))
+    .where(and(inArray(memberships.workspaceId, wsIds), eq(memberships.role, 'admin')))
+    .orderBy(memberships.createdAt);
+  for (const r of rows) if (!out.has(r.wsId)) out.set(r.wsId, r.email);
+  return out;
 }
 
 const linkBody = z.object({
@@ -247,10 +271,11 @@ export function metaApiRoutes(db: Db) {
       ...pages.map((pg) => pg.instagram_business_account?.id).filter((v): v is string => !!v),
       ...wabas.flatMap((w) => w.phone_numbers.map((n) => n.id)),
     ];
-    const boundBy = new Map<string, { workspace_name: string; agent_name: string }>();
+    const boundBy = new Map<string, BoundInfo>();
     if (extIds.length) {
       const rows = await db
         .select({
+          wsId: channels.workspaceId,
           wsName: workspaces.name,
           agentName: agents.name,
           pageId: sql<string>`${channels.credentials}->>'page_id'`,
@@ -270,8 +295,13 @@ export function metaApiRoutes(db: Db) {
             ),
           ),
         );
+      const owners = await ownerEmails(db, [...new Set(rows.map((r) => r.wsId))]);
       for (const r of rows) {
-        const v = { workspace_name: r.wsName, agent_name: r.agentName };
+        const v = {
+          workspace_name: r.wsName,
+          agent_name: r.agentName,
+          owner_email: owners.get(r.wsId) ?? null,
+        };
         if (r.pageId) boundBy.set(r.pageId, v);
         if (r.phoneId) boundBy.set(r.phoneId, v);
       }
@@ -344,11 +374,13 @@ export function metaApiRoutes(db: Db) {
       }
       const b = rows[0];
       if (!body.takeover) {
+        const owners = await ownerEmails(db, rows.map((r) => r.wsId));
+        const email = owners.get(b.wsId) ?? null;
         return {
           status: 409,
           body: {
-            error: `already connected to ${b.agentName} on ${b.wsName}`,
-            bound_to: { workspace_name: b.wsName, agent_name: b.agentName },
+            error: `already connected to ${b.agentName} on ${b.wsName}${email ? ` (${email})` : ''}`,
+            bound_to: { workspace_name: b.wsName, agent_name: b.agentName, owner_email: email },
             needs_takeover: true,
           },
         };

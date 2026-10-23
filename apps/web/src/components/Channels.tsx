@@ -11,6 +11,7 @@ import { friendlyError } from '../lib/friendlyError';
 interface BoundAsset {
   workspace_name: string;
   agent_name: string;
+  owner_email?: string | null;
 }
 
 export interface PendingAssets {

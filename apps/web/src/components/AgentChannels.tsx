@@ -1197,13 +1197,14 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                         )
                       ) : pg.bound ? (
                         <>
-                          <span className="muted" title={`bound to ${pg.bound.agent_name}`}>
+                          <span className="muted" title={`bound to ${pg.bound.agent_name} on ${pg.bound.workspace_name}`}>
                             on {pg.bound.workspace_name} · {pg.bound.agent_name}
+                            {pg.bound.owner_email ? ` (${pg.bound.owner_email})` : ''}
                           </span>
                           <button className="btn" disabled={link.isPending}
                             onClick={async () => {
                               if (await confirm(
-                                `Take Messenger over from ${pg.bound!.workspace_name}? ${pg.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
+                                `Take Messenger over from ${pg.bound!.workspace_name}${pg.bound!.owner_email ? ` (${pg.bound!.owner_email})` : ''}? ${pg.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
                                 [{ key: 'ok', label: 'Take over' }, { key: 'cancel', label: 'Cancel' }],
                               ) === 'ok') link.mutate({ kind: 'messenger', page_id: pg.id, takeover: true });
                             }}>
@@ -1228,13 +1229,14 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                           )
                         ) : pg.instagram.bound ? (
                           <>
-                            <span className="muted" title={`bound to ${pg.instagram.bound.agent_name}`}>
+                            <span className="muted" title={`bound to ${pg.instagram.bound.agent_name} on ${pg.instagram.bound.workspace_name}`}>
                               on {pg.instagram.bound.workspace_name} · {pg.instagram.bound.agent_name}
+                              {pg.instagram.bound.owner_email ? ` (${pg.instagram.bound.owner_email})` : ''}
                             </span>
                             <button className="btn" disabled={link.isPending}
                               onClick={async () => {
                                 if (await confirm(
-                                  `Take Instagram over from ${pg.instagram!.bound!.workspace_name}? ${pg.instagram!.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
+                                  `Take Instagram over from ${pg.instagram!.bound!.workspace_name}${pg.instagram!.bound!.owner_email ? ` (${pg.instagram!.bound!.owner_email})` : ''}? ${pg.instagram!.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
                                   [{ key: 'ok', label: 'Take over' }, { key: 'cancel', label: 'Cancel' }],
                                 ) === 'ok') link.mutate({ kind: 'instagram', page_id: pg.id, takeover: true });
                               }}>
@@ -1276,13 +1278,14 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                           )
                         ) : n.bound ? (
                           <>
-                            <span className="muted" title={`bound to ${n.bound.agent_name}`}>
+                            <span className="muted" title={`bound to ${n.bound.agent_name} on ${n.bound.workspace_name}`}>
                               on {n.bound.workspace_name} · {n.bound.agent_name}
+                              {n.bound.owner_email ? ` (${n.bound.owner_email})` : ''}
                             </span>
                             <button className="btn" disabled={link.isPending}
                               onClick={async () => {
                                 if (await confirm(
-                                  `Take WhatsApp over from ${n.bound!.workspace_name}? ${n.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
+                                  `Take WhatsApp over from ${n.bound!.workspace_name}${n.bound!.owner_email ? ` (${n.bound!.owner_email})` : ''}? ${n.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
                                   [{ key: 'ok', label: 'Take over' }, { key: 'cancel', label: 'Cancel' }],
                                 ) === 'ok') link.mutate({ kind: 'whatsapp', phone_number_id: n.id, takeover: true });
                               }}>

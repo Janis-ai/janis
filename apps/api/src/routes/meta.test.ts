@@ -214,6 +214,13 @@ describe('meta link conflicts + takeover', () => {
 
     // Foreign workspace owns a messenger channel bound to pg1.
     const [fws] = await db.insert(workspaces).values({ name: 'Foreign Co' }).returning();
+    const [fuser] = await db
+      .insert(users)
+      .values({ email: 'them@foreign.test', name: 'Them' })
+      .returning();
+    await db
+      .insert(memberships)
+      .values({ userId: fuser.id, workspaceId: fws.id, role: 'admin', acceptedAt: new Date() });
     const { hash, preview } = generateApiKey();
     const [fagent] = await db
       .insert(agents)
@@ -240,8 +247,16 @@ describe('meta link conflicts + takeover', () => {
     // /pending flags the page with its owner across workspaces.
     const pending = (await (
       await app.request('/api/meta/pending', { headers: { cookie } })
-    ).json()) as { pages: { bound: { workspace_name: string; agent_name: string } | null }[] };
-    expect(pending.pages[0].bound).toEqual({ workspace_name: 'Foreign Co', agent_name: 'TheirBot' });
+    ).json()) as {
+      pages: {
+        bound: { workspace_name: string; agent_name: string; owner_email: string | null } | null;
+      }[];
+    };
+    expect(pending.pages[0].bound).toEqual({
+      workspace_name: 'Foreign Co',
+      agent_name: 'TheirBot',
+      owner_email: 'them@foreign.test',
+    });
 
     // Plain link → 409 with who owns it, no dup row.
     const blocked = await link();
