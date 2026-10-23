@@ -163,6 +163,25 @@ is a day on launch)*
    give wordhopapi legacy.janis.ai and repoint WORDHOP_API_URL /
    META_LEGACY_WEBHOOK_URL / LEGACY_SLACK_INTERACTIONS_URL at it.
    'legacy-passthrough' logs = who's-still-legacy ledger.
+   Cutover checklist (2026-10-23 recon — Cloudflare fronts ALL of
+   *.janis.ai; api.janis.ai already serves the new app):
+   a. DONE — `heroku domains:add legacy.janis.ai -a wordhopapi`;
+      DNS target enigmatic-styracosaurus-syw4cemxlatcutzgowjq557v
+      .herokudns.com. STILL OPEN: CNAME legacy.janis.ai → that target
+      in Cloudflare (proxied — TLS terminates at CF, app has no certs).
+   b. wordhopapi env repoints (heroku config:set) when the legacy
+      dashboard moves to legacy.janis.ai: JANIS_WEBAPP_URL (builds ALL
+      Slack+Google OAuth callbacks — re-register each in both consoles),
+      GOOGLE_REDIRECT_URI (+/dialogflow path), GOOGLE_JAVASCRIPT_ORIGIN,
+      JANIS_DIALOGFLOW_CONNECTOR_URL, WORDHOP_MESSENGER_URL,
+      WEBHOOK_HOST. /auth CANNOT ride through www (new app owns it) —
+      legacy dashboard login only works on legacy.janis.ai.
+   c. Repoint on new app: WORDHOP_API_URL + META_LEGACY_WEBHOOK_URL +
+      LEGACY_SLACK_INTERACTIONS_URL → https://legacy.janis.ai
+      (cosmetic — herokuapp URLs keep working).
+   d. Cloudflare: www.janis.ai → new app origin (mirror however
+      app.janis.ai is wired); webhook.janis.ai optional (new app's
+      /messenger handles it). Leave slackbot./web.janis.ai alone.
 2. Verify + export the 17k legacy list (Mongo export) — campaign prep is
    fiction without it. (2026-10-20: archived in-place on the wordhopapi
    cluster via scripts/archive-legacy-collections.mjs —
