@@ -165,24 +165,34 @@ is a day on launch)*
    'legacy-passthrough' logs = who's-still-legacy ledger.
    Cutover checklist (2026-10-23 recon — Cloudflare fronts ALL of
    *.janis.ai; api.janis.ai already serves the new app):
-   a. DONE — `heroku domains:add legacy.janis.ai -a wordhopapi`;
-      DNS target enigmatic-styracosaurus-syw4cemxlatcutzgowjq557v
-      .herokudns.com. STILL OPEN: CNAME legacy.janis.ai → that target
-      in Cloudflare (proxied — TLS terminates at CF, app has no certs).
-   b. wordhopapi env repoints (heroku config:set) when the legacy
-      dashboard moves to legacy.janis.ai: JANIS_WEBAPP_URL (builds ALL
-      Slack+Google OAuth callbacks — re-register each in both consoles),
-      GOOGLE_REDIRECT_URI (+/dialogflow path), GOOGLE_JAVASCRIPT_ORIGIN,
-      JANIS_DIALOGFLOW_CONNECTOR_URL, WORDHOP_MESSENGER_URL,
-      WEBHOOK_HOST. /auth CANNOT ride through www (new app owns it) —
-      legacy dashboard login only works on legacy.janis.ai.
-   c. Repoint on new app: WORDHOP_API_URL + META_LEGACY_WEBHOOK_URL →
-      https://legacy.janis.ai (cosmetic — herokuapp URLs keep working).
-      LEGACY_SLACK_INTERACTIONS_URL is wordhop-slack (DIFFERENT app —
-      leave it, or give that app its own subdomain).
-   d. Cloudflare: www.janis.ai → new app origin (mirror however
-      app.janis.ai is wired); webhook.janis.ai optional (new app's
-      /messenger handles it). Leave slackbot./web.janis.ai alone.
+   a. DONE — legacy.janis.ai CNAME → wordhopapi.herokuapp.com (proxied)
+      and verified serving the old dashboard.
+   b. DONE — wordhopapi env repoints all live: JANIS_WEBAPP_URL /
+      GOOGLE_REDIRECT_URI / GOOGLE_JAVASCRIPT_ORIGIN /
+      JANIS_DIALOGFLOW_CONNECTOR_URL / WORDHOP_MESSENGER_URL /
+      WEBHOOK_HOST = legacy.janis.ai. /auth CANNOT ride through www
+      (new app owns it) — legacy dashboard login only works on
+      legacy.janis.ai.
+   c. DONE — new app repointed: WORDHOP_API_URL +
+      META_LEGACY_WEBHOOK_URL → https://legacy.janis.ai.
+      LEGACY_SLACK_INTERACTIONS_URL stays wordhop-slack.herokuapp.com
+      (DIFFERENT app).
+   d. DONE 2026-10-23 — www.janis.ai flipped to janis-api via CF Worker
+      route `www.janis.ai/*` → janis-legacy-proxy (same worker that
+      fronts api.janis.ai/*, webhook.janis.ai/*, and previously
+      www.janis.ai/messenger/* — it proxies verbatim to the Cloud Run
+      origin). app.janis.ai untouched: own Cloud Run domain mapping
+      (ghs.googlehosted.com, DNS-only) keeps widget embeds, Stripe
+      webhook, Gmail push, and PUBLIC_ORIGIN-derived OAuth callbacks
+      working. Verified: www/ + /health → janis-api, www/intents →
+      wordhopapi via passthrough, apex 301 → www.
+   OPEN — canonical-domain tail: PUBLIC_ORIGIN still
+      https://app.janis.ai. To make www canonical, register www
+      redirect URIs in every provider console first (Google auth +
+      Gmail, Slack A15NCEA7K, Meta, WorkOS AuthKit, Azure, Calendly),
+      THEN set PUBLIC_ORIGIN=https://www.janis.ai and redeploy.
+      Until then email/password login works natively on www; OAuth
+      initiated on www bounces through app.janis.ai callbacks.
 2. Verify + export the 17k legacy list (Mongo export) — campaign prep is
    fiction without it. (2026-10-20: archived in-place on the wordhopapi
    cluster via scripts/archive-legacy-collections.mjs —
