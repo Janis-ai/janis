@@ -275,7 +275,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   });
   const convList = data?.pages.flatMap((p) => p.conversations);
   const knownTags = [...new Set((convList ?? []).flatMap((c) => c.tags ?? []))].sort();
-  const { data: agents } = useAgents();
+  const { data: agents, isPending: agentsPending } = useAgents();
   const { data: views } = useViews();
   const { data: hits } = useSearch(query, {
     attention: tab === 'attention' || undefined,
@@ -414,6 +414,8 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
 
   // Zero agents = nothing to inbox — first-run workspaces land on the
   // welcome page with the create-agent CTA instead of an empty list.
+  // Pending = don't render the inbox shell only to redirect (flash).
+  if (agentsPending) return <div className="login-wrap muted">Loading…</div>;
   if (agents && agents.agents.length === 0) {
     return <Navigate to="/welcome" replace />;
   }

@@ -15,9 +15,10 @@ export default function Welcome() {
   usePageTitle('Welcome');
   const navigate = useNavigate();
   const { data: me } = useMe();
-  const { data: agents } = useAgents();
+  const { data: agents, isPending: agentsPending } = useAgents();
   const channelId = me?.support_channel_id;
 
+  if (agentsPending) return <div className="login-wrap muted">Loading…</div>;
   if (agents && agents.agents.length > 0) {
     return <Navigate to="/conversations" replace />;
   }
