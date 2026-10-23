@@ -44,6 +44,7 @@ export interface MigrationStats {
   dmUnresolved: number;
   agents: number;
   agentsNoEngine: number;
+  agentList: { id: string; name: string; engine: string }[];
   marked: boolean;
   alertChannel: string | null;
 }
@@ -73,6 +74,7 @@ export async function runSlackMigration(
     dmUnresolved: 0,
     agents: 0,
     agentsNoEngine: 0,
+    agentList: [],
     marked: false,
     alertChannel: null,
   };
@@ -144,7 +146,11 @@ export async function runSlackMigration(
         },
         greeting_enabled: false,
       };
-      const metadata = { legacy_client_key: b.client_key, migrated_from: 'wordhopapi' };
+      const metadata = {
+        legacy_client_key: b.client_key,
+        legacy_team_id: pending.teamId,
+        migrated_from: 'wordhopapi',
+      };
       let agent = wsAgents.find(
         (a) => (a.metadata as { legacy_client_key?: string })?.legacy_client_key === b.client_key,
       );
@@ -179,6 +185,7 @@ export async function runSlackMigration(
         }
       }
       stats.agents++;
+      stats.agentList.push({ id: agent.id, name: agent.name, engine: config.engine });
       if (config.engine === 'monitor') stats.agentsNoEngine++;
     }
   }

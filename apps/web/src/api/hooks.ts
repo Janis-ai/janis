@@ -287,6 +287,35 @@ export interface SlackInstallationInfo {
   team_id: string;
   team_name: string | null;
   alert_channel_id: string | null;
+  migrated?: boolean;
+  mode?: 'new' | 'classic';
+}
+
+export interface SlackMigratedInfo {
+  migrated: boolean;
+  agents: {
+    id: string;
+    name: string;
+    engine: string;
+    project: string | null;
+    client_key: string | null;
+    channels: string[];
+  }[];
+  channels: {
+    name: string;
+    slack_channel_id: string;
+    client_key: string | null;
+    paused: boolean;
+    is_training_channel: boolean;
+  }[];
+}
+
+export function useSlackMigrated(installationId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ['slackMigrated', installationId],
+    queryFn: () => api<SlackMigratedInfo>(`/api/slack/${installationId}/migrated`),
+    enabled: enabled && !!installationId,
+  });
 }
 
 export function useSlackStatus() {

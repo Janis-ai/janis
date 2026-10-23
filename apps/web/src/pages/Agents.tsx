@@ -52,6 +52,8 @@ export default function Agents() {
           .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
           .map((agent) => {
           const channels = channelsData?.channels.filter((c) => c.agent_id === agent.id) ?? [];
+          const engine = (agent.config as { engine?: string } | undefined)?.engine;
+          const migrated = !!agent.metadata?.migrated_from;
           return (
             <div
               key={agent.id}
@@ -59,9 +61,22 @@ export default function Agents() {
               style={{ alignItems: 'center' }}
             >
               <div className="grow" style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 700 }}>{agent.name}</div>
+                <div style={{ fontWeight: 700 }}>
+                  {agent.name}
+                  {migrated && (
+                    <span className="badge" style={{ marginLeft: 8, verticalAlign: 'middle' }}>
+                      migrated
+                    </span>
+                  )}
+                </div>
                 <div className="muted" style={{ marginTop: 2 }}>
-                  {agent.hosted ? 'hosted by Janis' : 'external webhook'}
+                  {engine === 'dialogflow'
+                    ? 'dialogflow engine'
+                    : engine === 'monitor'
+                      ? 'monitor only'
+                      : agent.hosted
+                        ? 'hosted by Janis'
+                        : 'external webhook'}
                   {' · '}
                   {agent.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
                   {channels.length > 0 && ` · ${channels.map((c) => c.name).join(', ')}`}
@@ -72,8 +87,20 @@ export default function Agents() {
                   )}
                 </div>
               </div>
-              <span className={`badge ${agent.hosted ? 'active' : agent.webhook_url ? '' : 'warn'}`}>
-                {agent.hosted ? 'hosted' : agent.webhook_url ? 'external' : 'unreachable'}
+              <span
+                className={`badge ${
+                  engine === 'monitor' ? 'warn' : agent.hosted ? 'active' : agent.webhook_url ? '' : 'warn'
+                }`}
+              >
+                {engine === 'dialogflow'
+                  ? 'dialogflow'
+                  : engine === 'monitor'
+                    ? 'monitor'
+                    : agent.hosted
+                      ? 'hosted'
+                      : agent.webhook_url
+                        ? 'external'
+                        : 'unreachable'}
               </span>
               <button
                 className="btn"

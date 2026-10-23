@@ -22,6 +22,7 @@ export default function SlackLegacy() {
   const [error, setError] = useState('');
   const [outcome, setOutcome] = useState<'kept' | 'requested' | 'done' | null>(null);
   const [returnHref, setReturnHref] = useState('/settings?slack=connected');
+  const [imported, setImported] = useState<{ id: string; name: string; engine: string }[]>([]);
 
   const decide = async (decision: Decision) => {
     setBusy(decision);
@@ -33,6 +34,7 @@ export default function SlackLegacy() {
         migration?: string;
         legacy?: string;
         return_path?: string | null;
+        agents?: { id: string; name: string; engine: string }[];
       }>('/api/slack/claim', { method: 'POST', body: JSON.stringify({ decision }) });
       // The page the install launched from (Escalation tab etc.) — same
       // slack=connected flagging the OAuth callback applies to ?return.
@@ -46,6 +48,7 @@ export default function SlackLegacy() {
       else if (r.kept) setOutcome('kept');
       else if (r.migration === 'done') {
         setReturnHref(back);
+        setImported(r.agents ?? []);
         setOutcome('done');
       } else if (r.migration) setOutcome('requested');
       else setError('Nothing pending — this link may have expired. Connect Slack again.');
@@ -84,6 +87,26 @@ export default function SlackLegacy() {
               on their existing Dialogflow engine and answer exactly as before. We emailed you
               the details.
             </p>
+            {imported.length > 0 && (
+              <div style={{ textAlign: 'left', margin: '4px 0 14px' }}>
+                {imported.map((a) => (
+                  <div key={a.id} className="row" style={{ alignItems: 'center', marginBottom: 4 }}>
+                    <a className="grow" href={`/agents/${a.id}`} style={{ fontWeight: 600 }}>
+                      {a.name}
+                    </a>
+                    <span className={`badge ${a.engine === 'monitor' ? 'warn' : 'active'}`}>
+                      {a.engine}
+                    </span>
+                  </div>
+                ))}
+                {imported.some((a) => a.engine === 'monitor') && (
+                  <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
+                    Monitor agents had no usable Dialogflow credentials — open one and use "Retry
+                    Dialogflow import" after re-connecting Dialogflow on the legacy dashboard.
+                  </p>
+                )}
+              </div>
+            )}
             <a
               className="btn primary"
               style={{ display: 'block', textAlign: 'center' }}

@@ -1908,7 +1908,16 @@ describe('public OAuth install', () => {
       })
       .returning();
     const res = await claimWith(p.id, 'migrate');
-    expect(await res.json()).toEqual({ claimed: false, migration: 'done', team_name: 'Migrating', return_path: null });
+    const body = (await res.json()) as {
+      migration: string;
+      agents: { id: string; name: string; engine: string }[];
+    };
+    expect(body.migration).toBe('done');
+    expect(body.agents.map((a) => [a.name, a.engine])).toEqual([
+      ['HelpBot', 'dialogflow'],
+      ['BareBot', 'monitor'],
+      ['OAuthBot', 'dialogflow'],
+    ]);
 
     // bound as a classic-mode install, grant consumed
     const [inst] = await db
@@ -1969,7 +1978,40 @@ describe('public OAuth install', () => {
         and(eq(agentSecrets.agentId, oauthBot!.id), eq(agentSecrets.name, 'DIALOGFLOW_SA_JSON')),
       );
     expect(oauthSa).toBeDefined();
+
+    // the migrated-agents management surface lists the team's imported
+    // agents with engine state + their classic channels
+    const mig = await api.request(`/api/slack/${inst.id}/migrated`, {
+      headers: { cookie: adminCookie },
+    });
+    expect(mig.status).toBe(200);
+    const migBody = (await mig.json()) as {
+      migrated: boolean;
+      agents: { name: string; engine: string; project: string | null; channels: string[] }[];
+      channels: { name: string; client_key: string | null }[];
+    };
+    expect(migBody.migrated).toBe(true);
+    expect(migBody.agents.map((a) => [a.name, a.engine, a.project]).sort()).toEqual([
+      ['BareBot', 'monitor', null],
+      ['HelpBot', 'dialogflow', 'df-proj-1'],
+      ['OAuthBot', 'dialogflow', 'df-oauth'],
+    ]);
+    expect(migBody.channels).toHaveLength(1);
+    expect(migBody.channels[0].name).toBe('transcripts');
     setLegacyOps(undefined);
+  });
+
+  it('GET /:id/migrated reports not-migrated for a plain install', async () => {
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: adminWsId, teamId: 'T_PLAIN', botToken: 'xoxb-plain' })
+      .returning();
+    const res = await api.request(`/api/slack/${inst.id}/migrated`, {
+      headers: { cookie: adminCookie },
+    });
+    
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ migrated: false, agents: [], channels: [] });
   });
 
   it("'migrate' falls back to the assisted flag when the pipeline throws", async () => {

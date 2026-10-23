@@ -633,8 +633,70 @@ export function slackApiRoutes(db: Db) {
         team_id: i.teamId,
         team_name: i.teamName,
         alert_channel_id: i.alertChannelId,
+        migrated: i.migrated,
+        mode: i.mode,
       })),
       configured: !!(env.slackClientId && env.slackClientSecret),
+    });
+  });
+
+  // The migrated estate for one installation: the agents imported from that
+  // team's legacy bots (matched on metadata.legacy_team_id, falling back to
+  // the install's classic-channel client_keys for rows imported before the
+  // team stamp existed) and the reseeded classic channel docs. Drives the
+  // "Migrated agents" panel in Settings → Slack.
+  app.get('/:id/migrated', async (c) => {
+    const [inst] = await db
+      .select()
+      .from(slackInstallations)
+      .where(
+        and(
+          eq(slackInstallations.id, c.req.param('id')),
+          eq(slackInstallations.workspaceId, c.get('workspaceId')),
+        ),
+      )
+      .limit(1);
+    if (!inst) return c.json({ error: 'not found' }, 404);
+    if (!inst.migrated) return c.json({ migrated: false, agents: [], channels: [] });
+    const chans = await db
+      .select()
+      .from(slackClassicChannels)
+      .where(eq(slackClassicChannels.installationId, inst.id));
+    const chanKeys = chans.map((ch) => ch.clientKey).filter((k): k is string => !!k);
+    const rows = await db
+      .select()
+      .from(agents)
+      .where(
+        and(
+          eq(agents.workspaceId, inst.workspaceId),
+          sql`(${agents.metadata}->>'legacy_team_id' = ${inst.teamId}${
+            chanKeys.length
+              ? sql` OR ${agents.metadata}->>'legacy_client_key' IN (${sql.join(chanKeys.map((k) => sql`${k}`), sql`, `)})`
+              : sql``
+          })`,
+        ),
+      );
+    return c.json({
+      migrated: true,
+      agents: rows.map((a) => {
+        const meta = (a.metadata ?? {}) as { legacy_client_key?: string };
+        const cfg = (a.config ?? {}) as { engine?: string; dialogflow?: { project?: string } };
+        return {
+          id: a.id,
+          name: a.name,
+          engine: cfg.engine ?? 'hosted',
+          project: cfg.dialogflow?.project ?? null,
+          client_key: meta.legacy_client_key ?? null,
+          channels: chans.filter((ch) => ch.clientKey === meta.legacy_client_key).map((ch) => ch.name),
+        };
+      }),
+      channels: chans.map((ch) => ({
+        name: ch.name,
+        slack_channel_id: ch.slackChannelId,
+        client_key: ch.clientKey,
+        paused: ch.paused,
+        is_training_channel: ch.isTrainingChannel,
+      })),
     });
   });
 
@@ -696,7 +758,13 @@ export function slackApiRoutes(db: Db) {
           `Slack migration complete — ${row.teamName ?? row.teamId}`,
           `Your Slack workspace ${row.teamName ?? row.teamId} now runs on the new Janis — same classic experience (transcripts, alerts, commands), managed from ${env.webOrigin}/settings.\n\nImported: ${stats.agents} agent${stats.agents === 1 ? '' : 's'}${stats.agentsNoEngine ? ` (${stats.agentsNoEngine} had no Dialogflow credentials — imported as monitor-only)` : ''}, ${stats.transcripts} transcript channel${stats.transcripts === 1 ? '' : 's'}${stats.training ? `, ${stats.training} training` : ''}${stats.memberDms ? `, ${stats.memberDms} member DM prefs` : ''}.${stats.dmUnresolved ? ` ${stats.dmUnresolved} DM pref doc(s) couldn't be resolved to a member.` : ''}${stats.alertChannel ? ` Alerts post to #${stats.alertChannel}.` : ''}\n\nAgents run on their existing Dialogflow engine — nothing changed about how they answer. You can convert any agent to the hosted engine from its Settings tab when you're ready.${stats.marked ? '' : '\n\nNote: the legacy flag could not be set — if classic behavior seems doubled, contact support.'}`,
         ).catch((e) => console.error('migration-complete email failed:', e));
-        return c.json({ claimed: false, migration: 'done', team_name: row.teamName, return_path: row.returnPath });
+        return c.json({
+          claimed: false,
+          migration: 'done',
+          team_name: row.teamName,
+          return_path: row.returnPath,
+          agents: stats.agentList,
+        });
       } catch (e) {
         console.error('auto-migration failed; falling back to assisted:', e);
       }

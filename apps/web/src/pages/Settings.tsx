@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { WorkspaceUser } from '@janis/shared';
 import { api, ApiError } from '../api/client';
-import { useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers, type SlackInstallationInfo } from '../api/hooks';
+import { useMe, useSavedReplies, useSlackChannels, useSlackMigrated, useSlackStatus, useUsers, type SlackInstallationInfo } from '../api/hooks';
 import { getPushSubscription, subscribeToPush, unsubscribeFromPush, markPushDisabled, PUSH_CHANGE_EVENT } from '../lib/push';
 import { installAvailable, isIOS, isStandalone, onInstallStateChange, promptInstall } from '../lib/install';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
@@ -1911,6 +1911,8 @@ function SlackInstallEditor({
   onDisconnect: () => void;
 }) {
   const { data: channels } = useSlackChannels(true, inst.id);
+  const { data: migrated } = useSlackMigrated(inst.id, !!inst.migrated);
+  const navigate = useNavigate();
   return (
     <div
       style={{
@@ -1962,6 +1964,37 @@ function SlackInstallEditor({
         <button className="btn" onClick={onTest}>Send test</button>
         <button className="btn danger" onClick={onDisconnect}>Disconnect</button>
       </div>
+      {inst.migrated && migrated && migrated.agents.length > 0 && (
+        <div style={{ marginTop: 10, borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+          <div className="muted" style={{ marginBottom: 6 }}>
+            Migrated from the classic setup — {migrated.agents.length} agent
+            {migrated.agents.length === 1 ? '' : 's'}:
+          </div>
+          {migrated.agents.map((a) => (
+            <div key={a.id} className="row" style={{ alignItems: 'center', marginBottom: 4 }}>
+              <div className="grow" style={{ minWidth: 0 }}>
+                <span style={{ fontWeight: 600 }}>{a.name}</span>
+                {a.channels.length > 0 && (
+                  <span className="muted"> · {a.channels.map((n) => `#${n}`).join(', ')}</span>
+                )}
+              </div>
+              <span className={`badge ${a.engine === 'monitor' ? 'warn' : 'active'}`}>
+                {a.engine === 'dialogflow' ? 'dialogflow' : a.engine}
+              </span>
+              <button className="btn" onClick={() => navigate(`/agents/${a.id}`)}>
+                Manage
+              </button>
+            </div>
+          ))}
+          {migrated.agents.some((a) => a.engine === 'monitor') && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              Monitor agents had no usable Dialogflow credentials at migration — open one and use
+              "Retry Dialogflow import" once the bot's owner re-connects Dialogflow on the legacy
+              dashboard.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
