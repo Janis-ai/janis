@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { eq } from 'drizzle-orm';
+import { eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -1985,7 +1985,7 @@ describe('legacy dialogflow → hosted conversion', () => {
 });
 
 describe('legacy stripe guard on delete', () => {
-  it('cancels the migrated bot legacy subscription on delete', async () => {
+  it('cancels the migrated bot legacy subscription only when asked', async () => {
     env.stripeSecret = 'sk_test_fake'; // stripe() short-circuits on empty key
     const cancel = vi.fn(async () => ({}));
     setStripeClient({ subscriptions: { cancel } } as never);
@@ -1995,13 +1995,46 @@ describe('legacy stripe guard on delete', () => {
       .update(agents)
       .set({ metadata: { legacy_stripe: { subscription_id: 'sub_legacy_1' } } })
       .where(eq(agents.id, agent.id));
-    const del = await app.request(`/api/agents/${agent.id}`, {
+    const del = await app.request(`/api/agents/${agent.id}?cancel_subscription=1`, {
       method: 'DELETE',
       headers: { cookie: parentCookie },
     });
     expect(del.status).toBe(200);
-    expect(((await del.json()) as { legacy_sub_canceled?: boolean }).legacy_sub_canceled).toBe(true);
+    const body = (await del.json()) as {
+      legacy_sub_canceled?: boolean;
+      legacy_sub_siblings?: number;
+    };
+    expect(body.legacy_sub_canceled).toBe(true);
+    expect(body.legacy_sub_siblings).toBe(0);
     expect(cancel).toHaveBeenCalledWith('sub_legacy_1');
+    setStripeClient(null);
+  });
+
+  it('retains the sub by default and reports how many bots still share it', async () => {
+    env.stripeSecret = 'sk_test_fake';
+    const cancel = vi.fn(async () => ({}));
+    setStripeClient({ subscriptions: { cancel } } as never);
+    const res = await postAgent(parentCookie);
+    const { agent } = (await res.json()) as { agent: { id: string } };
+    const res2 = await postAgent(parentCookie);
+    const { agent: sibling } = (await res2.json()) as { agent: { id: string } };
+    await db
+      .update(agents)
+      .set({ metadata: { legacy_stripe: { subscription_id: 'sub_shared' } } })
+      .where(inArray(agents.id, [agent.id, sibling.id]));
+    const del = await app.request(`/api/agents/${agent.id}`, {
+      method: 'DELETE',
+      headers: { cookie: parentCookie },
+    });
+    const body = (await del.json()) as {
+      legacy_sub_canceled?: boolean;
+      legacy_sub_retained?: boolean;
+      legacy_sub_siblings?: number;
+    };
+    expect(body.legacy_sub_canceled).toBe(false);
+    expect(body.legacy_sub_retained).toBe(true);
+    expect(body.legacy_sub_siblings).toBe(1);
+    expect(cancel).not.toHaveBeenCalled();
     setStripeClient(null);
   });
 

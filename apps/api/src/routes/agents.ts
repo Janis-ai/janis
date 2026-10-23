@@ -2150,18 +2150,34 @@ export function agentRoutes(db: Db) {
         .returning();
     });
     if (!row) return c.json({ error: 'not found' }, 404);
-    // A migrated bot's legacy Stripe sub survives its Postgres row — cancel
-    // it or the customer keeps paying for a bot that no longer exists.
+    // A migrated bot's legacy Stripe sub survives its Postgres row. Never
+    // cancel it implicitly — one sub can cover several legacy bots — only on
+    // an explicit ?cancel_subscription=1 from the UI. We report how many
+    // other workspace agents still reference the same sub so the caller can
+    // explain what billing remains.
     const legacySubId = (
       (row.metadata ?? {}) as { legacy_stripe?: { subscription_id?: string } }
     ).legacy_stripe?.subscription_id;
     let legacySubCanceled = false;
+    let legacySubSiblings = 0;
     if (legacySubId) {
-      try {
-        await stripe()?.subscriptions.cancel(legacySubId);
-        legacySubCanceled = true;
-      } catch (err) {
-        console.error(`[agents] legacy sub ${legacySubId} cancel failed:`, err);
+      const siblings = await db
+        .select({ id: agents.id })
+        .from(agents)
+        .where(
+          and(
+            eq(agents.workspaceId, workspaceId),
+            sql`${agents.metadata}->'legacy_stripe'->>'subscription_id' = ${legacySubId}`,
+          ),
+        );
+      legacySubSiblings = siblings.length;
+      if (c.req.query('cancel_subscription') === '1') {
+        try {
+          await stripe()?.subscriptions.cancel(legacySubId);
+          legacySubCanceled = true;
+        } catch (err) {
+          console.error(`[agents] legacy sub ${legacySubId} cancel failed:`, err);
+        }
       }
     }
     await audit(db, {
@@ -2172,7 +2188,12 @@ export function agentRoutes(db: Db) {
       targetType: 'agent',
       targetId: agentId,
     });
-    return c.json({ ok: true, legacy_sub_canceled: legacySubCanceled });
+    return c.json({
+      ok: true,
+      legacy_sub_canceled: legacySubCanceled,
+      legacy_sub_retained: !!legacySubId && !legacySubCanceled,
+      legacy_sub_siblings: legacySubSiblings,
+    });
   });
 
   // ---- Agent members: per-agent role / identity / notification overrides ----

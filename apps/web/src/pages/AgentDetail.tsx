@@ -320,8 +320,31 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
   });
 
   const removeAgent = useMutation({
-    mutationFn: () => api(`/api/agents/${agent.id}`, { method: 'DELETE' }),
-    onSuccess: () => navigate('/agents'),
+    mutationFn: (cancelSub: boolean) =>
+      api<{ legacy_sub_canceled?: boolean; legacy_sub_retained?: boolean; legacy_sub_siblings?: number }>(
+        `/api/agents/${agent.id}${cancelSub ? '?cancel_subscription=1' : ''}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: async (r) => {
+      if (r.legacy_sub_canceled) {
+        const shared = r.legacy_sub_siblings ?? 0;
+        await confirm(
+          shared > 0
+            ? `Deleted — the legacy subscription was canceled. ${shared} other bot${shared === 1 ? ' was' : 's were'} on that subscription; their billing has ended too.`
+            : 'Deleted — the legacy subscription was canceled.',
+          [{ key: 'ok', label: 'OK' }],
+        );
+      } else if (r.legacy_sub_retained) {
+        const shared = r.legacy_sub_siblings ?? 0;
+        await confirm(
+          shared > 0
+            ? `Deleted — the legacy subscription was NOT canceled; it still bills ${shared} other bot${shared === 1 ? '' : 's'}. Cancel it when the last bot on it is gone.`
+            : 'Deleted — the legacy subscription was NOT canceled; it keeps billing until you cancel it.',
+          [{ key: 'ok', label: 'OK' }],
+        );
+      }
+      navigate('/agents');
+    },
     onError: (e) => setError(e.message),
   });
 
@@ -583,7 +606,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
               className="btn"
               disabled={convertHosted.isPending}
               onClick={async () => {
-                if (await confirm('Convert to a hosted agent? Its Dialogflow intents import into Knowledge and Janis becomes the brain — the Dialogflow agent stays intact for rollback.', [{ key: 'ok', label: 'Convert' }, { key: 'cancel', label: 'Cancel' }]) === 'ok') convertHosted.mutate();
+                if (await confirm('Convert to a hosted agent? Its Dialogflow intents import into Knowledge and Janis becomes the brain — the Dialogflow agent stays intact for rollback. Billing is unchanged: any legacy subscription keeps billing until you cancel it.', [{ key: 'ok', label: 'Convert' }, { key: 'cancel', label: 'Cancel' }]) === 'ok') convertHosted.mutate();
               }}
             >
               {convertHosted.isPending ? 'Converting…' : 'Convert to hosted'}
@@ -604,7 +627,21 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
             <button
               className="btn danger"
               onClick={async () => {
-                if (await confirm(`Delete agent "${agent.name}"? Its channels, conversations, and settings are removed.`, [{ key: 'ok', label: 'Delete', danger: true }])) removeAgent.mutate();
+                const hasLegacySub = !!(agent.metadata as { legacy_stripe?: { subscription_id?: string } } | undefined)
+                  ?.legacy_stripe?.subscription_id;
+                const choice = hasLegacySub
+                  ? await confirm(
+                      `Delete agent "${agent.name}"? Its channels, conversations, and settings are removed. This bot has an active legacy subscription — deleting does NOT stop billing. Only cancel the subscription when this is the last bot on it.`,
+                      [
+                        { key: 'keep', label: 'Delete — keep billing', danger: true },
+                        { key: 'cancel_sub', label: 'Delete & cancel subscription', danger: true },
+                      ],
+                    )
+                  : await confirm(
+                      `Delete agent "${agent.name}"? Its channels, conversations, and settings are removed.`,
+                      [{ key: 'ok', label: 'Delete', danger: true }],
+                    );
+                if (choice) removeAgent.mutate(choice === 'cancel_sub');
               }}
             >
               Delete agent
