@@ -1008,6 +1008,18 @@ export default function AgentBuilder() {
   // Create is the brief — revisitable, but never a silent regeneration
   // source: editing it offers to review suggested changes, nothing more.
   const storedBrief = builder?.description ?? cfg.purpose ?? '';
+  // The create-step draft can fail server-side (model error, unparseable
+  // output) — generated_at still gets stamped but no instructions or
+  // suggestions materialize. Detect that dead state so the user gets a
+  // retry path instead of an empty "See what Janis created".
+  const draftMissing =
+    !!agent &&
+    !!storedBrief.trim() &&
+    !!builder?.generated_at &&
+    !cfg.system_prompt?.trim() &&
+    !builder?.summary &&
+    !(builder?.suggested_knowledge?.length ?? 0) &&
+    !(builder?.suggested_templates?.length ?? 0);
   const [brief, setBrief] = useState('');
   const [briefChanged, setBriefChanged] = useState(false);
   useEffect(() => {
@@ -1354,22 +1366,41 @@ export default function AgentBuilder() {
                 )}
               </div>
 
-              {/* Brief changed → offer review, never a silent rewrite. */}
-              {briefChanged && !applyDraft.isSuccess && (
+              {/* Brief changed → offer review, never a silent rewrite.
+                  draftMissing → the bootstrap draft failed; offer the same
+                  review flow so the user can regenerate instead of being
+                  stuck on an empty setup. */}
+              {(briefChanged || draftMissing) && !applyDraft.isSuccess && (
                 <div className="card" style={{ marginTop: 12, borderColor: 'var(--accent-dim)' }}>
-                  <strong>Your agent's brief has changed.</strong>
-                  <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
-                    The instructions and training you've built weren't touched.
-                    Janis can suggest updates that match the new brief — nothing
-                    changes until you approve them.
-                  </div>
+                  {draftMissing && !briefChanged ? (
+                    <>
+                      <strong>Janis couldn't draft a starting setup.</strong>
+                      <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                        The model didn't return a usable draft — try again and the
+                        suggested instructions and training will show up here for review.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <strong>Your agent's brief has changed.</strong>
+                      <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>
+                        The instructions and training you've built weren't touched.
+                        Janis can suggest updates that match the new brief — nothing
+                        changes until you approve them.
+                      </div>
+                    </>
+                  )}
                   <div className="row" style={{ marginTop: 10, gap: 8 }}>
                     <button
                       className="btn primary"
                       disabled={redraft.isPending}
                       onClick={() => redraft.mutate()}
                     >
-                      {redraft.isPending ? 'Drafting…' : 'Review suggested changes'}
+                      {redraft.isPending
+                        ? 'Drafting…'
+                        : draftMissing && !briefChanged
+                          ? 'Draft suggested setup'
+                          : 'Review suggested changes'}
                     </button>
                     <button className="btn" onClick={() => setBriefChanged(false)}>
                       Keep existing setup

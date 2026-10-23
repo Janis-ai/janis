@@ -135,6 +135,12 @@ function richText(text: string, onNav: (to: string) => void) {
 function richBlocks(text: string, onNav: (to: string) => void) {
   return splitBlocks(text).map((b, bi) => {
     const cls = b.breakBefore ? ' md-gap' : '';
+    if (b.kind === 'heading')
+      return (
+        <div key={bi} className={`md-head${cls}`}>
+          {richText(b.text ?? '', onNav)}
+        </div>
+      );
     if (b.kind !== 'list')
       return (
         <div key={bi} className={`md-para${cls}`}>

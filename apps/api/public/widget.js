@@ -260,6 +260,23 @@
           bubble.appendChild(el('div', {}, { class: 'janis-br' }));
         return;
       }
+      var hm = /^(#{1,6})\s+(.*)$/.exec(t);
+      if (hm) {
+        // Models emit markdown headers; the widget has no heading level —
+        // demote to a bold line so the ### doesn't render literally.
+        flush();
+        var htext = hm[2].replace(/\s*#+\s*$/, '');
+        var hline = el('span', {}, { class: 'janis-line' });
+        if (htext.indexOf('*') === -1) {
+          var hb = el('b');
+          linkify(hb, htext);
+          hline.appendChild(hb);
+        } else {
+          appendRich(hline, htext);
+        }
+        bubble.appendChild(hline);
+        return;
+      }
       if (BULLET_LEAD.test(t) || NUM_LEAD.test(t)) {
         var isOrdered = NUM_LEAD.test(t);
         if (listItems && isOrdered !== ordered) flush();

@@ -961,6 +961,7 @@ button, input, select, textarea { font: inherit; }
 .md-list { display: block; margin: 4px 0; padding-left: 20px; }
 .md-list li { margin: 2px 0; }
 .md-para { display: block; }
+.md-head { display: block; font-weight: 600; }
 .md-gap { margin-top: 8px; }
 /* Suggested replies mirrored in the transcript — a muted italic "quick
    replies:" line of echoed choices. No pill/border: pill-shaped things in

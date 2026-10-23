@@ -238,17 +238,37 @@ export async function generateDraft(description: string): Promise<BuilderDraft |
     temperature: 0,
     maxTokens: 4096,
   };
-  const completion = await complete(
-    llm,
-    BUILDER_SYSTEM + catalogBrief(),
-    [{ role: 'user', content: description.trim().slice(0, 4000) }],
-  );
-  const text = completion.text;
-  if (!text) return null;
-  const parsed = parseDraftJson(text);
-  if (!parsed) return null;
-  const draft = validateDraft(parsed);
-  if (!draft.system_prompt && !draft.suggested_knowledge.length) return null;
+  // The deterministic-request flake to defend against is an empty or
+  // non-JSON completion — the same call usually answers on a retry. Try
+  // twice before giving creation a null draft (which the caller turns
+  // into an agent with an empty "Guide it" step).
+  let draft: Omit<BuilderDraft, 'generated' | 'note'> | null = null;
+  for (let attempt = 0; attempt < 2 && !draft; attempt++) {
+    const completion = await complete(
+      llm,
+      BUILDER_SYSTEM + catalogBrief(),
+      [{ role: 'user', content: description.trim().slice(0, 4000) }],
+    );
+    const text = completion.text;
+    if (!text) {
+      console.error('generateDraft: empty completion from model');
+      continue;
+    }
+    const parsed = parseDraftJson(text);
+    if (!parsed) {
+      console.error(
+        'generateDraft: unparseable completion, len=' + text.length,
+        text.slice(0, 200),
+      );
+      continue;
+    }
+    draft = validateDraft(parsed);
+    if (!draft.system_prompt && !draft.suggested_knowledge.length) {
+      console.error('generateDraft: draft had no system_prompt or knowledge topics');
+      draft = null;
+    }
+  }
+  if (!draft) return null;
   // Deterministic floor — an agent that needs knowledge always gets the
   // generic live-search fallback suggested; whether Brave makes the
   // model's top-4 is luck otherwise.

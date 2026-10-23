@@ -161,6 +161,17 @@ describe('splitBlocks', () => {
     ]);
   });
 
+  it('demotes markdown headers to heading blocks', () => {
+    expect(splitBlocks('### Summary\nbody text\n## Next')).toEqual([
+      { kind: 'heading', level: 3, text: 'Summary' },
+      { kind: 'para', text: 'body text' },
+      { kind: 'heading', level: 2, text: 'Next' },
+    ]);
+    expect(splitBlocks('## Title ###')).toEqual([
+      { kind: 'heading', level: 2, text: 'Title' },
+    ]);
+  });
+
   it('numbered lines become ordered lists', () => {
     expect(splitBlocks('Steps:\n1. one\n2. two')).toEqual([
       { kind: 'para', text: 'Steps:' },

@@ -1773,6 +1773,14 @@ describe('canonical ↔ mrkdwn translation', () => {
     expect(slackMrkdwn('`inline` stays')).toBe('`inline` stays');
   });
 
+  it('slackMrkdwn demotes markdown headers to bold', () => {
+    expect(slackMrkdwn('### Summary\nbody text')).toBe('*Summary*\nbody text');
+    expect(slackMrkdwn('intro\n## Details **kept**\noutro')).toBe(
+      'intro\nDetails *kept*\noutro',
+    );
+    expect(slackMrkdwn('a\n---\nb')).toBe('a\n───────────\nb');
+  });
+
   it('slackMrkdwn escapes &<> so they cannot form Slack markup', () => {
     expect(slackMrkdwn('a & b < c > d')).toBe('a &amp; b &lt; c &gt; d');
     // a literal <url> in canonical text must not become a Slack autolink

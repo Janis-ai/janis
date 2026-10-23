@@ -1,0 +1,27 @@
+import { chromium } from 'playwright';
+import fs from 'node:fs';
+const c = JSON.parse(fs.readFileSync('/tmp/slack-d.json','utf8'));
+const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const ctx = await browser.newContext({ viewport: { width: 1400, height: 1400 } });
+await ctx.addCookies([{ name:'d', value:c.d, domain:'.slack.com', path:'/', httpOnly:true, secure:true, sameSite:'Lax' }]);
+const page = await ctx.newPage();
+await page.goto('https://app.slack.com/client/T02Q0FEQF24', { waitUntil: 'domcontentloaded', timeout: 60000 });
+await page.waitForTimeout(12000);
+const genId = await page.evaluate(() => {
+  const el = [...document.querySelectorAll('[data-qa-channel-sidebar-channel-id]')].find(e => (e.innerText||'').trim() === 'general');
+  return el ? el.getAttribute('data-qa-channel-sidebar-channel-id') : null;
+});
+await page.goto(`https://app.slack.com/client/T02Q0FEQF24/${genId}`, { waitUntil: 'domcontentloaded', timeout: 45000 });
+await page.waitForTimeout(6000);
+const box = page.locator('.ql-editor[contenteditable=true]:visible').first();
+await box.click();
+await page.keyboard.type('/janis ', { delay: 30 });
+await page.waitForTimeout(1200);
+await page.keyboard.press('Escape');
+await page.keyboard.press('Enter');
+console.log('sent, waiting...');
+await page.waitForTimeout(10000);
+const t = await page.locator('body').innerText();
+console.log(t.slice(-1200));
+await page.screenshot({ path: '/tmp/scratch-janis-cmd.png' });
+await browser.close();

@@ -1122,6 +1122,13 @@ export default function ShopifyApp() {
                             </span>
                             {splitBlocks(m.text ?? '').map((blk, bi) => {
                               const cls = blk.breakBefore ? ' md-gap' : '';
+                              if (blk.kind === 'heading') {
+                                return (
+                                  <div key={bi} className={`md-head${cls}`}>
+                                    {mdSpans(blk.text ?? '', bi)}
+                                  </div>
+                                );
+                              }
                               if (blk.kind !== 'list') {
                                 return (
                                   <div key={bi} className={`md-para${cls}`}>
@@ -1421,6 +1428,13 @@ export default function ShopifyApp() {
                               </span>
                               {splitBlocks(m.text ?? '').map((blk, bi) => {
                                 const cls = blk.breakBefore ? ' md-gap' : '';
+                                if (blk.kind === 'heading') {
+                                  return (
+                                    <div key={bi} className={`md-head${cls}`}>
+                                      {mdSpans(blk.text ?? '', bi)}
+                                    </div>
+                                  );
+                                }
                                 if (blk.kind !== 'list') {
                                   return (
                                     <div key={bi} className={`md-para${cls}`}>

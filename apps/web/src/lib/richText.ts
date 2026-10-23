@@ -111,9 +111,11 @@ export function linkifyParts(text: string): (string | LinkSeg)[] {
 }
 
 export interface RichBlock {
-  kind: 'para' | 'list';
-  /** para */
+  kind: 'para' | 'list' | 'heading';
+  /** para, heading */
   text?: string;
+  /** heading — markdown depth 1-6 */
+  level?: number;
   /** list */
   items?: string[];
   ordered?: boolean;
@@ -124,6 +126,7 @@ export interface RichBlock {
 
 const BULLET_LEAD = /^(?:[-*•])\s+/;
 const NUM_LEAD = /^\d+[.)]\s+/;
+const HEAD_LEAD = /^(#{1,6})\s+/;
 // A bullet marker mid-line: ` * ` or ` - ` followed by **bold**. Requiring
 // the bold opener keeps "5 * 3 = 15", prose dashes and emphasis runs from
 // splitting — models emit labelled lists as `* **Title:** … * **Title2:** …`
@@ -180,6 +183,19 @@ export function splitBlocks(text: string): RichBlock[] {
     if (!t) {
       flush();
       if (out.length) gapNext = true;
+      continue;
+    }
+    const head = HEAD_LEAD.exec(t);
+    if (head) {
+      flush();
+      const b: RichBlock = {
+        kind: 'heading',
+        level: head[1].length,
+        text: t.replace(HEAD_LEAD, '').replace(/\s*#+\s*$/, ''),
+      };
+      if (gapNext) b.breakBefore = true;
+      gapNext = false;
+      out.push(b);
       continue;
     }
     if (BULLET_LEAD.test(t) || NUM_LEAD.test(t)) {

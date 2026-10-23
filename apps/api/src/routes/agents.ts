@@ -270,7 +270,19 @@ export function agentRoutes(db: Db) {
     if (gate) return gate;
     const hosted = body.hosted ?? true;
     const purpose = body.purpose?.trim() ?? '';
-    const draft = hosted && purpose ? await generateDraft(purpose).catch(() => null) : null;
+    const draft =
+      hosted && purpose
+        ? await generateDraft(purpose).catch((err) => {
+            // Creation never blocks on the model — but a silent null is how
+            // a failed draft ships as an empty "Guide it" step. Log the
+            // reason so the blank-draft case is diagnosable in prod logs.
+            console.error(
+              '[bootstrap] generateDraft threw:',
+              err instanceof Error ? err.message : err,
+            );
+            return null;
+          })
+        : null;
     const name = (body.name?.trim() || draft?.name || 'New agent').slice(0, 120);
     if (await groupNameTaken(db, c.get('workspaceId'), name)) {
       return c.json({ error: `"${name}" is already a group's name` }, 409);
@@ -1169,7 +1181,13 @@ export function agentRoutes(db: Db) {
     zValidator('json', z.object({ description: z.string().min(1).max(4000) })),
     async (c) => {
       if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
-      const draft = await generateDraft(c.req.valid('json').description).catch(() => null);
+      const draft = await generateDraft(c.req.valid('json').description).catch((err) => {
+        console.error(
+          '[redraft] generateDraft threw:',
+          err instanceof Error ? err.message : err,
+        );
+        return null;
+      });
       return c.json({ draft });
     },
   );

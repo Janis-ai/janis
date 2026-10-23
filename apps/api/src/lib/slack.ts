@@ -833,10 +833,30 @@ export async function welcomeInstallerDm(inst: Installation): Promise<void> {
     `• *DM me* anything — I'm the same concierge as Ask Janis in the console\n` +
     `• */janis* in any channel shows controls\n` +
     `• ${env.webOrigin} for agents, inbox, alerts and settings`;
+  await dmWelcome(inst, inst.installerSlackUserId, text);
+}
+
+/**
+ * Same welcome, fired the first time any user opens the app's Messages tab
+ * (app_home_opened) — Marketplace guidelines require a hello on first open,
+ * not only for the installer.
+ */
+export async function welcomeAppHomeOpen(
+  inst: Installation,
+  slackUserId: string,
+): Promise<void> {
+  const text =
+    `Hi — I'm Janis, connected to *${inst.teamName ?? 'your Slack team'}*. ` +
+    `DM me anything — I'm the same concierge as Ask Janis in the console. ` +
+    `*/janis* shows controls; ${env.webOrigin} has agents, inbox, alerts and settings.`;
+  await dmWelcome(inst, slackUserId, text);
+}
+
+async function dmWelcome(inst: Installation, slackUserId: string, text: string): Promise<void> {
   const opened = await slackApi<{ channel: { id: string } }>(
     inst.botToken,
     'conversations.open',
-    { users: inst.installerSlackUserId },
+    { users: slackUserId },
   ).catch(() => null);
   if (!opened?.ok || !opened.channel?.id) {
     console.error('slack welcome dm open failed:', opened?.error ?? 'no channel');
@@ -1416,7 +1436,19 @@ const SLACK_FMT_RE =
 
 export function slackMrkdwn(text: string): string {
   const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return mathToUnicode(escaped).replace(
+  // Slack mrkdwn has no headers — "# Title" renders the hash literally.
+  // Demote to **bold** so the format pass below turns it into Slack bold;
+  // when the line already carries emphasis marks pass it through so
+  // nested marks aren't double-wrapped. ### trailing hashes are stripped.
+  const headed = escaped.replace(/^[ \t]*#{1,6}[ \t]+(.*)$/gm, (_m, line: string) => {
+    const t = line.trim().replace(/[#\s]+$/, '');
+    return /[*_~`]/.test(t) ? t : `**${t}**`;
+  });
+  // "---" / "***" / "___" rules render literally in Slack — swap for a
+  // unicode rule. Done before the format pass so "***" can't feed the
+  // bold/italic matcher.
+  const ruled = headed.replace(/^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, '───────────');
+  return mathToUnicode(ruled).replace(
     SLACK_FMT_RE,
     (_m, bold, ital, strike, code, label, url) => {
       if (bold != null) return `*${bold}*`;

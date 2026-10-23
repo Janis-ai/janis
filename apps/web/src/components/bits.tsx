@@ -130,7 +130,7 @@ export function CodeBlock({ title, code, lang }: { title: string; code: string; 
 export function Md({ children }: { children: string }) {
   return (
     <>
-      {splitEmphasis(children).map((seg, i) => {
+      {splitEmphasis(children.replace(/^#{1,6}\s+/, '')).map((seg, i) => {
         if (seg.kind === 'text') return stripStrayMarkers(seg.text);
         if (seg.kind === 'math') return <span key={i} className="md-math">{seg.text}</span>;
         const Tag =
