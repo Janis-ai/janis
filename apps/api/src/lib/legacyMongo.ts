@@ -16,6 +16,50 @@ export function setLegacyTeamLookup(fn: typeof override): void {
 
 export type LegacyTeamState = 'none' | 'live' | 'unknown';
 
+/** Test seams for the migration-time ops below (same pattern as the
+ *  team-state override — no Mongo needed in tests). */
+let opsOverride:
+  | {
+      channels?: (teamId: string) => Promise<Record<string, unknown>[]>;
+      mark?: (teamId: string) => Promise<boolean>;
+    }
+  | undefined;
+export function setLegacyOps(o: typeof opsOverride): void {
+  opsOverride = o;
+}
+
+/** The botkit `channels` collection docs for one team — transcript/training
+ *  channel state and member-DM prefs the classic-mode install reseeds. */
+export async function legacyChannelDocs(teamId: string): Promise<Record<string, unknown>[]> {
+  if (opsOverride?.channels) return opsOverride.channels(teamId);
+  if (!env.legacyMongoUri) return [];
+  client ??= await MongoClient.connect(env.legacyMongoUri, {
+    serverSelectionTimeoutMS: 2500,
+  });
+  return (await client
+    .db()
+    .collection('channels')
+    .find({ team: teamId })
+    .toArray()) as Record<string, unknown>[];
+}
+
+/** Flip `migrated: true` on the team's slack_integrations doc — the signal
+ *  wordhop-slack reads (per-event drop + spawnStoredBots filter) to stand
+ *  down for the team. Returns false when no doc exists or Mongo is
+ *  unconfigured. */
+export async function markLegacyTeamMigrated(teamId: string): Promise<boolean> {
+  if (opsOverride?.mark) return opsOverride.mark(teamId);
+  if (!env.legacyMongoUri) return false;
+  client ??= await MongoClient.connect(env.legacyMongoUri, {
+    serverSelectionTimeoutMS: 2500,
+  });
+  const r = await client
+    .db()
+    .collection('slack_integrations')
+    .updateOne({ 'slack_params.team_id': teamId }, { $set: { migrated: true } });
+  return r.matchedCount > 0;
+}
+
 /**
  * 'live'   — Mongo has a slack_integrations doc with a usable token.
  * 'none'   — no doc, a tokenless doc, or no LEGACY_MONGODB_URI configured.

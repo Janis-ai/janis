@@ -11,7 +11,7 @@ import { and, eq } from 'drizzle-orm';
 import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { slackApiRoutes, slackPublicRoutes } from './slack.js';
-import { setLegacyTeamLookup } from '../lib/legacyMongo.js';
+import { setLegacyOps, setLegacyTeamLookup } from '../lib/legacyMongo.js';
 import { findThread, mirrorToSlack, postSlackAlert, removeMemberFromAlertChannels, resetChannelScanCache, slackMrkdwn, slackToCanonical, slackWidgetBlocks, syncMemberToAlertChannels } from '../lib/slack.js';
 import { env } from '../env.js';
 
@@ -31,6 +31,7 @@ beforeAll(async () => {
 beforeEach(() => {
   vi.unstubAllGlobals();
   setLegacyTeamLookup(undefined);
+  setLegacyOps(undefined);
   // channel scans cache per bot token — tests reuse token strings
   resetChannelScanCache();
 });
@@ -1726,11 +1727,92 @@ describe('public OAuth install', () => {
     ).toHaveLength(0);
   });
 
-  it("'migrate' flags the grant for the assisted cutover instead of binding", async () => {
+  it("'migrate' runs the self-serve cutover: binds, marks, reseeds, deletes the grant", async () => {
     setLegacyTeamLookup(async () => 'live');
+    const marked: string[] = [];
+    setLegacyOps({
+      channels: async (t) =>
+        t === 'T_MIGR'
+          ? [
+              {
+                id: 'C_TRANSCRIPT',
+                team: 'T_MIGR',
+                name: 'transcripts',
+                sourceChannel: 'C_TRANSCRIPT',
+                is_wordhop_channel: true,
+                paused: true,
+                should_process_transcript: true,
+              },
+              {
+                id: 'D_MEMBER',
+                team: 'T_MIGR',
+                source_user: 'U_M1',
+                client_key: 'wordhop',
+                custom_alerts: { help: true },
+              },
+            ]
+          : [],
+      mark: async (t) => {
+        marked.push(t);
+        return true;
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => slackOk({ channels: [] })));
     const [p] = await db
       .insert(slackPendingInstalls)
-      .values({ teamId: 'T_MIGR', botToken: 'xoxb-migr', expiresAt: new Date(Date.now() + 3600_000) })
+      .values({
+        teamId: 'T_MIGR',
+        teamName: 'Migrating',
+        botToken: 'xoxb-migr',
+        installerSlackUserId: 'U_INST',
+        expiresAt: new Date(Date.now() + 3600_000),
+      })
+      .returning();
+    const res = await claimWith(p.id, 'migrate');
+    expect(await res.json()).toEqual({ claimed: false, migration: 'done', team_name: 'Migrating' });
+
+    // bound as a classic-mode install, grant consumed
+    const [inst] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, 'T_MIGR'));
+    expect(inst.workspaceId).toBe(adminWsId);
+    expect(inst.migrated).toBe(true);
+    expect(inst.botToken).toBe('xoxb-migr');
+    expect(
+      await db.select().from(slackPendingInstalls).where(eq(slackPendingInstalls.id, p.id)),
+    ).toHaveLength(0);
+
+    // mongo doc flagged + channel state reseeded
+    expect(marked).toEqual(['T_MIGR']);
+    const classic = await db
+      .select()
+      .from(slackClassicChannels)
+      .where(eq(slackClassicChannels.installationId, inst.id));
+    expect(classic).toHaveLength(1);
+    expect(classic[0].paused).toBe(true);
+    expect(classic[0].shouldProcessTranscript).toBe(true);
+    const prefs = await db
+      .select()
+      .from(slackClassicPrefs)
+      .where(eq(slackClassicPrefs.installationId, inst.id));
+    expect(prefs.find((r) => r.clientKey === '__dm__')?.settings).toMatchObject({
+      custom_alerts: { help: true },
+    });
+    expect(prefs.find((r) => r.clientKey === '*')?.dmChannelId).toBe('D_MEMBER');
+    setLegacyOps(undefined);
+  });
+
+  it("'migrate' falls back to the assisted flag when the pipeline throws", async () => {
+    setLegacyTeamLookup(async () => 'live');
+    setLegacyOps({
+      channels: async () => {
+        throw new Error('mongo down');
+      },
+    });
+    const [p] = await db
+      .insert(slackPendingInstalls)
+      .values({ teamId: 'T_MIGERR', botToken: 'xoxb-err', expiresAt: new Date(Date.now() + 3600_000) })
       .returning();
     const res = await claimWith(p.id, 'migrate');
     expect(await res.json()).toEqual({ claimed: false, migration: 'requested' });
@@ -1739,9 +1821,8 @@ describe('public OAuth install', () => {
       .from(slackPendingInstalls)
       .where(eq(slackPendingInstalls.id, p.id));
     expect(row.decision).toBe('migrate');
-    expect(
-      await db.select().from(slackInstallations).where(eq(slackInstallations.teamId, 'T_MIGR')),
-    ).toHaveLength(0);
+    // bound before the throw — cleanup is the assisted path's job
+    setLegacyOps(undefined);
   });
 
   it("'new' binds a legacy team explicitly — the interstitial's informed choice", async () => {

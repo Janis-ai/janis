@@ -20,7 +20,7 @@ export default function SlackLegacy() {
   const navigate = useNavigate();
   const [busy, setBusy] = useState<Decision | null>(null);
   const [error, setError] = useState('');
-  const [outcome, setOutcome] = useState<'kept' | 'requested' | null>(null);
+  const [outcome, setOutcome] = useState<'kept' | 'requested' | 'done' | null>(null);
 
   const decide = async (decision: Decision) => {
     setBusy(decision);
@@ -34,6 +34,7 @@ export default function SlackLegacy() {
       }>('/api/slack/claim', { method: 'POST', body: JSON.stringify({ decision }) });
       if (r.claimed) navigate('/settings?slack=connected');
       else if (r.kept) setOutcome('kept');
+      else if (r.migration === 'done') setOutcome('done');
       else if (r.migration) setOutcome('requested');
       else setError('Nothing pending — this link may have expired. Connect Slack again.');
     } catch (e) {
@@ -59,6 +60,23 @@ export default function SlackLegacy() {
             </p>
             <a className="btn" style={{ display: 'block', textAlign: 'center' }} href="/">
               Back to Janis
+            </a>
+          </>
+        )}
+
+        {outcome === 'done' && (
+          <>
+            <p>
+              <strong>Migration complete.</strong> Your workspace now runs on the new Janis —
+              same Slack experience: transcripts, alerts, and commands. We emailed you the
+              details.
+            </p>
+            <a
+              className="btn primary"
+              style={{ display: 'block', textAlign: 'center' }}
+              href="/settings?slack=connected"
+            >
+              Open Slack settings
             </a>
           </>
         )}

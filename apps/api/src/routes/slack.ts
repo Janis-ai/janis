@@ -37,6 +37,7 @@ import { membershipFor } from '../lib/members.js';
 import { agentSend, humanReply, internalNote, resume, takeover, TakeoverError, teachAgent } from '../services/takeover.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 import { legacyTeamState } from '../lib/legacyMongo.js';
+import { runSlackMigration } from '../lib/slackMigration.js';
 import { sendEmail } from '../lib/notify.js';
 import { makeClassicCtx } from '../lib/slackClassic/index.js';
 import { classicIncoming, handleClassicSlash, handleClassicCallback, handleClassicFilesUploaded, handleClassicWorkspaceEvent } from '../lib/slackClassic/relay.js';
@@ -682,6 +683,23 @@ export function slackApiRoutes(db: Db) {
       return c.json({ claimed: false, legacy, team_name: row.teamName });
     }
     if (decision === 'migrate') {
+      // Self-serve cutover: bind the grant as a migrated install, flag the
+      // Mongo doc so wordhop-slack stands down, and reseed classic channel
+      // state — all inline. A failed step falls back to the assisted path
+      // (flag the grant + ops email) rather than half-severing the team.
+      try {
+        const stats = await runSlackMigration(db, row, c.get('workspaceId'), c.get('user').id);
+        deleteCookie(c, PENDING_COOKIE, { path: '/' });
+        await db.delete(slackPendingInstalls).where(eq(slackPendingInstalls.id, row.id));
+        void sendEmail(
+          [c.get('user').email],
+          `Slack migration complete — ${row.teamName ?? row.teamId}`,
+          `Your Slack workspace ${row.teamName ?? row.teamId} now runs on the new Janis — same classic experience (transcripts, alerts, commands), managed from ${env.webOrigin}/settings.\n\nImported: ${stats.transcripts} transcript channel${stats.transcripts === 1 ? '' : 's'}${stats.training ? `, ${stats.training} training` : ''}${stats.memberDms ? `, ${stats.memberDms} member DM prefs` : ''}.${stats.dmUnresolved ? ` ${stats.dmUnresolved} DM pref doc(s) couldn't be resolved to a member.` : ''}${stats.alertChannel ? ` Alerts post to #${stats.alertChannel}.` : ''}${stats.marked ? '' : '\n\nNote: the legacy flag could not be set — if classic behavior seems doubled, contact support.'}`,
+        ).catch((e) => console.error('migration-complete email failed:', e));
+        return c.json({ claimed: false, migration: 'done', team_name: row.teamName });
+      } catch (e) {
+        console.error('auto-migration failed; falling back to assisted:', e);
+      }
       // Assisted cutover: keep the parked grant flagged for ops — a row
       // written before the team's channels/subs are imported would serve
       // an empty classic relay and sever the team all the same.
