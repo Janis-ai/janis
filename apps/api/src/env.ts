@@ -1,3 +1,5 @@
+import type { Context } from 'hono';
+
 export const env = {
   port: Number(process.env.PORT ?? 8787),
   databaseUrl: process.env.DATABASE_URL ?? '',
@@ -263,3 +265,58 @@ export const env = {
   // hitting it pauses AI replies and escalates to humans. 0 disables.
   llmDailyCapMicros: Number(process.env.LLM_DAILY_CAP_MICROS ?? 25_000_000),
 };
+
+// Browser-facing origin for the host a request arrived on. Both www.janis.ai
+// and app.janis.ai serve this app and have OAuth URIs registered — the
+// redirect_uri sent to a provider must match the page the flow started on so
+// the callback (and post-auth landing) stays on that subdomain.
+// CF-fronted hosts arrive via the janis-legacy-proxy worker, which stamps
+// x-forwarded-host; direct hits (app.janis.ai Cloud Run domain mapping) use
+// Host. Only allowlisted hosts produce a host-derived origin — anything else
+// (api.janis.ai, run.app, unknown) falls back to API_ORIGIN so providers
+// always see a registered URI.
+const REQUEST_ORIGIN_HOSTS = new Set(
+  (process.env.REQUEST_ORIGIN_HOSTS ?? 'www.janis.ai,app.janis.ai')
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean),
+);
+
+export function requestOrigin(c: Context): string {
+  const raw = (
+    c.req.header('x-forwarded-host') ??
+    c.req.header('host') ??
+    ''
+  ).toLowerCase();
+  const hostname = raw.split(':')[0];
+  if (REQUEST_ORIGIN_HOSTS.has(raw) || REQUEST_ORIGIN_HOSTS.has(hostname)) {
+    return `https://${raw}`;
+  }
+  if (hostname === 'localhost' || hostname === '127.0.0.1') {
+    return `http://${raw}`;
+  }
+  return env.apiOrigin;
+}
+
+// redirect_uri for a browser OAuth flow — explicit env pins
+// (GOOGLE_REDIRECT_URI etc.) still win, else derive from the request host.
+export function oauthRedirectUri(c: Context, path: string, pinned: string): string {
+  return pinned || `${requestOrigin(c)}${path}`;
+}
+
+// Web origin for post-auth browser landings. Only the allowlisted
+// app-serving hosts derive from the request — in dev the SPA is a separate
+// Vite origin (localhost:5173) and api.janis.ai/run.app must still land on
+// WEB_ORIGIN, so no localhost passthrough here.
+export function requestWebOrigin(c: Context): string {
+  const raw = (
+    c.req.header('x-forwarded-host') ??
+    c.req.header('host') ??
+    ''
+  ).toLowerCase();
+  const hostname = raw.split(':')[0];
+  if (REQUEST_ORIGIN_HOSTS.has(raw) || REQUEST_ORIGIN_HOSTS.has(hostname)) {
+    return `https://${raw}`;
+  }
+  return env.webOrigin;
+}

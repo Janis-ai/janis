@@ -7,7 +7,7 @@ import { allRates, billingConfig, currentPeriod, rateFor } from '../lib/billing.
 import { effectivePlanKey, invalidateCapCache, messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
 import { ensureStripeCustomer, planForPrice, stripe } from '../lib/stripe.js';
 import { disableSsoIfUngated } from '../lib/workos.js';
-import { env } from '../env.js';
+import { env, requestWebOrigin } from '../env.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { audit } from '../lib/audit.js';
 import { bus } from '../lib/bus.js';
@@ -316,8 +316,8 @@ export function billingRoutes(db: Db) {
               metadata: { workspace_id: workspaceId, plan },
             },
             metadata: { workspace_id: workspaceId, plan, via: 'connect' },
-            success_url: `${env.webOrigin}/billing?upgraded=1`,
-            cancel_url: `${env.webOrigin}/billing`,
+            success_url: `${requestWebOrigin(c)}/billing?upgraded=1`,
+            cancel_url: `${requestWebOrigin(c)}/billing`,
           },
           { stripeAccount: parent.stripeConnectId },
         );
@@ -373,8 +373,8 @@ export function billingRoutes(db: Db) {
         metadata: { workspace_id: workspaceId, plan },
         ...(trialDays ? { trial_period_days: trialDays } : {}),
       },
-      success_url: `${env.webOrigin}/billing?upgraded=1`,
-      cancel_url: `${env.webOrigin}/billing`,
+      success_url: `${requestWebOrigin(c)}/billing?upgraded=1`,
+      cancel_url: `${requestWebOrigin(c)}/billing`,
     });
     await audit(db, {
       workspaceId, userId: c.get('user').id, userName: c.get('user').name,
@@ -449,7 +449,7 @@ export function billingRoutes(db: Db) {
     const customerId = await ensureStripeCustomer(s, db, workspaceId, ws, c.get('user').email);
     const session = await s.billingPortal.sessions.create({
       customer: customerId,
-      return_url: `${env.webOrigin}/billing`,
+      return_url: `${requestWebOrigin(c)}/billing`,
     });
     return c.json({ url: session.url });
   });
@@ -533,8 +533,8 @@ export function billingRoutes(db: Db) {
     }
     const link = await s.accountLinks.create({
       account: acctId,
-      refresh_url: `${env.webOrigin}/billing?connect=refresh`,
-      return_url: `${env.webOrigin}/billing?connect=done`,
+      refresh_url: `${requestWebOrigin(c)}/billing?connect=refresh`,
+      return_url: `${requestWebOrigin(c)}/billing?connect=done`,
       type: 'account_onboarding',
     });
     await audit(db, {

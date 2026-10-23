@@ -5,7 +5,7 @@ import { zValidator } from '@hono/zod-validator';
 import { and, eq, inArray } from 'drizzle-orm';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
-import { env } from '../env.js';
+import { env, requestOrigin, requestWebOrigin } from '../env.js';
 import {
   agents,
   campaigns,
@@ -135,7 +135,7 @@ export function metaApiRoutes(db: Db) {
     setCookie(c, STATE_COOKIE, state, { httpOnly: true, sameSite: 'Lax', path: '/', maxAge: 600 });
     const url = new URL(`https://www.facebook.com/v21.0/dialog/oauth`);
     url.searchParams.set('client_id', env.metaAppId);
-    url.searchParams.set('redirect_uri', `${env.apiOrigin}/api/meta/callback`);
+    url.searchParams.set('redirect_uri', `${requestOrigin(c)}/api/meta/callback`);
     url.searchParams.set('scope', SCOPES);
     url.searchParams.set('state', state);
     return c.redirect(url.toString());
@@ -147,8 +147,8 @@ export function metaApiRoutes(db: Db) {
     const dest = (q: string) =>
       c.redirect(
         agentId
-          ? `${env.webOrigin}/agents/${agentId}/channels?${q}`
-          : `${env.webOrigin}/agents?${q}`,
+          ? `${requestWebOrigin(c)}/agents/${agentId}/channels?${q}`
+          : `${requestWebOrigin(c)}/agents?${q}`,
       );
     const back = (msg: string) => dest(`meta_error=${encodeURIComponent(msg)}`);
     const sent = c.req.query('state');
@@ -158,7 +158,7 @@ export function metaApiRoutes(db: Db) {
     if (!code) return back(c.req.query('error_description') || 'authorization denied');
 
     const tok = await graph<{ access_token?: string }>(
-      `/oauth/access_token?client_id=${env.metaAppId}&client_secret=${env.metaAppSecret}&redirect_uri=${encodeURIComponent(`${env.apiOrigin}/api/meta/callback`)}&code=${code}`,
+      `/oauth/access_token?client_id=${env.metaAppId}&client_secret=${env.metaAppSecret}&redirect_uri=${encodeURIComponent(`${requestOrigin(c)}/api/meta/callback`)}&code=${code}`,
       '',
     );
     if (!tok?.access_token) return back('token exchange failed');

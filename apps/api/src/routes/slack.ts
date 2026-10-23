@@ -6,7 +6,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { and, asc, desc, eq, gt, inArray, isNotNull, ne, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackClassicChannels, slackClassicPrefs, slackInstallations, slackMemberLinks, slackPendingInstalls, slackThreads, suggestions, workspaces } from '../db/schema.js';
-import { env } from '../env.js';
+import { env, requestOrigin, requestWebOrigin } from '../env.js';
 import { adminOnly, sessionAuth, SESSION_COOKIE, type SessionEnv } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
 import { runHostedEvent } from '../lib/hostedAgent.js';
@@ -109,7 +109,7 @@ const SCOPES = [
   'app_mentions:read', // @janis → concierge answers in-thread
 ].join(',');
 
-function oauthUrl(state: string) {
+function oauthUrl(origin: string, state: string) {
   const params = new URLSearchParams({
     client_id: env.slackClientId,
     scope: SCOPES,
@@ -117,7 +117,7 @@ function oauthUrl(state: string) {
     // replies (bots can't touch other users' messages) so styled mirrors
     // can replace them
     user_scope: 'chat:write',
-    redirect_uri: `${env.apiOrigin}/slack/oauth/callback`,
+    redirect_uri: `${origin}/slack/oauth/callback`,
     state,
   });
   return `https://slack.com/oauth/v2/authorize?${params}`;
@@ -644,7 +644,7 @@ export function slackApiRoutes(db: Db) {
     if (!env.slackClientId) return c.json({ error: 'SLACK_CLIENT_ID not configured' }, 503);
     const r = sanitizeReturnPath(c.req.query('return'));
     const state = `dir.${signState({ w: c.get('workspaceId'), u: c.get('user').id, ...(r ? { r } : {}) })}`;
-    return c.redirect(oauthUrl(state));
+    return c.redirect(oauthUrl(requestOrigin(c), state));
   });
 
   // Bind a Slack grant that completed while signed out (public install —
@@ -950,7 +950,7 @@ export function slackPublicRoutes(db: Db) {
   app.get('/add', (c) => {
     if (!env.slackClientId) return c.text('Slack app not configured', 503);
     const r = sanitizeReturnPath(c.req.query('return'));
-    return c.redirect(oauthUrl(`pub.${signState({ p: 1, ...(r ? { r } : {}) })}`));
+    return c.redirect(oauthUrl(requestOrigin(c), `pub.${signState({ p: 1, ...(r ? { r } : {}) })}`));
   });
 
   // OAuth redirect target. State shapes: 'dir.<signed{w,u}>' (in-session
@@ -987,7 +987,7 @@ export function slackPublicRoutes(db: Db) {
         client_id: env.slackClientId,
         client_secret: env.slackClientSecret,
         code,
-        redirect_uri: `${env.apiOrigin}/slack/oauth/callback`,
+        redirect_uri: `${requestOrigin(c)}/slack/oauth/callback`,
       }),
     });
     const data = (await tokenRes.json()) as {
@@ -1065,9 +1065,9 @@ export function slackPublicRoutes(db: Db) {
         sameSite: 'Lax',
         path: '/',
         maxAge: PENDING_TTL_MS / 1000,
-        secure: env.apiOrigin.startsWith('https'),
+        secure: requestOrigin(c).startsWith('https'),
       });
-      return c.redirect(`${env.webOrigin}${redirect}`);
+      return c.redirect(`${requestWebOrigin(c)}${redirect}`);
     };
 
     // Legacy guard: the same Slack app fronts classic wordhop-slack
@@ -1114,7 +1114,7 @@ export function slackPublicRoutes(db: Db) {
     // Re-installs (token refresh) already said hello once.
     if (!existing) void welcomeInstallerDm(inst).catch(() => {});
     return c.redirect(
-      `${env.webOrigin}${returnPath ? withSlackConnectedFlag(returnPath) : '/settings?slack=connected'}`,
+      `${requestWebOrigin(c)}${returnPath ? withSlackConnectedFlag(returnPath) : '/settings?slack=connected'}`,
     );
   });
 

@@ -186,13 +186,19 @@ is a day on launch)*
       webhook, Gmail push, and PUBLIC_ORIGIN-derived OAuth callbacks
       working. Verified: www/ + /health → janis-api, www/intents →
       wordhopapi via passthrough, apex 301 → www.
-   OPEN — canonical-domain tail: PUBLIC_ORIGIN still
-      https://app.janis.ai. To make www canonical, register www
-      redirect URIs in every provider console first (Google auth +
-      Gmail, Slack A15NCEA7K, Meta, WorkOS AuthKit, Azure, Calendly),
-      THEN set PUBLIC_ORIGIN=https://www.janis.ai and redeploy.
-      Until then email/password login works natively on www; OAuth
-      initiated on www bounces through app.janis.ai callbacks.
+   DONE 2026-10-23 — host-aware OAuth: instead of flipping
+      PUBLIC_ORIGIN, redirect_uris + post-auth landings derive from
+      the request host. env.ts requestOrigin (API-facing redirect_uri),
+      requestWebOrigin (post-auth browser landing), oauthRedirectUri
+      (explicit *_REDIRECT_URI pins still win). Allowlist =
+      REQUEST_ORIGIN_HOSTS env (default www.janis.ai,app.janis.ai);
+      CF worker janis-legacy-proxy stamps x-forwarded-host, direct
+      Cloud Run hits use Host, anything else falls back to
+      API_ORIGIN/WEB_ORIGIN. Covers Google/Slack/WorkOS/Gmail/Outlook/
+      Meta/Calendly/Cloudflare-DNS OAuth + Stripe checkout/portal
+      returns. www redirect URIs registered in provider consoles by
+      Mike. Emitted links (emails, Slack text, tool urls,
+      Twilio-signed webhook URLs) stay on canonical WEB/API_ORIGIN.
 2. Verify + export the 17k legacy list (Mongo export) — campaign prep is
    fiction without it. (2026-10-20: archived in-place on the wordhopapi
    cluster via scripts/archive-legacy-collections.mjs —

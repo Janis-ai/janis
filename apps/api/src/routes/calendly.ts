@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
-import { env } from '../env.js';
+import { env, requestOrigin, requestWebOrigin } from '../env.js';
 import { AgentConfig } from '@janis/shared';
 import { agentConnections, agents } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -46,10 +46,10 @@ function verifyIntent(token: string): Intent | null {
   }
 }
 
-function consentUrl(state: string): string {
+function consentUrl(origin: string, state: string): string {
   const url = new URL('https://auth.calendly.com/oauth/authorize');
   url.searchParams.set('client_id', env.calendlyClientId);
-  url.searchParams.set('redirect_uri', env.calendlyRedirectUri);
+  url.searchParams.set('redirect_uri', process.env.CALENDLY_REDIRECT_URI || `${origin}/calendly/callback`);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('state', state);
   return url.toString();
@@ -70,7 +70,7 @@ export function calendlyApiRoutes(db: Db) {
     const agentId = c.req.query('agent_id') ?? '';
     const fail = (msg: string) =>
       c.redirect(
-        `${env.webOrigin}/agents/${agentId}/integrations?calendly_error=${encodeURIComponent(msg)}`,
+        `${requestWebOrigin(c)}/agents/${agentId}/integrations?calendly_error=${encodeURIComponent(msg)}`,
       );
     if (!env.calendlyClientId || !env.calendlyClientSecret) {
       return fail('Calendly OAuth is not configured on this Janis deployment');
@@ -88,7 +88,7 @@ export function calendlyApiRoutes(db: Db) {
       a: agentId,
       x: Date.now() + STATE_TTL_MS,
     });
-    return c.redirect(consentUrl(state));
+    return c.redirect(consentUrl(requestOrigin(c), state));
   });
 
   return app;
@@ -102,12 +102,12 @@ export function calendlyPublicRoutes(db: Db) {
     const intent = verifyIntent(c.req.query('state') ?? '');
     if (!intent) {
       return c.redirect(
-        `${env.webOrigin}/agents?calendly_error=${encodeURIComponent('invalid OAuth state')}`,
+        `${requestWebOrigin(c)}/agents?calendly_error=${encodeURIComponent('invalid OAuth state')}`,
       );
     }
     const done = (msg: string, ok = false) =>
       c.redirect(
-        `${env.webOrigin}/agents/${intent.a}/integrations?${ok ? 'calendly_connect' : 'calendly_error'}=${encodeURIComponent(msg)}`,
+        `${requestWebOrigin(c)}/agents/${intent.a}/integrations?${ok ? 'calendly_connect' : 'calendly_error'}=${encodeURIComponent(msg)}`,
       );
 
     const code = c.req.query('code');
@@ -130,7 +130,7 @@ export function calendlyPublicRoutes(db: Db) {
       },
       body: new URLSearchParams({
         grant_type: 'authorization_code',
-        redirect_uri: env.calendlyRedirectUri,
+        redirect_uri: process.env.CALENDLY_REDIRECT_URI || `${requestOrigin(c)}/calendly/callback`,
         code,
       }),
       signal: AbortSignal.timeout(10_000),

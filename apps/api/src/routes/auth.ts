@@ -14,7 +14,7 @@ import { sendEmail } from '../lib/notify.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { toWorkspaceUser } from '../lib/serializers.js';
 import { syncMemberToAlertChannels } from '../lib/slack.js';
-import { env } from '../env.js';
+import { env, oauthRedirectUri, requestWebOrigin } from '../env.js';
 
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const OAUTH_STATE_COOKIE = 'janis_oauth_state';
@@ -842,7 +842,7 @@ export function authRoutes(db: Db) {
   };
 
   const oauthError = (c: Context, msg: string) =>
-    c.redirect(`${env.webOrigin}/login?error=${encodeURIComponent(msg)}`);
+    c.redirect(`${requestWebOrigin(c)}/login?error=${encodeURIComponent(msg)}`);
 
   const finishOAuth = async (
     c: Context,
@@ -854,7 +854,7 @@ export function authRoutes(db: Db) {
     const user = await findOrProvisionUser(profile.email, profile.name ?? '');
     await issueSession(c, user.id);
     deleteCookie(c, OAUTH_STATE_COOKIE, { path: '/' });
-    return c.redirect(`${env.webOrigin}/conversations`);
+    return c.redirect(`${requestWebOrigin(c)}/conversations`);
   };
 
   const checkState = (c: Context) => {
@@ -868,7 +868,7 @@ export function authRoutes(db: Db) {
     if (!env.googleClientId) return oauthError(c, 'Google sign-in is not configured');
     return beginOAuth(c, 'https://accounts.google.com/o/oauth2/v2/auth', {
       client_id: env.googleClientId,
-      redirect_uri: env.googleRedirectUri,
+      redirect_uri: oauthRedirectUri(c, '/auth/google/callback', process.env.GOOGLE_REDIRECT_URI ?? ''),
       response_type: 'code',
       scope: 'openid email profile',
     });
@@ -885,7 +885,7 @@ export function authRoutes(db: Db) {
         code,
         client_id: env.googleClientId,
         client_secret: env.googleClientSecret,
-        redirect_uri: env.googleRedirectUri,
+        redirect_uri: oauthRedirectUri(c, '/auth/google/callback', process.env.GOOGLE_REDIRECT_URI ?? ''),
         grant_type: 'authorization_code',
       }),
     });
@@ -910,7 +910,7 @@ export function authRoutes(db: Db) {
     if (!env.slackClientId) return oauthError(c, 'Slack sign-in is not configured');
     return beginOAuth(c, 'https://slack.com/openid/connect/authorize', {
       client_id: env.slackClientId,
-      redirect_uri: env.slackRedirectUri,
+      redirect_uri: oauthRedirectUri(c, '/auth/slack/callback', process.env.SLACK_REDIRECT_URI ?? ''),
       response_type: 'code',
       scope: 'openid profile email',
     });
@@ -956,7 +956,7 @@ export function authRoutes(db: Db) {
     const q = new URL(c.req.url).searchParams;
     const base: Record<string, string> = {
       client_id: env.workosClientId,
-      redirect_uri: env.workosRedirectUri,
+      redirect_uri: oauthRedirectUri(c, '/auth/sso/callback', process.env.WORKOS_REDIRECT_URI ?? ''),
       response_type: 'code',
     };
     const provider = q.get('provider');
@@ -1063,7 +1063,7 @@ export function authRoutes(db: Db) {
         code,
         client_id: env.slackClientId,
         client_secret: env.slackClientSecret,
-        redirect_uri: env.slackRedirectUri,
+        redirect_uri: oauthRedirectUri(c, '/auth/slack/callback', process.env.SLACK_REDIRECT_URI ?? ''),
       }),
     });
     if (!tokenRes.ok) return oauthError(c, 'Slack token exchange failed');

@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
-import { env } from '../env.js';
+import { env, requestOrigin, requestWebOrigin } from '../env.js';
 import { agents, channels } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import type { ChannelCredentials } from '../lib/channels.js';
@@ -47,10 +47,10 @@ function verifyIntent(token: string): Intent | null {
   }
 }
 
-function consentUrl(state: string): string {
+function consentUrl(origin: string, state: string): string {
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.searchParams.set('client_id', env.googleClientId);
-  url.searchParams.set('redirect_uri', env.gmailRedirectUri);
+  url.searchParams.set('redirect_uri', process.env.GMAIL_REDIRECT_URI || `${origin}/gmail/callback`);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', SCOPES);
   url.searchParams.set('access_type', 'offline');
@@ -95,7 +95,7 @@ export function gmailApiRoutes(db: Db) {
       n: c.req.query('name') || undefined,
       x: Date.now() + STATE_TTL_MS,
     });
-    return c.redirect(consentUrl(state));
+    return c.redirect(consentUrl(requestOrigin(c), state));
   });
 
   // Mint a shareable link for whoever controls the mailbox — a client, a
@@ -115,7 +115,7 @@ export function gmailApiRoutes(db: Db) {
       l: true,
       x: Date.now() + LINK_TTL_MS,
     });
-    return c.json({ url: `${env.apiOrigin}/gmail/start?key=${key}` });
+    return c.json({ url: `${requestOrigin(c)}/gmail/start?key=${key}` });
   });
 
   return app;
@@ -165,14 +165,14 @@ export function gmailPublicRoutes(db: Db) {
   app.get('/start', (c) => {
     const intent = verifyIntent(c.req.query('key') ?? '');
     if (!intent) return c.text('invalid or expired link', 400);
-    return c.redirect(consentUrl(signIntent({ ...intent, x: Date.now() + STATE_TTL_MS })));
+    return c.redirect(consentUrl(requestOrigin(c), signIntent({ ...intent, x: Date.now() + STATE_TTL_MS })));
   });
 
   app.get('/callback', async (c) => {
     const intent = verifyIntent(c.req.query('state') ?? '');
     if (!intent) {
       return c.redirect(
-        `${env.webOrigin}/agents?gmail_error=${encodeURIComponent('invalid OAuth state')}`,
+        `${requestWebOrigin(c)}/agents?gmail_error=${encodeURIComponent('invalid OAuth state')}`,
       );
     }
     // Link flows land here for people with no Janis login — answer in text
@@ -189,8 +189,8 @@ export function gmailPublicRoutes(db: Db) {
             ok && channelId
               ? // Success lands on the channel's own settings page — the
                 // mailbox has forwarding/watch config worth seeing.
-                `${env.webOrigin}/agents/${intent.a}/channels/${channelId}?gmail_connect=${encodeURIComponent(msg)}`
-              : `${env.webOrigin}/agents/${intent.a}/channels?${ok ? 'gmail_connect' : 'gmail_error'}=${encodeURIComponent(msg)}`,
+                `${requestWebOrigin(c)}/agents/${intent.a}/channels/${channelId}?gmail_connect=${encodeURIComponent(msg)}`
+              : `${requestWebOrigin(c)}/agents/${intent.a}/channels?${ok ? 'gmail_connect' : 'gmail_error'}=${encodeURIComponent(msg)}`,
           );
 
     const code = c.req.query('code');
@@ -203,7 +203,7 @@ export function gmailPublicRoutes(db: Db) {
       body: new URLSearchParams({
         client_id: env.googleClientId,
         client_secret: env.googleClientSecret,
-        redirect_uri: env.gmailRedirectUri,
+        redirect_uri: process.env.GMAIL_REDIRECT_URI || `${requestOrigin(c)}/gmail/callback`,
         grant_type: 'authorization_code',
         code,
       }),

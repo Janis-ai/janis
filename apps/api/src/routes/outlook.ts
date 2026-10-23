@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { and, eq } from 'drizzle-orm';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
-import { env } from '../env.js';
+import { env, requestOrigin, requestWebOrigin } from '../env.js';
 import { agents, channels } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import type { ChannelCredentials } from '../lib/channels.js';
@@ -41,10 +41,10 @@ function verifyIntent(token: string): Intent | null {
   }
 }
 
-function consentUrl(state: string): string {
+function consentUrl(origin: string, state: string): string {
   const url = new URL(`https://login.microsoftonline.com/${env.msTenant || 'common'}/oauth2/v2.0/authorize`);
   url.searchParams.set('client_id', env.msClientId);
-  url.searchParams.set('redirect_uri', env.msRedirectUri);
+  url.searchParams.set('redirect_uri', process.env.MS_REDIRECT_URI || `${origin}/outlook/callback`);
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('response_mode', 'query');
   url.searchParams.set('scope', SCOPES);
@@ -85,7 +85,7 @@ export function outlookApiRoutes(db: Db) {
       n: c.req.query('name') || undefined,
       x: Date.now() + STATE_TTL_MS,
     });
-    return c.redirect(consentUrl(state));
+    return c.redirect(consentUrl(requestOrigin(c), state));
   });
 
   app.get('/connect-link', adminOnly, async (c) => {
@@ -103,7 +103,7 @@ export function outlookApiRoutes(db: Db) {
       l: true,
       x: Date.now() + LINK_TTL_MS,
     });
-    return c.json({ url: `${env.apiOrigin}/outlook/start?key=${key}` });
+    return c.json({ url: `${requestOrigin(c)}/outlook/start?key=${key}` });
   });
 
   return app;
@@ -117,14 +117,14 @@ export function outlookPublicRoutes(db: Db) {
   app.get('/start', (c) => {
     const intent = verifyIntent(c.req.query('key') ?? '');
     if (!intent) return c.text('invalid or expired link', 400);
-    return c.redirect(consentUrl(signIntent({ ...intent, x: Date.now() + STATE_TTL_MS })));
+    return c.redirect(consentUrl(requestOrigin(c), signIntent({ ...intent, x: Date.now() + STATE_TTL_MS })));
   });
 
   app.get('/callback', async (c) => {
     const intent = verifyIntent(c.req.query('state') ?? '');
     if (!intent) {
       return c.redirect(
-        `${env.webOrigin}/agents?outlook_error=${encodeURIComponent('invalid OAuth state')}`,
+        `${requestWebOrigin(c)}/agents?outlook_error=${encodeURIComponent('invalid OAuth state')}`,
       );
     }
     const done = (msg: string, ok = false, channelId?: string) =>
@@ -138,8 +138,8 @@ export function outlookPublicRoutes(db: Db) {
             ok && channelId
               ? // Success lands on the channel's own settings page — the
                 // mailbox has forwarding/watch config worth seeing.
-                `${env.webOrigin}/agents/${intent.a}/channels/${channelId}?outlook_connect=${encodeURIComponent(msg)}`
-              : `${env.webOrigin}/agents/${intent.a}/channels?${ok ? 'outlook_connect' : 'outlook_error'}=${encodeURIComponent(msg)}`,
+                `${requestWebOrigin(c)}/agents/${intent.a}/channels/${channelId}?outlook_connect=${encodeURIComponent(msg)}`
+              : `${requestWebOrigin(c)}/agents/${intent.a}/channels?${ok ? 'outlook_connect' : 'outlook_error'}=${encodeURIComponent(msg)}`,
           );
 
     const code = c.req.query('code');
@@ -154,7 +154,7 @@ export function outlookPublicRoutes(db: Db) {
         body: new URLSearchParams({
           client_id: env.msClientId,
           client_secret: env.msClientSecret,
-          redirect_uri: env.msRedirectUri,
+          redirect_uri: process.env.MS_REDIRECT_URI || `${requestOrigin(c)}/outlook/callback`,
           grant_type: 'authorization_code',
           scope: SCOPES,
           code,

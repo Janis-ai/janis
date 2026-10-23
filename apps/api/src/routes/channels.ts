@@ -16,7 +16,7 @@ import { detectDnsSetup } from '../lib/dnsSetup.js';
 import { and, eq, ne, sql } from 'drizzle-orm';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
-import { env } from '../env.js';
+import { env, requestOrigin, requestWebOrigin } from '../env.js';
 import {
   agents,
   campaigns,
@@ -776,7 +776,7 @@ export function channelApiRoutes(db: Db) {
 
   // Cloudflare OAuth — one-click DNS setup. State is HMAC-signed and binds
   // the consent redirect back to this channel (same scheme as Slack).
-  const cfRedirectUri = `${env.apiOrigin}/channels/email-domain/cf-callback`;
+  const cfRedirectUri = (c: Context) => `${requestOrigin(c)}/channels/email-domain/cf-callback`;
   app.post('/:id/email-domain/cf-connect', async (c) => {
     if (!env.cfOauthClientId) return c.json({ error: 'cloudflare oauth not configured' }, 503);
     const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
@@ -789,7 +789,7 @@ export function channelApiRoutes(db: Db) {
       JSON.stringify({ ch: row.id, w: c.get('workspaceId'), x: Date.now() + 600_000 }),
     ).toString('base64url');
     const sig = createHmac('sha256', env.sessionSecret).update(b64).digest('base64url');
-    return c.json({ url: cfAuthorizeUrl(cfRedirectUri, `cf.${b64}.${sig}`) });
+    return c.json({ url: cfAuthorizeUrl(cfRedirectUri(c), `cf.${b64}.${sig}`) });
   });
 
   // Best-path DNS setup: Domain Connect → Cloudflare OAuth → manual. The UI
@@ -812,7 +812,7 @@ export function channelApiRoutes(db: Db) {
         JSON.stringify({ ch: row.id, w: c.get('workspaceId'), x: Date.now() + 600_000 }),
       ).toString('base64url');
       const sig = createHmac('sha256', env.sessionSecret).update(b64).digest('base64url');
-      return c.json({ mode: 'cloudflare', url: cfAuthorizeUrl(cfRedirectUri, `cf.${b64}.${sig}`) });
+      return c.json({ mode: 'cloudflare', url: cfAuthorizeUrl(cfRedirectUri(c), `cf.${b64}.${sig}`) });
     }
     return c.json(mode);
   });
@@ -1125,10 +1125,10 @@ export function channelWebhookRoutes(db: Db) {
     const fail = (msg: string, agentId?: string, channelId?: string) =>
       c.redirect(
         channelId && agentId
-          ? `${env.webOrigin}/agents/${agentId}/channels/${channelId}?cf_error=${encodeURIComponent(msg)}`
+          ? `${requestWebOrigin(c)}/agents/${agentId}/channels/${channelId}?cf_error=${encodeURIComponent(msg)}`
           : agentId
-            ? `${env.webOrigin}/agents/${agentId}/channels?cf_error=${encodeURIComponent(msg)}`
-            : `${env.webOrigin}/agents?cf_error=${encodeURIComponent(msg)}`,
+            ? `${requestWebOrigin(c)}/agents/${agentId}/channels?cf_error=${encodeURIComponent(msg)}`
+            : `${requestWebOrigin(c)}/agents?cf_error=${encodeURIComponent(msg)}`,
       );
     const code = c.req.query('code');
     const state = c.req.query('state') ?? '';
@@ -1160,7 +1160,7 @@ export function channelWebhookRoutes(db: Db) {
     try {
       const tokens = await cfExchangeCode(
         code,
-        `${env.apiOrigin}/channels/email-domain/cf-callback`,
+        `${requestOrigin(c)}/channels/email-domain/cf-callback`,
       );
       const next = { ...creds, cf_refresh_token: tokens.refresh_token ?? creds.cf_refresh_token };
       let pushed = '';
@@ -1181,7 +1181,7 @@ export function channelWebhookRoutes(db: Db) {
       await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
       invalidateChannelCache();
       return c.redirect(
-        `${env.webOrigin}/agents/${row.agentId}/channels/${row.id}?cf_connect=${encodeURIComponent(`Cloudflare${pushed}`)}`,
+        `${requestWebOrigin(c)}/agents/${row.agentId}/channels/${row.id}?cf_connect=${encodeURIComponent(`Cloudflare${pushed}`)}`,
       );
     } catch (e) {
       return failAtAgent(e instanceof Error ? e.message : 'cloudflare setup failed');
