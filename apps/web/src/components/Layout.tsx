@@ -112,7 +112,12 @@ interface MeData {
   workspace: { id: string; name: string } | null;
   workspaces: { id: string; name: string; role: string; agent_scoped?: boolean }[];
   invites: { id: string; workspace_name: string }[];
-  agent_invites: { workspace_id: string; workspace_name: string; agents: string[] }[];
+  agent_invites: {
+    workspace_id: string;
+    workspace_name: string;
+    agents: string[];
+    dismissed?: boolean;
+  }[];
 }
 
 /** Top-left context switcher: the workspace block on top (usage, settings,
@@ -379,6 +384,9 @@ export default function Layout() {
     const next = { ...dismissedGrants, [ai.workspace_id]: grantSig(ai) };
     setDismissedGrants(next);
     try { localStorage.setItem('janis.grant-dismissed', JSON.stringify(next)); } catch {}
+    // Server-side too — localStorage is per-origin, so a dismiss on
+    // app.janis.ai otherwise reappears on www.janis.ai (and other devices).
+    return api(`/auth/agent-invites/${ai.workspace_id}/dismiss`, { method: 'POST' }).catch(() => {});
   };
   // Below the push breakpoint the dock is a drawer — two columns or an
   // 840px panel can't fit. CSS already hides the split toggle under
@@ -1298,6 +1306,7 @@ export default function Layout() {
           ?.filter(
             (ai) =>
               ai.workspace_id !== data.workspace?.id &&
+              !ai.dismissed &&
               dismissedGrants[ai.workspace_id] !== grantSig(ai),
           )
           .map((ai) => (
@@ -1309,7 +1318,13 @@ export default function Layout() {
                 </span>
                 <button
                   className="btn primary"
-                  onClick={() => void switchWorkspace(ai.workspace_id)}
+                  onClick={() => {
+                    // Switching IS the acknowledgement — dismiss the banner
+                    // for the current grant set so it stays gone back home.
+                    // Await it: switchWorkspace reloads the page and an
+                    // in-flight dismiss would be aborted.
+                    void dismissGrant(ai)?.finally(() => void switchWorkspace(ai.workspace_id));
+                  }}
                 >
                   Switch
                 </button>

@@ -497,6 +497,48 @@ describe('personal workspace healing', () => {
     expect(me.invites).toHaveLength(1); // Alpha invite still waiting
   });
 
+  it('agent-invite dismissals persist server-side and re-show on a new grant', async () => {
+    const granted = await makeUser('granted@x.test', wsA);
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: wsB, name: 'Banner Bot', apiKeyHash: 'hb1', apiKeyPreview: 'p' })
+      .returning();
+    await db.insert(agentMembers).values({
+      agentId: agent.id,
+      userId: granted.user.id,
+      role: 'member',
+      acceptedAt: new Date(),
+    });
+    const cookie = await loginCookie('granted@x.test');
+    const meOf = async () =>
+      (await app.request('/auth/me', { headers: { cookie } })).json();
+    const inviteOf = (me: { agent_invites: { workspace_id: string; dismissed: boolean }[] }) =>
+      me.agent_invites.find((i) => i.workspace_id === wsB);
+
+    expect(inviteOf(await meOf())?.dismissed).toBe(false);
+    const res = await app.request(`/auth/agent-invites/${wsB}/dismiss`, {
+      method: 'POST',
+      headers: { cookie },
+    });
+    expect(res.status).toBe(200);
+    expect(inviteOf(await meOf())?.dismissed).toBe(true);
+
+    // A brand-new grant on the same workspace undismisses the banner.
+    const [agent2] = await db
+      .insert(agents)
+      .values({ workspaceId: wsB, name: 'Banner Bot 2', apiKeyHash: 'hb2', apiKeyPreview: 'p' })
+      .returning();
+    await db.insert(agentMembers).values({
+      agentId: agent2.id,
+      userId: granted.user.id,
+      role: 'member',
+      acceptedAt: new Date(),
+    });
+    const again = inviteOf(await meOf());
+    expect(again?.dismissed).toBe(false);
+    expect((again as { agents: string[] }).agents).toContain('Banner Bot 2');
+  });
+
   it('does not duplicate a workspace the user already owns', async () => {
     const u = await makeUser('owner@x.test', null);
     const [ws] = await db

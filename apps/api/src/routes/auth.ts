@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, eq, gt, isNotNull, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm';
 import { randomBytes } from 'node:crypto';
 import type { Context } from 'hono';
 import type { Db } from '../db/client.js';
@@ -480,7 +480,11 @@ export function authRoutes(db: Db) {
       mems.filter((m) => m.membership.acceptedAt).map((m) => m.workspace.id),
     );
     const grants = await db
-      .select({ workspaceId: agents.workspaceId, agentName: agents.name })
+      .select({
+        workspaceId: agents.workspaceId,
+        agentName: agents.name,
+        dismissedAt: agentMembers.dismissedAt,
+      })
       .from(agentMembers)
       .innerJoin(agents, eq(agentMembers.agentId, agents.id))
       .where(
@@ -490,19 +494,33 @@ export function authRoutes(db: Db) {
           ne(agentMembers.role, 'hidden'),
         ),
       );
-    const grantWs = new Map<string, string[]>();
+    const grantWs = new Map<string, { names: string[]; undismissed: number }>();
     for (const g of grants) {
       if (memberWsIds.has(g.workspaceId)) continue;
-      grantWs.set(g.workspaceId, [...(grantWs.get(g.workspaceId) ?? []), g.agentName]);
+      const e = grantWs.get(g.workspaceId) ?? { names: [], undismissed: 0 };
+      e.names.push(g.agentName);
+      if (!g.dismissedAt) e.undismissed++;
+      grantWs.set(g.workspaceId, e);
     }
-    const agentInvites: { workspace_id: string; workspace_name: string; agents: string[] }[] = [];
-    for (const [wsId, agentNames] of grantWs) {
+    const agentInvites: {
+      workspace_id: string;
+      workspace_name: string;
+      agents: string[];
+      dismissed: boolean;
+    }[] = [];
+    for (const [wsId, entry] of grantWs) {
       const [ws] = await db
         .select({ id: workspaces.id, name: workspaces.name })
         .from(workspaces)
         .where(eq(workspaces.id, wsId))
         .limit(1);
-      if (ws) agentInvites.push({ workspace_id: ws.id, workspace_name: ws.name, agents: agentNames });
+      if (ws)
+        agentInvites.push({
+          workspace_id: ws.id,
+          workspace_name: ws.name,
+          agents: entry.names,
+          dismissed: entry.undismissed === 0,
+        });
     }
 
     return c.json({
@@ -654,6 +672,28 @@ export function authRoutes(db: Db) {
       return c.json({ ok: true });
     },
   );
+
+  // Dismiss a "you've been added" banner — stamps dismissed_at on the user's
+  // grant rows for that workspace's agents. Server-side so it sticks across
+  // www/app origins and devices; a brand-new grant still re-shows the card.
+  app.post('/agent-invites/:workspaceId/dismiss', async (c) => {
+    const row = await sessionUser(c);
+    if (!row) return c.json({ error: 'unauthenticated' }, 401);
+    const wsId = c.req.param('workspaceId');
+    await db
+      .update(agentMembers)
+      .set({ dismissedAt: new Date() })
+      .where(
+        and(
+          eq(agentMembers.userId, row.user.id),
+          inArray(
+            agentMembers.agentId,
+            db.select({ id: agents.id }).from(agents).where(eq(agents.workspaceId, wsId)),
+          ),
+        ),
+      );
+    return c.json({ ok: true });
+  });
 
   /** Session lookup for the identity routes below — these must work for a
    * user whose memberships are all pending (no active workspace yet), so they

@@ -557,6 +557,10 @@ export const agentMembers = pgTable(
     notifyPrefs: jsonb('notify_prefs'), // null = inherit users.notifyPrefs
     invitedBy: uuid('invited_by').references(() => users.id),
     acceptedAt: timestamp('accepted_at', { withTimezone: true }),
+    // "You've been added" banner dismissed — server-side so it follows the
+    // account across www/app origins and devices. A NEW grant row (null)
+    // re-shows the banner for that workspace.
+    dismissedAt: timestamp('dismissed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex('agent_members_agent_user').on(t.agentId, t.userId)],

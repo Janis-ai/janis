@@ -36,7 +36,13 @@ export function useMe() {
         invites: { id: string; workspace_name: string }[];
         /** Agent grants on workspaces the user isn't a member of — auto-
          *  accepted, shown as "added to X" rows with a Switch action. */
-        agent_invites: { workspace_id: string; workspace_name: string; agents: string[] }[];
+        agent_invites: {
+          workspace_id: string;
+          workspace_name: string;
+          agents: string[];
+          /** Server-side dismissal — follows the account across origins. */
+          dismissed: boolean;
+        }[];
         support_channel_id: string | null;
         /** Janis operator workspace — unlocks the error-reports surface. */
         operator?: boolean;
