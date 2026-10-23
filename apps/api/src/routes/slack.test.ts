@@ -6,7 +6,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alerts, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackClassicChannels, slackClassicPrefs, slackInstallations, slackMemberLinks, slackPendingInstalls, slackThreads, users, workspaces } from '../db/schema.js';
+import { agentSecrets, agents, alerts, channelBindings, channels, conversations, memberships, messages, pendingActions, sessions, slackClassicChannels, slackClassicPrefs, slackInstallations, slackMemberLinks, slackPendingInstalls, slackThreads, users, workspaces } from '../db/schema.js';
 import { and, eq } from 'drizzle-orm';
 import { generateApiKey, generateSessionToken } from '../lib/crypto.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
@@ -1845,6 +1845,24 @@ describe('public OAuth install', () => {
         marked.push(t);
         return true;
       },
+      bots: async (t) =>
+        t === 'T_MIGR'
+          ? [
+              {
+                name: 'HelpBot',
+                client_key: 'CK_DFBOT',
+                dialogflow: {
+                  agent: 'df-proj-1',
+                  agent_object: { defaultLanguageCode: 'en' },
+                  service_account: {
+                    email: 'sa@df-proj-1.iam.gserviceaccount.com',
+                    key: JSON.stringify({ private_key: 'KEY', client_email: 'sa@df-proj-1' }),
+                  },
+                },
+              },
+              { name: 'BareBot', client_key: 'CK_BARE' },
+            ]
+          : [],
     });
     vi.stubGlobal('fetch', vi.fn(async () => slackOk({ channels: [] })));
     const [p] = await db
@@ -1889,6 +1907,23 @@ describe('public OAuth install', () => {
       custom_alerts: { help: true },
     });
     expect(prefs.find((r) => r.clientKey === '*')?.dmChannelId).toBe('D_MEMBER');
+
+    // subscribed bots came over as legacy-engine agents — DF creds intact
+    const wsAgents = await db.select().from(agents).where(eq(agents.workspaceId, adminWsId));
+    const helpBot = wsAgents.find(
+      (a) => (a.metadata as { legacy_client_key?: string })?.legacy_client_key === 'CK_DFBOT',
+    );
+    expect(helpBot?.name).toBe('HelpBot');
+    expect((helpBot?.config as { engine?: string })?.engine).toBe('dialogflow');
+    const [sa] = await db
+      .select()
+      .from(agentSecrets)
+      .where(and(eq(agentSecrets.agentId, helpBot!.id), eq(agentSecrets.name, 'DIALOGFLOW_SA_JSON')));
+    expect(sa).toBeDefined();
+    const bareBot = wsAgents.find(
+      (a) => (a.metadata as { legacy_client_key?: string })?.legacy_client_key === 'CK_BARE',
+    );
+    expect((bareBot?.config as { engine?: string })?.engine).toBe('monitor');
     setLegacyOps(undefined);
   });
 

@@ -1,13 +1,16 @@
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
+  agentSecrets,
+  agents,
   slackClassicChannels,
   slackClassicPrefs,
   slackInstallations,
   slackMemberLinks,
 } from '../db/schema.js';
+import { encryptSecret } from './secrets.js';
 import { inviteWorkspaceMembers, listSlackChannels, slackApi } from './slack.js';
-import { legacyChannelDocs, markLegacyTeamMigrated } from './legacyMongo.js';
+import { legacyChannelDocs, legacyTeamBots, markLegacyTeamMigrated } from './legacyMongo.js';
 
 /**
  * Self-serve classic→new Slack migration. Replaces the assisted runbook
@@ -37,11 +40,28 @@ export interface MigrationStats {
   training: number;
   memberDms: number;
   dmUnresolved: number;
+  agents: number;
+  agentsNoEngine: number;
   marked: boolean;
   alertChannel: string | null;
 }
 
 const WORDHOP_CLIENT_KEY = process.env.WORDHOP_CLIENT_KEY ?? 'wordhop';
+
+// dialogflow.service_account.key is an IAM key resource whose privateKeyData
+// is the base64-encoded service-account JSON (export-legacy-bots.mjs).
+function decodeSaKey(key: string | undefined): Record<string, unknown> | undefined {
+  if (!key) return undefined;
+  try {
+    const parsed = JSON.parse(key) as { privateKeyData?: string };
+    if (parsed.privateKeyData) {
+      return JSON.parse(Buffer.from(parsed.privateKeyData, 'base64').toString('utf8'));
+    }
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
 
 // Session/volatile keys that would rot the moment they're imported — same
 // list as scripts/import-classic-channels.ts.
@@ -64,6 +84,8 @@ export async function runSlackMigration(
     training: 0,
     memberDms: 0,
     dmUnresolved: 0,
+    agents: 0,
+    agentsNoEngine: 0,
     marked: false,
     alertChannel: null,
   };
@@ -111,6 +133,70 @@ export async function runSlackMigration(
   // 2 — stand wordhop-slack down for the team before anything else heavy:
   // its per-event migrated check drops traffic within seconds of the flip.
   stats.marked = await markLegacyTeamMigrated(pending.teamId);
+
+  // 2b — import the team's subscribed bots as legacy-engine agents. Same
+  // mapping as import-legacy.ts: DF project + service account ride over
+  // intact so agents keep answering on the customer's existing Dialogflow
+  // ES brain (convert-hosted is the per-agent opt-in after). A bot with no
+  // DF config imports as a monitor — it can escalate but won't answer.
+  const bots = await legacyTeamBots(pending.teamId);
+  if (bots.length) {
+    const wsAgents = await db.select().from(agents).where(eq(agents.workspaceId, workspaceId));
+    for (const b of bots) {
+      if (!b.client_key) continue;
+      const saJson = decodeSaKey(b.dialogflow?.service_account?.key);
+      const project = b.dialogflow?.agent;
+      const chatfuelDriven = b.code_lang === 'chatfuel' || b.code_lang === 'manychat';
+      const config = {
+        engine: (project && saJson && !chatfuelDriven ? 'dialogflow' : 'monitor') as
+          | 'dialogflow'
+          | 'monitor',
+        ...(project ? { dialogflow: { project, lang: b.dialogflow?.agent_object?.defaultLanguageCode ?? 'en' } } : {}),
+        legacy: {
+          client_key: b.client_key,
+          ...(b.code_lang ? { code_lang: b.code_lang } : {}),
+          ...(b.takeover_timeout ? { takeover_timeout: b.takeover_timeout } : {}),
+        },
+        greeting_enabled: false,
+      };
+      const metadata = { legacy_client_key: b.client_key, migrated_from: 'wordhopapi' };
+      let agent = wsAgents.find(
+        (a) => (a.metadata as { legacy_client_key?: string })?.legacy_client_key === b.client_key,
+      );
+      if (agent) {
+        await db
+          .update(agents)
+          .set({ name: b.name ?? agent.name, hosted: true, config, metadata })
+          .where(eq(agents.id, agent.id));
+      } else {
+        [agent] = await db
+          .insert(agents)
+          .values({ workspaceId, name: b.name ?? b.client_key, hosted: true, config, metadata })
+          .returning();
+        wsAgents.push(agent);
+      }
+      if (saJson) {
+        const enc = encryptSecret(JSON.stringify(saJson));
+        const [secret] = await db
+          .select()
+          .from(agentSecrets)
+          .where(and(eq(agentSecrets.agentId, agent.id), eq(agentSecrets.name, 'DIALOGFLOW_SA_JSON')))
+          .limit(1);
+        if (secret) {
+          await db
+            .update(agentSecrets)
+            .set({ valueEnc: enc, updatedAt: new Date() })
+            .where(eq(agentSecrets.id, secret.id));
+        } else {
+          await db
+            .insert(agentSecrets)
+            .values({ workspaceId, agentId: agent.id, name: 'DIALOGFLOW_SA_JSON', valueEnc: enc });
+        }
+      }
+      stats.agents++;
+      if (config.engine === 'monitor') stats.agentsNoEngine++;
+    }
+  }
 
   // 3 — reseed classic channel state from the legacy botkit docs.
   const docs = await legacyChannelDocs(pending.teamId);

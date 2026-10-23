@@ -68,8 +68,9 @@ export default function SlackLegacy() {
           <>
             <p>
               <strong>Migration complete.</strong> Your workspace now runs on the new Janis —
-              same Slack experience: transcripts, alerts, and commands. We emailed you the
-              details.
+              same Slack experience: transcripts, alerts, and commands. Your agents came over
+              on their existing Dialogflow engine and answer exactly as before. We emailed you
+              the details.
             </p>
             <a
               className="btn primary"
@@ -117,11 +118,13 @@ export default function SlackLegacy() {
               onClick={() => decide('migrate')}
               disabled={!!busy}
             >
-              {busy === 'migrate' ? 'Requesting…' : 'Move to the new Janis'}
+              {busy === 'migrate' ? 'Migrating…' : 'Move to the new Janis'}
             </button>
             <p className="muted" style={{ fontSize: 13, margin: '6px 0 14px' }}>
               Same Slack experience — transcripts, alerts, and commands — managed from this
-              console. We'll handle the migration for you.
+              console. Your agents move over on their existing Dialogflow engine and keep
+              answering the same way; you can convert any of them to the hosted engine later,
+              per agent.
             </p>
             <p className="muted" style={{ fontSize: 13, textAlign: 'center' }}>
               <a

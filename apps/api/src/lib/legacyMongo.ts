@@ -22,10 +22,49 @@ let opsOverride:
   | {
       channels?: (teamId: string) => Promise<Record<string, unknown>[]>;
       mark?: (teamId: string) => Promise<boolean>;
+      bots?: (teamId: string) => Promise<LegacyBotDoc[]>;
     }
   | undefined;
 export function setLegacyOps(o: typeof opsOverride): void {
   opsOverride = o;
+}
+
+/** A legacy `bots` doc slimmed to what migration imports — Dialogflow creds
+ *  ride nested under `dialogflow.service_account.key` as an IAM key resource
+ *  whose privateKeyData is the base64 SA JSON (export-legacy-bots.mjs). */
+export interface LegacyBotDoc {
+  name?: string;
+  client_key?: string;
+  code_lang?: string;
+  takeover_timeout?: number;
+  dialogflow?: {
+    agent?: string;
+    agent_object?: { defaultLanguageCode?: string };
+    service_account?: { email?: string; key?: string };
+  };
+}
+
+/** The team's actively-subscribed bots: slack_integrations.bot_subscriptions
+ *  client_keys resolved against the `bots` collection. */
+export async function legacyTeamBots(teamId: string): Promise<LegacyBotDoc[]> {
+  if (opsOverride?.bots) return opsOverride.bots(teamId);
+  if (!env.legacyMongoUri) return [];
+  client ??= await MongoClient.connect(env.legacyMongoUri, {
+    serverSelectionTimeoutMS: 2500,
+  });
+  const db = client.db();
+  const integ = await db
+    .collection('slack_integrations')
+    .findOne({ 'slack_params.team_id': teamId }, { projection: { bot_subscriptions: 1 } });
+  const keys = ((integ?.bot_subscriptions as { client_key?: string; active?: boolean }[]) ?? [])
+    .filter((s) => s.active !== false)
+    .map((s) => s.client_key)
+    .filter((k): k is string => !!k);
+  if (!keys.length) return [];
+  return (await db
+    .collection('bots')
+    .find({ client_key: { $in: keys } })
+    .toArray()) as unknown as LegacyBotDoc[];
 }
 
 /** The botkit `channels` collection docs for one team — transcript/training
