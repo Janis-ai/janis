@@ -1691,13 +1691,22 @@ export function slackPublicRoutes(db: Db) {
         .where(eq(slackInstallations.id, thread.installationId))
         .limit(1);
       inst = row;
-    } else {
+    }
+    // A click can only come from the team hosting the card — but one
+    // conversation can anchor threads on sibling installs across teams (a
+    // workspace may run several Slack installs). When the thread points at a
+    // different team than the click, that install is the wrong identity lens:
+    // member lookup runs against its user ids and a real admin gets "not a
+    // member". Re-resolve by the payload's team instead.
+    const clickTeamId = payload.team?.id ?? payload.team_id;
+    if (inst && clickTeamId && inst.teamId !== clickTeamId) inst = undefined;
+    if (!inst) {
       if (
         action.action_id !== 'janis_approve_action' &&
         action.action_id !== 'janis_deny_action'
       )
         return c.json({ ok: true });
-      const teamId = payload.team?.id ?? payload.team_id;
+      const teamId = clickTeamId;
       const [row] = teamId
         ? await db
             .select()

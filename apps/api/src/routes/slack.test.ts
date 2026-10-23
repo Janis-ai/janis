@@ -2435,6 +2435,112 @@ describe('slack concierge (DM to the app)', () => {
   );
 
   it(
+    'approving a concierge card clicked on a sibling team resolves the click install, not the thread install',
+    { timeout: 20000 },
+    async () => {
+    const [concierge] = await db.select().from(agents).where(eq(agents.name, 'Concierge'));
+    const prevOpWs = env.operatorWorkspaceId;
+    env.operatorWorkspaceId = wsId;
+    // The conv's slack_threads row anchors to a DIFFERENT Slack team's
+    // install — same workspace, several installs. Prod hit this: the click
+    // in the T_DM DM was identity-checked against T_ANCHOR's user ids and
+    // a real admin got "not a member".
+    const [anchorInst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: wsId, teamId: 'T_ANCHOR', botToken: 'xoxb-anchor' })
+      .returning();
+    try {
+      await db.update(agents).set({ hosted: true }).where(eq(agents.id, concierge.id));
+      const [jerry] = await db
+        .insert(agents)
+        .values({ workspaceId: wsId, name: 'Click Target', hosted: true })
+        .returning();
+      await db
+        .update(memberships)
+        .set({ role: 'admin' })
+        .where(and(eq(memberships.userId, memberId), eq(memberships.workspaceId, wsId)));
+
+      const calls: { url: string; body: Record<string, unknown> }[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation(async (url: string, init?: { body?: string }) => {
+          calls.push({ url: String(url), body: init?.body ? JSON.parse(init.body) : {} });
+          return new Response('{"ok":true,"ts":"9.9","channel":"D_CONCIERGE"}', { status: 200 });
+        }),
+      );
+
+      await dm('U_DM', 'seed');
+      const [binding] = await db
+        .select()
+        .from(channelBindings)
+        .where(
+          and(
+            eq(channelBindings.channelId, convChannelId),
+            eq(channelBindings.platformUserId, `u:${memberId}:tslackdm`),
+          ),
+        );
+      // Anchor the conversation's thread to the OTHER team's install.
+      await db.insert(slackThreads).values({
+        conversationId: binding.conversationId,
+        installationId: anchorInst.id,
+        channelId: 'C_ANCHOR',
+        ts: '1.1',
+      });
+      const [pa] = await db
+        .insert(pendingActions)
+        .values({
+          workspaceId: wsId,
+          agentId: concierge.id,
+          conversationId: binding.conversationId,
+          toolName: 'apply_knowledge',
+          tool: { builtin: 'apply_knowledge' } as never,
+          args: {
+            workspace_id: wsId,
+            agent_id: jerry.id,
+            entry: 'cross-team click knowledge',
+          } as never,
+        })
+        .returning();
+
+      // The member approves from the T_DM install — the thread points at
+      // T_ANCHOR, so without team re-resolution this click denies.
+      const click = await signedPost(
+        `payload=${encodeURIComponent(
+          JSON.stringify({
+            type: 'block_actions',
+            user: { id: 'U_DM' },
+            team: { id: 'T_DM' },
+            container: { channel_id: 'D_CONCIERGE', message_ts: '9.9' },
+            message: { ts: '9.9' },
+            actions: [{ action_id: 'janis_approve_action', value: pa.id }],
+          }),
+        )}`,
+        '/slack/interactions',
+      );
+      expect(click.status).toBe(200);
+
+      const [decided] = await db
+        .select({ status: pendingActions.status })
+        .from(pendingActions)
+        .where(eq(pendingActions.id, pa.id));
+      expect(decided.status).toBe('approved');
+      expect(calls.some((c) => String(c.body.text).includes('not a member'))).toBe(false);
+    } finally {
+      env.operatorWorkspaceId = prevOpWs;
+      await db.update(agents).set({ hosted: false }).where(eq(agents.name, 'Concierge'));
+      await db
+        .update(memberships)
+        .set({ role: 'member' })
+        .where(and(eq(memberships.userId, memberId), eq(memberships.workspaceId, wsId)));
+      await db
+        .delete(slackThreads)
+        .where(eq(slackThreads.installationId, anchorInst.id));
+      await db.delete(slackInstallations).where(eq(slackInstallations.id, anchorInst.id));
+    }
+    },
+  );
+
+  it(
     'dismissing a parked card rewrites it to the denied outcome and relays Dismissed',
     { timeout: 20000 },
     async () => {
