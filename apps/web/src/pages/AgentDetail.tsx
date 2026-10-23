@@ -325,6 +325,27 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     onError: (e) => setError(e.message),
   });
 
+  const convertHosted = useMutation({
+    mutationFn: () =>
+      api<{ imported: number; phrases: number }>(`/api/agents/${agent.id}/convert-hosted`, {
+        method: 'POST',
+      }),
+    onSuccess: async (r) => {
+      refresh();
+      await confirm(
+        `Converted — ${r.imported} Dialogflow intents (${r.phrases} phrases) imported into Knowledge. The Dialogflow agent is untouched; rollback is available here.`,
+        [{ key: 'ok', label: 'OK' }],
+      );
+    },
+    onError: (e) => setError(e.message),
+  });
+
+  const rollbackLegacy = useMutation({
+    mutationFn: () => api(`/api/agents/${agent.id}/rollback-legacy`, { method: 'POST' }),
+    onSuccess: refresh,
+    onError: (e) => setError(e.message),
+  });
+
   const addRule = useMutation({
     mutationFn: (body: { kind: string; config: Record<string, unknown> }) =>
       api('/api/rules', {
@@ -557,6 +578,28 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
 
       {isAdmin && hasDrafts && (
         <div className="row" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
+          {section === 'settings' && (agent.config as { engine?: string } | null)?.engine === 'dialogflow' && (
+            <button
+              className="btn"
+              disabled={convertHosted.isPending}
+              onClick={async () => {
+                if (await confirm('Convert to a hosted agent? Its Dialogflow intents import into Knowledge and Janis becomes the brain — the Dialogflow agent stays intact for rollback.', [{ key: 'ok', label: 'Convert' }, { key: 'cancel', label: 'Cancel' }]) === 'ok') convertHosted.mutate();
+              }}
+            >
+              {convertHosted.isPending ? 'Converting…' : 'Convert to hosted'}
+            </button>
+          )}
+          {section === 'settings' && !!(agent.metadata as Record<string, unknown> | undefined)?.legacy_engine && (
+            <button
+              className="btn"
+              disabled={rollbackLegacy.isPending}
+              onClick={async () => {
+                if (await confirm('Revert to the legacy Dialogflow engine? The imported knowledge stays but the bot answers via Dialogflow again.', [{ key: 'ok', label: 'Revert' }, { key: 'cancel', label: 'Cancel' }]) === 'ok') rollbackLegacy.mutate();
+              }}
+            >
+              {rollbackLegacy.isPending ? 'Reverting…' : 'Revert to legacy engine'}
+            </button>
+          )}
           {section === 'settings' && (
             <button
               className="btn danger"

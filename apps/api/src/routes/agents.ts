@@ -58,6 +58,8 @@ import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { processEvents } from '../services/ingest.js';
 import { toAgent } from '../lib/serializers.js';
+import { stripe } from '../lib/stripe.js';
+import { listIntentsV2, type ServiceAccount } from '../lib/dialogflow.js';
 import { sendEmail } from '../lib/notify.js';
 import { audit } from '../lib/audit.js';
 import { invalidateChannelCache } from '../lib/channels.js';
@@ -1983,6 +1985,121 @@ export function agentRoutes(db: Db) {
     return c.json({ ok: true });
   });
 
+  // Classic → hosted upgrade for migrated bots: pull the Dialogflow agent's
+  // intents into a knowledge doc, snapshot the legacy engine for rollback,
+  // then flip config.engine off 'dialogflow' so the hosted pipeline answers.
+  // The DF agent itself is untouched — rollback restores the snapshot.
+  app.post('/:id/convert-hosted', agentAdmin, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const cfg = (agent.config ?? {}) as {
+      engine?: string;
+      dialogflow?: { project?: string; lang?: string };
+    };
+    if (cfg.engine !== 'dialogflow')
+      return c.json({ error: 'not a legacy (dialogflow-engine) agent' }, 409);
+    if (!cfg.dialogflow?.project)
+      return c.json({ error: 'legacy bot has no dialogflow project configured' }, 409);
+    const secrets = await loadSecretsMap(db, agent.id);
+    let sa: ServiceAccount | undefined;
+    try {
+      sa = JSON.parse(secrets.DIALOGFLOW_SA_JSON ?? '');
+    } catch {}
+    if (!sa?.client_email || !sa.private_key)
+      return c.json({ error: 'legacy bot missing DIALOGFLOW_SA_JSON secret' }, 409);
+
+    const intents = await listIntentsV2(cfg.dialogflow.project, sa).catch(() => null);
+    if (!intents) return c.json({ error: 'dialogflow intent list failed' }, 502);
+
+    // One knowledge doc — per-intent files would blow MAX_KNOWLEDGE_SOURCES
+    // on trained agents. Q/A sections match how FAQ knowledge reads.
+    const sections: string[] = [];
+    let phraseCount = 0;
+    for (const i of intents) {
+      const phrases = ((i.trainingPhrases ?? []) as { parts?: { text?: string }[] }[])
+        .map((p) => (p.parts ?? []).map((pt) => pt.text ?? '').join('').trim())
+        .filter(Boolean);
+      const answers = ((i.messages ?? []) as { text?: { text?: string[] } }[])
+        .flatMap((m) => m.text?.text ?? [])
+        .filter((t) => typeof t === 'string' && t.trim());
+      if (!phrases.length && !answers.length && !i.isFallback) continue;
+      phraseCount += phrases.length;
+      sections.push(
+        [
+          `## ${i.displayName ?? 'intent'}${i.isFallback ? ' (default fallback)' : ''}`,
+          ...phrases.map((p: string) => `Q: ${p}`),
+          ...(answers.length
+            ? answers.map((a: string) => `A: ${a}`)
+            : ['A: [rich response — rebuild in new Janis]']),
+        ].join('\n'),
+      );
+    }
+    if (!sections.length)
+      return c.json({ error: 'no intents with content found on the Dialogflow agent' }, 422);
+    const text = `# Dialogflow intent import — ${agent.name}\n\n${sections.join('\n\n')}`;
+    if (text.length > MAX_KNOWLEDGE_CHARS)
+      return c.json(
+        { error: `intent export too large (${text.length} chars > ${MAX_KNOWLEDGE_CHARS})` },
+        422,
+      );
+    const [{ count }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.agentId, agent.id));
+    if (count >= MAX_KNOWLEDGE_SOURCES)
+      return c.json({ error: `knowledge file limit reached (${MAX_KNOWLEDGE_SOURCES})` }, 409);
+    const [file] = await db
+      .insert(knowledgeFiles)
+      .values({
+        workspaceId: c.get('workspaceId'),
+        agentId: agent.id,
+        name: 'dialogflow-intents.md',
+        mimeType: 'text/markdown',
+        sizeBytes: Buffer.byteLength(text),
+        text,
+      })
+      .returning();
+
+    const metadata = {
+      ...((agent.metadata ?? {}) as Record<string, unknown>),
+      legacy_engine: { engine: cfg.engine, dialogflow: cfg.dialogflow },
+    };
+    const nextCfg = { ...cfg };
+    delete nextCfg.engine;
+    await db.update(agents).set({ config: nextCfg, metadata }).where(eq(agents.id, agent.id));
+    await audit(db, {
+      workspaceId: c.get('workspaceId'),
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'agent.convert_hosted',
+      targetType: 'agent',
+      targetId: agent.id,
+    });
+    return c.json({
+      ok: true,
+      intents: intents.length,
+      imported: sections.length,
+      phrases: phraseCount,
+      file_id: file.id,
+    });
+  });
+
+  // Undo convert-hosted — restore the snapshotted engine/config so the
+  // Dialogflow pipeline answers again. The imported knowledge file stays.
+  app.post('/:id/rollback-legacy', agentAdmin, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const snap = ((agent.metadata ?? {}) as {
+      legacy_engine?: { engine?: string; dialogflow?: unknown };
+    }).legacy_engine;
+    if (!snap?.engine) return c.json({ error: 'no legacy engine snapshot' }, 404);
+    const cfg = { ...((agent.config ?? {}) as Record<string, unknown>), engine: snap.engine, dialogflow: snap.dialogflow };
+    const metadata = { ...((agent.metadata ?? {}) as Record<string, unknown>) };
+    delete metadata.legacy_engine;
+    await db.update(agents).set({ config: cfg, metadata }).where(eq(agents.id, agent.id));
+    return c.json({ ok: true });
+  });
+
   app.delete('/:id', agentAdmin, async (c) => {
     const agentId = c.req.param('id');
     const workspaceId = c.get('workspaceId');
@@ -2033,6 +2150,20 @@ export function agentRoutes(db: Db) {
         .returning();
     });
     if (!row) return c.json({ error: 'not found' }, 404);
+    // A migrated bot's legacy Stripe sub survives its Postgres row — cancel
+    // it or the customer keeps paying for a bot that no longer exists.
+    const legacySubId = (
+      (row.metadata ?? {}) as { legacy_stripe?: { subscription_id?: string } }
+    ).legacy_stripe?.subscription_id;
+    let legacySubCanceled = false;
+    if (legacySubId) {
+      try {
+        await stripe()?.subscriptions.cancel(legacySubId);
+        legacySubCanceled = true;
+      } catch (err) {
+        console.error(`[agents] legacy sub ${legacySubId} cancel failed:`, err);
+      }
+    }
     await audit(db, {
       workspaceId,
       userId: c.get('user').id,
@@ -2041,7 +2172,7 @@ export function agentRoutes(db: Db) {
       targetType: 'agent',
       targetId: agentId,
     });
-    return c.json({ ok: true });
+    return c.json({ ok: true, legacy_sub_canceled: legacySubCanceled });
   });
 
   // ---- Agent members: per-agent role / identity / notification overrides ----

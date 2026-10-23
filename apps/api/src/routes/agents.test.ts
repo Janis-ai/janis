@@ -6,9 +6,11 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentConnections, agents, agentTests, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
+import { agentConnections, agentSecrets, agents, agentTests, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken } from '../lib/crypto.js';
+import { generateKeyPairSync } from 'node:crypto';
 import { encryptSecret } from '../lib/secrets.js';
+import { setStripeClient } from '../lib/stripe.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { env } from '../env.js';
 import { toolsFor } from '../lib/toolExec.js';
@@ -1873,5 +1875,148 @@ describe('platform tools (builtin-tools)', () => {
     });
     expect(same.status).toBe(200);
     void fa;
+  });
+});
+
+describe('legacy dialogflow → hosted conversion', () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const SA_JSON = JSON.stringify({
+    client_email: 'df@test.iam.gserviceaccount.com',
+    private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    project_id: 'legacy-proj',
+  });
+
+  const stubDialogflow = () =>
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.includes('oauth2.googleapis.com'))
+          return new Response(JSON.stringify({ access_token: 'ya29.test', expires_in: 3600 }));
+        if (u.includes('/agent/intents'))
+          return new Response(
+            JSON.stringify({
+              intents: [
+                {
+                  displayName: 'greeting',
+                  trainingPhrases: [{ parts: [{ text: 'hi' }, { text: ' there' }] }],
+                  messages: [{ text: { text: ['Hello!'] } }],
+                },
+                {
+                  displayName: 'rich card',
+                  trainingPhrases: [{ parts: [{ text: 'show me' }] }],
+                  messages: [{ payload: { facebook: {} } }],
+                },
+              ],
+            }),
+          );
+        return new Response('{}');
+      }),
+    );
+
+  const legacyAgentId = async () => {
+    const res = await postAgent(parentCookie);
+    const { agent } = (await res.json()) as { agent: { id: string; workspaceId?: string } };
+    const [row] = await db
+      .update(agents)
+      .set({
+        config: { engine: 'dialogflow', dialogflow: { project: 'legacy-proj', lang: 'en' } },
+      })
+      .where(eq(agents.id, agent.id))
+      .returning();
+    await db.insert(agentSecrets).values({
+      workspaceId: row.workspaceId,
+      agentId: row.id,
+      name: 'DIALOGFLOW_SA_JSON',
+      valueEnc: encryptSecret(SA_JSON),
+    });
+    return row.id;
+  };
+
+  it('imports intents as knowledge and flips the engine to hosted', async () => {
+    stubDialogflow();
+    const id = await legacyAgentId();
+    const res = await app.request(`/api/agents/${id}/convert-hosted`, {
+      method: 'POST',
+      headers: { cookie: parentCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { imported: number; phrases: number; file_id: string };
+    expect(body.imported).toBe(2);
+    expect(body.phrases).toBe(2);
+    const [row] = await db.select().from(agents).where(eq(agents.id, id));
+    expect((row.config as { engine?: string }).engine).toBeUndefined();
+    expect(
+      (row.metadata as { legacy_engine?: { engine?: string } }).legacy_engine?.engine,
+    ).toBe('dialogflow');
+    const files = await db.select().from(knowledgeFiles).where(eq(knowledgeFiles.agentId, id));
+    expect(files).toHaveLength(1);
+    expect(files[0].text).toContain('Q: hi there');
+    expect(files[0].text).toContain('A: Hello!');
+    expect(files[0].text).toContain('[rich response');
+  });
+
+  it('rollback restores the dialogflow engine snapshot', async () => {
+    stubDialogflow();
+    const id = await legacyAgentId();
+    await app.request(`/api/agents/${id}/convert-hosted`, {
+      method: 'POST',
+      headers: { cookie: parentCookie },
+    });
+    const res = await app.request(`/api/agents/${id}/rollback-legacy`, {
+      method: 'POST',
+      headers: { cookie: parentCookie },
+    });
+    expect(res.status).toBe(200);
+    const [row] = await db.select().from(agents).where(eq(agents.id, id));
+    expect((row.config as { engine?: string }).engine).toBe('dialogflow');
+    expect((row.metadata as { legacy_engine?: unknown }).legacy_engine).toBeUndefined();
+  });
+
+  it('refuses a non-legacy agent', async () => {
+    const res = await postAgent(parentCookie);
+    const { agent } = (await res.json()) as { agent: { id: string } };
+    const conv = await app.request(`/api/agents/${agent.id}/convert-hosted`, {
+      method: 'POST',
+      headers: { cookie: parentCookie },
+    });
+    expect(conv.status).toBe(409);
+  });
+});
+
+describe('legacy stripe guard on delete', () => {
+  it('cancels the migrated bot legacy subscription on delete', async () => {
+    env.stripeSecret = 'sk_test_fake'; // stripe() short-circuits on empty key
+    const cancel = vi.fn(async () => ({}));
+    setStripeClient({ subscriptions: { cancel } } as never);
+    const res = await postAgent(parentCookie);
+    const { agent } = (await res.json()) as { agent: { id: string } };
+    await db
+      .update(agents)
+      .set({ metadata: { legacy_stripe: { subscription_id: 'sub_legacy_1' } } })
+      .where(eq(agents.id, agent.id));
+    const del = await app.request(`/api/agents/${agent.id}`, {
+      method: 'DELETE',
+      headers: { cookie: parentCookie },
+    });
+    expect(del.status).toBe(200);
+    expect(((await del.json()) as { legacy_sub_canceled?: boolean }).legacy_sub_canceled).toBe(true);
+    expect(cancel).toHaveBeenCalledWith('sub_legacy_1');
+    setStripeClient(null);
+  });
+
+  it('leaves plain agents alone — no cancel, no flag', async () => {
+    env.stripeSecret = 'sk_test_fake';
+    const cancel = vi.fn(async () => ({}));
+    setStripeClient({ subscriptions: { cancel } } as never);
+    const res = await postAgent(parentCookie);
+    const { agent } = (await res.json()) as { agent: { id: string } };
+    const del = await app.request(`/api/agents/${agent.id}`, {
+      method: 'DELETE',
+      headers: { cookie: parentCookie },
+    });
+    expect(((await del.json()) as { legacy_sub_canceled?: boolean }).legacy_sub_canceled).toBe(false);
+    expect(cancel).not.toHaveBeenCalled();
+    setStripeClient(null);
   });
 });
