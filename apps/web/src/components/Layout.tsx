@@ -1216,12 +1216,17 @@ export default function Layout() {
             <span>{data.workspace.name}</span>
           </div>
         )}
-        <NavLink to="/conversations" className={({ isActive }) => `nav-indent${scopedActive('inbox')({ isActive }) ? ' active' : ''}`}>
-          <span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>
-          {(ctxAgent ? agentAttention : attention)?.attention ? (
-            <span className="nav-badge">{(ctxAgent ? agentAttention : attention)!.attention}</span>
-          ) : null}
-        </NavLink>
+        {/* Zero agents = nothing to inbox — /conversations redirects to
+            /welcome anyway, so don't offer the empty list in the nav.
+            Still shown while agents load so real workspaces never flicker. */}
+        {(!agentsData || agentsData.agents.length > 0) && (
+          <NavLink to="/conversations" className={({ isActive }) => `nav-indent${scopedActive('inbox')({ isActive }) ? ' active' : ''}`}>
+            <span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>
+            {(ctxAgent ? agentAttention : attention)?.attention ? (
+              <span className="nav-badge">{(ctxAgent ? agentAttention : attention)!.attention}</span>
+            ) : null}
+          </NavLink>
+        )}
         <NavLink to="/agents" end className="nav-indent"><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>
         <NavLink to="/contacts" className={({ isActive }) => `nav-indent${scopedActive('contacts')({ isActive }) ? ' active' : ''}`}><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
         <NavLink to="/campaigns" className={({ isActive }) => `nav-indent${scopedActive('campaigns')({ isActive }) ? ' active' : ''}`}><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
