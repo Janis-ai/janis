@@ -49,6 +49,10 @@ export function useMe() {
       }>('/auth/me'),
     retry: false,
     staleTime: 60_000,
+    // The global default disables focus refetches — without this a
+    // long-lived tab holds /me for the whole session and stale
+    // agent_invites (grants dismissed elsewhere) keep rendering.
+    refetchOnWindowFocus: true,
   });
 }
 

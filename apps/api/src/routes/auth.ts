@@ -523,6 +523,9 @@ export function authRoutes(db: Db) {
         });
     }
 
+    // Session-shaped payload (workspaces, grants, operator flags) — never
+    // let a browser/proxy heuristic cache serve it stale.
+    c.header('cache-control', 'no-store');
     return c.json({
       user: toWorkspaceUser(row.user, active?.membership.role ?? 'member'),
       workspace: active

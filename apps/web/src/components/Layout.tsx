@@ -380,13 +380,16 @@ export default function Layout() {
     try { return JSON.parse(localStorage.getItem('janis.grant-dismissed') ?? '{}'); } catch { return {}; }
   });
   const grantSig = (ai: { agents: string[] }) => [...ai.agents].sort().join(' ');
+  const queryClient = useQueryClient();
   const dismissGrant = (ai: { workspace_id: string; agents: string[] }) => {
     const next = { ...dismissedGrants, [ai.workspace_id]: grantSig(ai) };
     setDismissedGrants(next);
     try { localStorage.setItem('janis.grant-dismissed', JSON.stringify(next)); } catch {}
     // Server-side too — localStorage is per-origin, so a dismiss on
     // app.janis.ai otherwise reappears on www.janis.ai (and other devices).
-    return api(`/auth/agent-invites/${ai.workspace_id}/dismiss`, { method: 'POST' }).catch(() => {});
+    return api(`/auth/agent-invites/${ai.workspace_id}/dismiss`, { method: 'POST' })
+      .then(() => queryClient.invalidateQueries({ queryKey: ['me'] }))
+      .catch(() => {});
   };
   // Below the push breakpoint the dock is a drawer — two columns or an
   // 840px panel can't fit. CSS already hides the split toggle under
