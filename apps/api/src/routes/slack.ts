@@ -717,7 +717,26 @@ export function slackApiRoutes(db: Db) {
     }
     deleteCookie(c, PENDING_COOKIE, { path: '/' });
     await db.delete(slackPendingInstalls).where(eq(slackPendingInstalls.id, row.id));
-    if (decision === 'keep') return c.json({ claimed: false, kept: true });
+    if (decision === 'keep') {
+      // Dual-owned team — an install slipped in while classic was still
+      // live (the pre-guard bug). "Keep" means classic stays authoritative,
+      // so the new-mode binding comes out with it. Only when the doc is
+      // verifiably live — on an 'unknown' lookup the install may be the
+      // only working side.
+      if (legacy === 'live') {
+        const [inst] = await db
+          .select()
+          .from(slackInstallations)
+          .where(eq(slackInstallations.teamId, row.teamId))
+          .limit(1);
+        if (inst) {
+          await db.delete(slackThreads).where(eq(slackThreads.installationId, inst.id));
+          await db.delete(slackMemberLinks).where(eq(slackMemberLinks.installationId, inst.id));
+          await db.delete(slackInstallations).where(eq(slackInstallations.id, inst.id));
+        }
+      }
+      return c.json({ claimed: false, kept: true });
+    }
     // The team may have been bound meanwhile (someone else claimed it, or a
     // session-bound reinstall) — never double-bind.
     const [existing] = await db
@@ -1030,40 +1049,6 @@ export function slackPublicRoutes(db: Db) {
     workspaceId ??= sess?.workspaceId;
     userId ??= sess?.userId;
 
-    // A Slack team binds to exactly one Janis workspace. Reinstalls refresh
-    // the row (threads anchored on it die with the old token's channel
-    // state); a team already owned by a DIFFERENT workspace is refused —
-    // silently rebinding would leak that customer's alerts.
-    const [existing] = await db
-      .select()
-      .from(slackInstallations)
-      .where(eq(slackInstallations.teamId, team.id))
-      .limit(1);
-    if (existing) {
-      if (!workspaceId) {
-        await db
-          .update(slackInstallations)
-          .set({
-            botToken: accessToken,
-            installerSlackUserId: data.authed_user?.id ?? existing.installerSlackUserId,
-            installerUserToken: data.authed_user?.access_token ?? existing.installerUserToken,
-          })
-          .where(eq(slackInstallations.id, existing.id));
-        return c.text(
-          `Slack is already connected to Janis${existing.teamName ? ` for ${existing.teamName}` : ''} — sign in to manage it.`,
-        );
-      }
-      if (existing.workspaceId !== workspaceId) {
-        return c.text(
-          'That Slack workspace is already connected to a different Janis workspace — disconnect it there first.',
-          409,
-        );
-      }
-      await db.delete(slackThreads).where(eq(slackThreads.installationId, existing.id));
-      await db.delete(slackMemberLinks).where(eq(slackMemberLinks.installationId, existing.id));
-      await db.delete(slackInstallations).where(eq(slackInstallations.id, existing.id));
-    }
-
     // Park a completed grant until an admin session decides what to do with
     // it — POST /api/slack/claim binds it into their workspace.
     const parkGrant = async (redirect: string) => {
@@ -1093,7 +1078,65 @@ export function slackPublicRoutes(db: Db) {
     // new-mode row — that severs its classic traffic with no way back from
     // either UI. Park the grant and let the interstitial decide; a failed
     // lookup parks too (fail closed, not into a severed install).
-    if ((await legacyTeamState(team.id)) !== 'none') {
+    const legacyState = await legacyTeamState(team.id);
+
+    // A Slack team binds to exactly one Janis workspace. Reinstalls refresh
+    // the grant IN PLACE — deleting the row would cascade into the imported
+    // slack_classic_* state, threads, and member links anchored on it, and
+    // silently flip a migrated install back to new mode. A team owned by a
+    // DIFFERENT workspace is refused — silently rebinding would leak that
+    // customer's alerts.
+    const [existing] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, team.id))
+      .limit(1);
+    if (existing) {
+      const refresh = {
+        botToken: accessToken,
+        teamName: team.name ?? existing.teamName,
+        installerSlackUserId: data.authed_user?.id ?? existing.installerSlackUserId,
+        installerUserToken: data.authed_user?.access_token ?? existing.installerUserToken,
+      };
+      if (!workspaceId) {
+        await db
+          .update(slackInstallations)
+          .set(refresh)
+          .where(eq(slackInstallations.id, existing.id));
+        // Dual-owned team (install slipped in while classic is live): the
+        // chooser still applies once the installer signs in.
+        if (legacyState !== 'none') return parkGrant('/login?slack=pending');
+        return c.text(
+          `Slack is already connected to Janis${existing.teamName ? ` for ${existing.teamName}` : ''} — sign in to manage it.`,
+        );
+      }
+      if (existing.workspaceId !== workspaceId) {
+        return c.text(
+          'That Slack workspace is already connected to a different Janis workspace — disconnect it there first.',
+          409,
+        );
+      }
+      await db
+        .update(slackInstallations)
+        .set({ ...refresh, installerUserId: userId ?? existing.installerUserId })
+        .where(eq(slackInstallations.id, existing.id));
+      if (data.authed_user?.id && userId) {
+        await db
+          .insert(slackMemberLinks)
+          .values({
+            installationId: existing.id,
+            slackUserId: data.authed_user.id,
+            userId,
+          })
+          .onConflictDoNothing();
+      }
+      if (legacyState !== 'none') return parkGrant('/slack/legacy');
+      return c.redirect(
+        `${requestWebOrigin(c)}${returnPath ? withSlackConnectedFlag(returnPath) : '/settings?slack=connected'}`,
+      );
+    }
+
+    if (legacyState !== 'none') {
       return parkGrant(workspaceId ? '/slack/legacy' : '/login?slack=pending');
     }
 
@@ -1113,9 +1156,7 @@ export function slackPublicRoutes(db: Db) {
         installerUserId: userId || null,
         installerSlackUserId: data.authed_user?.id ?? null,
         installerUserToken: data.authed_user?.access_token ?? null,
-        // a re-install of a migrated workspace keeps the cutover flag — the
-        // fresh granular token upgrades scopes without handing traffic back
-        migrated: existing?.migrated ?? false,
+        migrated: false,
       })
       .returning();
     if (inst.installerUserId && inst.installerSlackUserId) {
@@ -1129,8 +1170,7 @@ export function slackPublicRoutes(db: Db) {
         .onConflictDoNothing();
     }
     await chooseAlertChannel(db, inst);
-    // Re-installs (token refresh) already said hello once.
-    if (!existing) void welcomeInstallerDm(inst).catch(() => {});
+    void welcomeInstallerDm(inst).catch(() => {});
     return c.redirect(
       `${requestWebOrigin(c)}${returnPath ? withSlackConnectedFlag(returnPath) : '/settings?slack=connected'}`,
     );

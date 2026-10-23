@@ -1448,6 +1448,94 @@ describe('public OAuth install', () => {
     expect(inst.installerUserId).toBe(adminUserId);
   });
 
+  it('a same-workspace reinstall refreshes in place — migrated flag + classic state survive', async () => {
+    setLegacyTeamLookup(async () => 'none'); // already migrated — no re-park
+    stubOAuth('T_REINST');
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({
+        workspaceId: adminWsId,
+        teamId: 'T_REINST',
+        teamName: 'Old Name',
+        botToken: 'xoxb-old',
+        migrated: true,
+      })
+      .returning();
+    await db.insert(slackClassicChannels).values({
+      installationId: inst.id,
+      sourceChannel: 'C_T',
+      slackChannelId: 'C_T',
+      name: 'transcripts',
+      team: 'T_REINST',
+      isWordhopChannel: true,
+      paused: true,
+    });
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(await pubState())}`,
+      { headers: { cookie: adminCookie } },
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(`${env.webOrigin}/settings?slack=connected`);
+    const [after] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.teamId, 'T_REINST'));
+    expect(after.id).toBe(inst.id);
+    expect(after.migrated).toBe(true);
+    expect(after.botToken).toBe('xoxb-T_REINST');
+    expect(after.teamName).toBe('Team T_REINST');
+    expect(
+      await db
+        .select()
+        .from(slackClassicChannels)
+        .where(eq(slackClassicChannels.installationId, inst.id)),
+    ).toHaveLength(1);
+    expect(
+      await db.select().from(slackPendingInstalls).where(eq(slackPendingInstalls.teamId, 'T_REINST')),
+    ).toHaveLength(0);
+  });
+
+  it('a signed-in reinstall on a dual-owned team refreshes in place and still parks', async () => {
+    setLegacyTeamLookup(async () => 'live');
+    stubOAuth('T_DUAL');
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: adminWsId, teamId: 'T_DUAL', botToken: 'xoxb-old' })
+      .returning();
+    const res = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(await pubState())}`,
+      { headers: { cookie: adminCookie } },
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(`${env.webOrigin}/slack/legacy`);
+    // the install was refreshed, not deleted — the chooser decides its fate
+    const [after] = await db
+      .select()
+      .from(slackInstallations)
+      .where(eq(slackInstallations.id, inst.id));
+    expect(after.botToken).toBe('xoxb-T_DUAL');
+    expect(
+      await db.select().from(slackPendingInstalls).where(eq(slackPendingInstalls.teamId, 'T_DUAL')),
+    ).toHaveLength(1);
+  });
+
+  it("'keep' on a dual-owned team removes the new install — classic stays authoritative", async () => {
+    setLegacyTeamLookup(async () => 'live');
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: adminWsId, teamId: 'T_KEEPDUAL', botToken: 'xoxb-dual' })
+      .returning();
+    const [p] = await db
+      .insert(slackPendingInstalls)
+      .values({ teamId: 'T_KEEPDUAL', botToken: 'xoxb-keep', expiresAt: new Date(Date.now() + 3600_000) })
+      .returning();
+    const res = await claimWith(p.id, 'keep');
+    expect(await res.json()).toEqual({ claimed: false, kept: true });
+    expect(
+      await db.select().from(slackInstallations).where(eq(slackInstallations.id, inst.id)),
+    ).toHaveLength(0);
+  });
+
   it('claims a pending install into the signed-in workspace exactly once', async () => {
     stubOAuth('T_CLAIM');
     const oauth = await api.request(
@@ -1622,7 +1710,7 @@ describe('public OAuth install', () => {
     ).toHaveLength(0);
   });
 
-  it('reinstall replaces the row, clears threads, and keeps the migrated flag', async () => {
+  it('reinstall refreshes the row in place — threads and the migrated flag survive', async () => {
     const { hash, preview } = generateApiKey();
     const [agent] = await db
       .insert(agents)
@@ -1652,11 +1740,12 @@ describe('public OAuth install', () => {
       .from(slackInstallations)
       .where(eq(slackInstallations.teamId, 'T_MIG2'));
     expect(insts).toHaveLength(1);
+    expect(insts[0].id).toBe(inst0.id);
     expect(insts[0].botToken).toBe('xoxb-T_MIG2');
     expect(insts[0].migrated).toBe(true);
     expect(
       await db.select().from(slackThreads).where(eq(slackThreads.installationId, inst0.id)),
-    ).toHaveLength(0);
+    ).toHaveLength(1);
   });
 
   it('parks a legacy-team install and refuses a decisionless claim', async () => {
