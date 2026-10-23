@@ -1389,6 +1389,15 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   display: flex; align-items: center; gap: 10px; padding: 10px 0;
   border-top: 1px solid var(--border);
 }
+/* Foreign-bound asset action — Take over button with the owning
+   workspace/account as a caption stacked beneath, right-aligned. */
+.asset-bound {
+  display: flex; flex-direction: column; align-items: flex-end;
+  gap: 4px; flex-shrink: 0; max-width: 50%; text-align: right;
+}
+.asset-bound-note {
+  font-size: 12px; line-height: 1.35; overflow-wrap: anywhere;
+}
 .webhook-details { margin-top: 8px; font-size: 12px; }
 /* Big left chevron — the native summary marker can't be sized or restyled. */
 .appearance-details > summary,

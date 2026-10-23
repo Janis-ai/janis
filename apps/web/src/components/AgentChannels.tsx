@@ -1196,11 +1196,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                           <span className="muted">Messenger on {msgr.agent_name}</span>
                         )
                       ) : pg.bound ? (
-                        <>
-                          <span className="muted" title={`bound to ${pg.bound.agent_name} on ${pg.bound.workspace_name}`}>
-                            on {pg.bound.workspace_name} · {pg.bound.agent_name}
-                            {pg.bound.owner_email ? ` (${pg.bound.owner_email})` : ''}
-                          </span>
+                        <div className="asset-bound">
                           <button className="btn" disabled={link.isPending}
                             onClick={async () => {
                               if (await confirm(
@@ -1210,7 +1206,12 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                             }}>
                             Take over
                           </button>
-                        </>
+                          <span className="muted asset-bound-note"
+                            title={`bound to ${pg.bound.agent_name} on ${pg.bound.workspace_name}`}>
+                            on {pg.bound.workspace_name} · {pg.bound.agent_name}
+                            {pg.bound.owner_email ? ` (${pg.bound.owner_email})` : ''}
+                          </span>
+                        </div>
                       ) : (
                         <button className="btn" disabled={link.isPending}
                           onClick={() => link.mutate({ kind: 'messenger', page_id: pg.id })}>
@@ -1228,11 +1229,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                             <span className="muted">Instagram on {igCh.agent_name}</span>
                           )
                         ) : pg.instagram.bound ? (
-                          <>
-                            <span className="muted" title={`bound to ${pg.instagram.bound.agent_name} on ${pg.instagram.bound.workspace_name}`}>
-                              on {pg.instagram.bound.workspace_name} · {pg.instagram.bound.agent_name}
-                              {pg.instagram.bound.owner_email ? ` (${pg.instagram.bound.owner_email})` : ''}
-                            </span>
+                          <div className="asset-bound">
                             <button className="btn" disabled={link.isPending}
                               onClick={async () => {
                                 if (await confirm(
@@ -1242,7 +1239,12 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                               }}>
                               Take over
                             </button>
-                          </>
+                            <span className="muted asset-bound-note"
+                              title={`bound to ${pg.instagram.bound.agent_name} on ${pg.instagram.bound.workspace_name}`}>
+                              on {pg.instagram.bound.workspace_name} · {pg.instagram.bound.agent_name}
+                              {pg.instagram.bound.owner_email ? ` (${pg.instagram.bound.owner_email})` : ''}
+                            </span>
+                          </div>
                         ) : (
                           <button className="btn" disabled={link.isPending}
                             onClick={() => link.mutate({ kind: 'instagram', page_id: pg.id })}>
@@ -1277,11 +1279,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                             <span className="muted">WhatsApp on {wa.agent_name}</span>
                           )
                         ) : n.bound ? (
-                          <>
-                            <span className="muted" title={`bound to ${n.bound.agent_name} on ${n.bound.workspace_name}`}>
-                              on {n.bound.workspace_name} · {n.bound.agent_name}
-                              {n.bound.owner_email ? ` (${n.bound.owner_email})` : ''}
-                            </span>
+                          <div className="asset-bound">
                             <button className="btn" disabled={link.isPending}
                               onClick={async () => {
                                 if (await confirm(
@@ -1291,7 +1289,12 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                               }}>
                               Take over
                             </button>
-                          </>
+                            <span className="muted asset-bound-note"
+                              title={`bound to ${n.bound.agent_name} on ${n.bound.workspace_name}`}>
+                              on {n.bound.workspace_name} · {n.bound.agent_name}
+                              {n.bound.owner_email ? ` (${n.bound.owner_email})` : ''}
+                            </span>
+                          </div>
                         ) : (
                           <button className="btn" disabled={link.isPending}
                             onClick={() => link.mutate({ kind: 'whatsapp', phone_number_id: n.id })}>
