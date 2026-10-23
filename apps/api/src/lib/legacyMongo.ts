@@ -41,6 +41,7 @@ export interface LegacyBotDoc {
     agent?: string;
     agent_object?: { defaultLanguageCode?: string };
     service_account?: { email?: string; key?: string };
+    credentials?: { access_token?: string; refresh_token?: string };
   };
 }
 

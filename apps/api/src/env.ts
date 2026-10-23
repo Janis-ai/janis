@@ -127,6 +127,11 @@ export const env = {
   slackSigningSecretAlt: process.env.SLACK_SIGNING_SECRET_ALT ?? '',
   googleClientId: process.env.GOOGLE_CLIENT_ID ?? '',
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
+  // wordhopapi's Google OAuth client — legacy bots onboarded before the
+  // service-account era carry owner refresh_tokens issued by THIS client;
+  // migration refreshes them to mint DF service-account keys via IAM.
+  legacyGoogleClientId: process.env.LEGACY_GOOGLE_CLIENT_ID ?? '',
+  legacyGoogleClientSecret: process.env.LEGACY_GOOGLE_CLIENT_SECRET ?? '',
   // gmail channel OAuth: separate redirect from sign-in — must be registered
   // in the same Google OAuth client's authorized URIs.
   gmailPubsubTopic: process.env.GMAIL_PUBSUB_TOPIC ?? '',

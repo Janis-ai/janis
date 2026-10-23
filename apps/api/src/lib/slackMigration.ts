@@ -1,5 +1,6 @@
 import { and, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
+import { env } from '../env.js';
 import {
   agentSecrets,
   agents,
@@ -58,6 +59,67 @@ function decodeSaKey(key: string | undefined): Record<string, unknown> | undefin
       return JSON.parse(Buffer.from(parsed.privateKeyData, 'base64').toString('utf8'));
     }
     return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
+// Pre-service-account-era bots carry the owner's Google OAuth grant under
+// dialogflow.credentials instead of a stored SA key — wordhopapi refreshed
+// it per-call and, on a 403, minted an SA key via IAM. Same move here:
+// refresh → serviceAccounts.keys.create on the conventional
+// janis-dialogflow@ SA → the minted SA JSON migrates with the bot.
+async function mintSaViaOauth(
+  project: string | undefined,
+  creds: { access_token?: string; refresh_token?: string } | undefined,
+): Promise<Record<string, unknown> | undefined> {
+  if (!project || !env.legacyGoogleClientId || !env.legacyGoogleClientSecret) return undefined;
+  let accessToken = creds?.access_token;
+  if (creds?.refresh_token) {
+    const tok = (await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      body: new URLSearchParams({
+        client_id: env.legacyGoogleClientId,
+        client_secret: env.legacyGoogleClientSecret,
+        refresh_token: creds.refresh_token,
+        grant_type: 'refresh_token',
+      }),
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)) as { access_token?: string } | null;
+    accessToken = tok?.access_token ?? accessToken;
+  }
+  if (!accessToken) return undefined;
+  const saEmail = `janis-dialogflow@${project}.iam.gserviceaccount.com`;
+  const mint = async (email: string) =>
+    ((await fetch(
+      `https://iam.googleapis.com/v1/projects/${project}/serviceAccounts/${email}/keys`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+        body: '{}',
+      },
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)) as { privateKeyData?: string } | null);
+  let res = await mint(saEmail);
+  if (!res?.privateKeyData) {
+    // SA name may predate the convention — list and retry the likeliest one.
+    const list = (await fetch(
+      `https://iam.googleapis.com/v1/projects/${project}/serviceAccounts`,
+      { headers: { authorization: `Bearer ${accessToken}` } },
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)) as { accounts?: { email?: string }[] } | null;
+    const alt = (list?.accounts ?? [])
+      .map((a) => a.email)
+      .filter((e): e is string => !!e)
+      .find((e) => /dialogflow|janis/i.test(e)) ?? list?.accounts?.[0]?.email;
+    if (alt) res = await mint(alt);
+  }
+  if (!res?.privateKeyData) return undefined;
+  try {
+    return JSON.parse(Buffer.from(res.privateKeyData, 'base64').toString('utf8'));
   } catch {
     return undefined;
   }
@@ -144,13 +206,14 @@ export async function runSlackMigration(
     const wsAgents = await db.select().from(agents).where(eq(agents.workspaceId, workspaceId));
     for (const b of bots) {
       if (!b.client_key) continue;
-      const saJson = decodeSaKey(b.dialogflow?.service_account?.key);
       const project = b.dialogflow?.agent;
-      const chatfuelDriven = b.code_lang === 'chatfuel' || b.code_lang === 'manychat';
+      // code_lang (chatfuel/manychat) is the *Messenger* driver — on Slack
+      // the DF project is always the answering brain, so it doesn't gate.
+      const saJson =
+        decodeSaKey(b.dialogflow?.service_account?.key) ??
+        (await mintSaViaOauth(project, b.dialogflow?.credentials));
       const config = {
-        engine: (project && saJson && !chatfuelDriven ? 'dialogflow' : 'monitor') as
-          | 'dialogflow'
-          | 'monitor',
+        engine: (project && saJson ? 'dialogflow' : 'monitor') as 'dialogflow' | 'monitor',
         ...(project ? { dialogflow: { project, lang: b.dialogflow?.agent_object?.defaultLanguageCode ?? 'en' } } : {}),
         legacy: {
           client_key: b.client_key,

@@ -1861,10 +1861,33 @@ describe('public OAuth install', () => {
                 },
               },
               { name: 'BareBot', client_key: 'CK_BARE' },
+              {
+                name: 'OAuthBot',
+                client_key: 'CK_OAUTH',
+                dialogflow: {
+                  agent: 'df-oauth',
+                  credentials: { refresh_token: 'RT_1' },
+                },
+              },
             ]
           : [],
     });
-    vi.stubGlobal('fetch', vi.fn(async () => slackOk({ channels: [] })));
+    env.legacyGoogleClientId = 'LEG_CID';
+    env.legacyGoogleClientSecret = 'LEG_SEC';
+    const mintedSa = { client_email: 'sa@df-oauth', private_key: 'PK', project_id: 'df-oauth' };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string | URL) => {
+        const u = String(url);
+        if (u.includes('oauth2.googleapis.com/token')) return slackOk({ access_token: 'AT_FRESH' });
+        if (u.includes('iam.googleapis.com') && u.includes('/keys')) {
+          return slackOk({
+            privateKeyData: Buffer.from(JSON.stringify(mintedSa)).toString('base64'),
+          });
+        }
+        return slackOk({ channels: [] });
+      }),
+    );
     const [p] = await db
       .insert(slackPendingInstalls)
       .values({
@@ -1924,6 +1947,19 @@ describe('public OAuth install', () => {
       (a) => (a.metadata as { legacy_client_key?: string })?.legacy_client_key === 'CK_BARE',
     );
     expect((bareBot?.config as { engine?: string })?.engine).toBe('monitor');
+    // OAuth-era bot: no stored SA key — a fresh one was minted via the
+    // owner refresh_token + IAM, so it still lands on dialogflow.
+    const oauthBot = wsAgents.find(
+      (a) => (a.metadata as { legacy_client_key?: string })?.legacy_client_key === 'CK_OAUTH',
+    );
+    expect((oauthBot?.config as { engine?: string })?.engine).toBe('dialogflow');
+    const [oauthSa] = await db
+      .select()
+      .from(agentSecrets)
+      .where(
+        and(eq(agentSecrets.agentId, oauthBot!.id), eq(agentSecrets.name, 'DIALOGFLOW_SA_JSON')),
+      );
+    expect(oauthSa).toBeDefined();
     setLegacyOps(undefined);
   });
 
