@@ -11,14 +11,17 @@
  * Tokens → Generate Token. Do NOT commit it.
  *
  * Merge rules:
- *   - bot scopes: union of existing + required (never removes)
+ *   - bot scopes: union of existing + required, minus v1-era scope names that
+ *     fail modern validation
+ *   - user scopes: union of existing + required, same v1 cleanup
  *   - redirect_urls: union (never removes)
  *   - bot_events: union (never removes)
  *   - request URLs: REPLACED with ours — legacy surfaces keep working via the
- *     interactivity fan-out (/slack/interactions → wordhop-slack) and the
- *     legacy RTM bot (events were never its input anyway)
- *   - slash_commands: UNTOUCHED — they keep pointing at slack.janis.ai until
- *     the new API implements them
+ *     fan-out to wordhop-slack (events with no install row, non-classic
+ *     interactions, and unresolved commands all forward verbatim)
+ *   - slash_commands: ALL repoint at /slack/commands — the endpoint serves
+ *     classic-mode installs natively and forwards everything else to
+ *     wordhop-slack
  *   - socket_mode, token_rotation, org_deploy: UNTOUCHED
  */
 
@@ -47,6 +50,7 @@ const REQUIRED_BOT_SCOPES = [
   'im:write',
   'im:history',
   'mpim:history',
+  'commands', // slash command surface (/pause /resume → native, rest → legacy)
   'users:read',
   'users:read.email',
   'app_mentions:read', // required companion to the app_mention bot event
@@ -54,7 +58,43 @@ const REQUIRED_BOT_SCOPES = [
   'im:read',    // conversations.info on D… channels (member DM resolution)
   'files:read', // files.sharedPublicURL for files_uploaded
   'team:read',  // team_join event companion
+  // wordhop-slack extras:
+  'mpim:read',   // mpim.list
+  'files:write', // files.upload / sharedPublicURL as the bot
 ];
+
+// User-token scopes — wordhop-slack runs conversations.kick/leave/invite/
+// replies and chat.postMessage/files.upload as the installer.
+const REQUIRED_USER_SCOPES = [
+  'chat:write',
+  'files:write',
+  'channels:manage', // kick/invite/leave on public transcript channels
+  'groups:write',    // same on private channels
+  'im:write',
+  'mpim:write',
+  'channels:history',
+  'groups:history',
+  'im:history',
+  'mpim:history',
+];
+
+// v1-era scope names that either fail manifest validation outright or map to
+// nothing the code actually calls (links:* — no unfurl handlers).
+const LEGACY_SCOPE_NAMES = new Set([
+  'bot',
+  'commands',
+  'chat:write:bot',
+  'chat:write:user',
+  'files:write:user',
+  'channels:write',
+  'incoming-webhook',
+  'identify',
+  'read',
+  'post',
+  'search:read',
+  'links:read',
+  'links:write',
+]);
 
 const REQUIRED_BOT_EVENTS = [
   'message.channels',
@@ -74,16 +114,42 @@ const REQUIRED_BOT_EVENTS = [
   'channel_marked',
   'channel_history_changed',
   'team_join',
+  'app_uninstalled', // wordhop-slack cleans up install state
+  'file_shared',     // files_uploaded / file_shared handlers
 ];
 
 const REDIRECT_URL = `${API_ORIGIN}/slack/oauth/callback`;
+// Legacy OAuth callback — wordhop-slack's own Add-to-Slack flow
+// (createOauthEndpoints → /oauth) uses SLACK_REDIRECT_URI, defaulting to the
+// slackbot.janis.ai custom domain.
+const LEGACY_REDIRECT_URLS = [
+  'https://slackbot.janis.ai/oauth',
+  'https://wordhop-slack.herokuapp.com/oauth',
+];
 const EVENTS_URL = `${API_ORIGIN}/slack/events`;
 const INTERACTIONS_URL = `${API_ORIGIN}/slack/interactions`;
 const COMMANDS_URL = `${API_ORIGIN}/slack/commands`;
 
-// Commands the new API implements — their URLs repoint at us (the command
-// endpoint fans unresolved channels out to wordhop-slack). Others stay put.
-const PORTED_COMMANDS = new Set(['/pause', '/resume']);
+// Every command wordhop-slack's slash_command handler understands (see
+// src/slack_bot.js controller.on('slash_command')). All point at the new API —
+// classic-mode installs are served natively, everything else is forwarded
+// verbatim to wordhop-slack.
+const REQUIRED_COMMANDS: { command: string; description: string }[] = [
+  { command: '/wordhop', description: 'Janis assistant commands' },
+  { command: '/pause', description: 'Pause the bot in this channel' },
+  { command: '/resume', description: 'Resume the bot in this channel' },
+  { command: '/broadcast', description: 'Send a message to all users' },
+  { command: '/bot', description: 'Send a message as the bot' },
+  { command: '/say', description: 'Send a message as the bot' },
+  { command: '/blast', description: 'Broadcast a message' },
+  { command: '/pause_s', description: 'Pause the bot in this channel' },
+  { command: '/resume_s', description: 'Resume the bot in this channel' },
+  { command: '/broadcast_s', description: 'Send a message to all users' },
+  { command: '/pause_qa', description: 'Pause the bot in this channel' },
+  { command: '/resume_qa', description: 'Resume the bot in this channel' },
+  { command: '/bot_s', description: 'Send a message as the bot' },
+  { command: '/say_s', description: 'Send a message as the bot' },
+];
 
 interface Manifest {
   oauth_config?: {
@@ -131,8 +197,9 @@ m.oauth_config ??= {};
 m.oauth_config.scopes ??= {};
 m.settings ??= {};
 
-const existingScopes = new Set(m.oauth_config.scopes.bot ?? []);
-existingScopes.add('commands'); // required by the app's slash commands
+const existingScopes = new Set(
+  (m.oauth_config.scopes.bot ?? []).filter((s) => !LEGACY_SCOPE_NAMES.has(s)),
+);
 for (const s of REQUIRED_BOT_SCOPES) existingScopes.add(s);
 m.oauth_config.scopes.bot = [...existingScopes];
 
@@ -141,18 +208,29 @@ m.oauth_config.scopes.bot = [...existingScopes];
 //   bot                     → v2 expresses it via features.bot_user
 //   chat:write:user         → user scope 'chat:write'
 //   files:write:user        → user scope 'files:write'
+//   channels:write          → user scope 'channels:manage'
 const userScopes = (m.oauth_config.scopes.user ?? [])
-  .filter((s) => s !== 'bot' && s !== 'commands')
-  .map((s) => (s === 'chat:write:user' ? 'chat:write' : s === 'files:write:user' ? 'files:write' : s));
-m.oauth_config.scopes.user = [...new Set(userScopes)];
+  .filter((s) => !LEGACY_SCOPE_NAMES.has(s) || s === 'chat:write:user' || s === 'files:write:user' || s === 'channels:write')
+  .map((s) =>
+    s === 'chat:write:user' ? 'chat:write'
+    : s === 'files:write:user' ? 'files:write'
+    : s === 'channels:write' ? 'channels:manage'
+    : s,
+  );
+const userScopeSet = new Set(userScopes);
+for (const s of REQUIRED_USER_SCOPES) userScopeSet.add(s);
+m.oauth_config.scopes.user = [...userScopeSet];
 
-// http:// redirect URLs are rejected — the https equivalents already exist
+// http:// redirect URLs are rejected — the https equivalents already exist.
+// Ours goes FIRST: installs that mint no redirect_uri (the Slack directory /
+// Marketplace "Add to Slack" button) land on the first registered URL —
+// leaving a legacy URL first would route new customers into old Janis.
 const existingRedirects = new Set(
   (m.oauth_config.redirect_urls ?? []).filter((u) => u.startsWith('https://')),
 );
-if (!existingRedirects.has(REDIRECT_URL)) {
-  m.oauth_config.redirect_urls = [...existingRedirects, REDIRECT_URL];
-}
+for (const u of LEGACY_REDIRECT_URLS) existingRedirects.add(u);
+existingRedirects.delete(REDIRECT_URL);
+m.oauth_config.redirect_urls = [REDIRECT_URL, ...existingRedirects];
 
 const ev = (m.settings.event_subscriptions ??= {});
 const existingEvents = new Set(ev.bot_events ?? []);
@@ -166,13 +244,31 @@ m.settings.interactivity = {
   request_url: INTERACTIONS_URL,
 };
 
-// Repoint the slash commands we've ported — the new endpoint forwards
-// unresolvable channels to wordhop-slack, so legacy channels keep working.
-const cmds = (m as { features?: { slash_commands?: { command?: string; url?: string }[] } })
-  .features?.slash_commands ?? [];
-for (const cmd of cmds) {
-  if (cmd.command && PORTED_COMMANDS.has(cmd.command)) cmd.url = COMMANDS_URL;
+// Every command the classic handler understands gets registered and points
+// at the new API — classic installs are served natively, everything else is
+// forwarded verbatim to wordhop-slack.
+const features = (m.features ??= {}) as {
+  bot_user?: unknown;
+  slash_commands?: {
+    command?: string;
+    url?: string;
+    description?: string;
+    should_escape?: boolean;
+    usage_hint?: string;
+  }[];
+};
+// Bot user must exist for the xoxb token Slack issues on install.
+features.bot_user ??= { display_name: 'Janis', always_online: true };
+const cmds = (features.slash_commands ??= []);
+for (const req of REQUIRED_COMMANDS) {
+  const cmd = cmds.find((c) => c.command === req.command);
+  if (cmd) {
+    cmd.url = COMMANDS_URL;
+  } else {
+    cmds.push({ command: req.command, url: COMMANDS_URL, description: req.description });
+  }
 }
+for (const cmd of cmds) cmd.should_escape ??= false;
 
 const diff = (label: string, b: unknown, a: unknown) => {
   if (JSON.stringify(b) !== JSON.stringify(a)) {
@@ -194,9 +290,9 @@ diff(
   (m as { features?: { slash_commands?: unknown } }).features?.slash_commands,
 );
 
-const slashCount = ((m as { features?: { slash_commands?: { command?: string }[] } }).features?.slash_commands ?? [])
-  .filter((c) => !c.command || !PORTED_COMMANDS.has(c.command)).length;
-if (slashCount) console.log(`\n${slashCount} slash command(s) still point at legacy.`);
+const staleCmds = ((m as { features?: { slash_commands?: { command?: string; url?: string }[] } }).features?.slash_commands ?? [])
+  .filter((c) => c.url !== COMMANDS_URL).length;
+if (staleCmds) console.log(`\n${staleCmds} slash command(s) still point at legacy.`);
 
 if (JSON.stringify(before) === JSON.stringify(m)) {
   console.log('\nAlready in sync — nothing to do.');
