@@ -457,6 +457,7 @@ export default function Landing() {
           <a href="#how">How it works</a>
           <a href="#pricing">Pricing</a>
           <Link to="/docs">Developer docs</Link>
+          <a href="/slack/add">Add to Slack</a>
         </nav>
         <Link className="btn" to={cta.to}>{cta.label}</Link>
       </header>

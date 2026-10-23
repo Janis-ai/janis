@@ -1993,6 +1993,22 @@ export function slackPublicRoutes(db: Db) {
       .where(eq(slackInstallations.teamId, teamId))
       .limit(1);
 
+    // /janis is the new app's own command — it predates the classic/new split
+    // and answers uniformly for every install mode, so it is handled before
+    // classic dispatch. Anything the classic handler already owns still routes
+    // there first.
+    if (command === '/janis' && inst) {
+      return c.json({
+        response_type: 'ephemeral',
+        text:
+          ':gear: *Janis controls*\n' +
+          '• `/pause [minutes|forever]` — pause the agent on this channel’s latest conversation\n' +
+          '• `/resume` — hand the conversation back to the agent\n' +
+          '• DM `@janis` — the same concierge as Ask Janis in the console\n' +
+          '• <https://app.janis.ai|app.janis.ai> — agents, inbox, alerts and settings',
+      });
+    }
+
     // Classic-mode installs own their whole command surface (/pause /resume
     // /bot /wordhop + legacy aliases) — dispatch before the new-mode filter.
     if (inst?.mode === 'classic') {

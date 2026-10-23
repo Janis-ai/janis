@@ -142,6 +142,7 @@ const COMMANDS_URL = `${API_ORIGIN}/slack/commands`;
 // classic-mode installs are served natively, everything else is forwarded
 // verbatim to wordhop-slack.
 const REQUIRED_COMMANDS: { command: string; description: string }[] = [
+  { command: '/janis', description: 'Show Janis controls' },
   { command: '/wordhop', description: 'Janis assistant commands' },
   { command: '/pause', description: 'Pause the bot in this channel' },
   { command: '/resume', description: 'Resume the bot in this channel' },
