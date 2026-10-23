@@ -64,14 +64,21 @@ const REQUIRED_BOT_SCOPES = [
 ];
 
 // User-token scopes — wordhop-slack runs conversations.kick/leave/invite/
-// replies and chat.postMessage/files.upload as the installer.
+// replies and chat.postMessage/files.upload as the installer. The manifest
+// schema does NOT offer channels:manage as a user scope (bot-only) — the v1
+// channels:write grants on existing tokens are the only path, so new
+// installs can't be granted public-channel kick/invite as the user.
 const REQUIRED_USER_SCOPES = [
   'chat:write',
   'files:write',
-  'channels:manage', // kick/invite/leave on public transcript channels
-  'groups:write',    // same on private channels
+  'groups:write',    // kick/invite/leave on private channels
   'im:write',
   'mpim:write',
+  // :read companions — the schema rejects :history scopes without them
+  'channels:read',
+  'groups:read',
+  'im:read',
+  'mpim:read',
   'channels:history',
   'groups:history',
   'im:history',
@@ -111,7 +118,7 @@ const REQUIRED_BOT_EVENTS = [
   'channel_created',
   'channel_archive',
   'channel_unarchive',
-  'channel_marked',
+  // NB: channel_marked is NOT a valid bot_event in the manifest schema
   'channel_history_changed',
   'team_join',
   'app_uninstalled', // wordhop-slack cleans up install state
@@ -208,13 +215,12 @@ m.oauth_config.scopes.bot = [...existingScopes];
 //   bot                     → v2 expresses it via features.bot_user
 //   chat:write:user         → user scope 'chat:write'
 //   files:write:user        → user scope 'files:write'
-//   channels:write          → user scope 'channels:manage'
+//   channels:write          → dropped (no valid v2 user-scope equivalent)
 const userScopes = (m.oauth_config.scopes.user ?? [])
-  .filter((s) => !LEGACY_SCOPE_NAMES.has(s) || s === 'chat:write:user' || s === 'files:write:user' || s === 'channels:write')
+  .filter((s) => !LEGACY_SCOPE_NAMES.has(s) || s === 'chat:write:user' || s === 'files:write:user')
   .map((s) =>
     s === 'chat:write:user' ? 'chat:write'
     : s === 'files:write:user' ? 'files:write'
-    : s === 'channels:write' ? 'channels:manage'
     : s,
   );
 const userScopeSet = new Set(userScopes);
