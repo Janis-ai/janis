@@ -30,15 +30,28 @@ export async function legacyTeamState(teamId: string): Promise<LegacyTeamState> 
     client ??= await MongoClient.connect(env.legacyMongoUri, {
       serverSelectionTimeoutMS: 2500,
     });
+    // Legacy docs nest the OAuth grant under `slack_params` — there is no
+    // top-level team_id/access_token on any doc (verified 2026-10-23:
+    // 0/17,296). Querying the flat paths silently returned 'none' for every
+    // classic team and let installs sever them unguarded.
     const doc = await client
       .db()
       .collection('slack_integrations')
       .findOne(
-        { team_id: teamId },
-        { projection: { access_token: 1, 'bot.bot_access_token': 1 } },
+        { 'slack_params.team_id': teamId },
+        {
+          projection: {
+            'slack_params.access_token': 1,
+            'slack_params.bot.bot_access_token': 1,
+            migrated: 1,
+          },
+        },
       );
-    const botToken = (doc?.bot as { bot_access_token?: string } | undefined)?.bot_access_token;
-    return doc?.access_token || botToken ? 'live' : 'none';
+    if (doc?.migrated) return 'none'; // stood down via slack-migration mark
+    const sp = doc?.slack_params as
+      | { access_token?: string; bot?: { bot_access_token?: string } }
+      | undefined;
+    return sp?.access_token || sp?.bot?.bot_access_token ? 'live' : 'none';
   } catch (err) {
     console.error('legacy slack_integrations lookup failed:', err);
     return 'unknown';
