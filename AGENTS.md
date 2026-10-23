@@ -176,9 +176,10 @@ is a day on launch)*
       JANIS_DIALOGFLOW_CONNECTOR_URL, WORDHOP_MESSENGER_URL,
       WEBHOOK_HOST. /auth CANNOT ride through www (new app owns it) —
       legacy dashboard login only works on legacy.janis.ai.
-   c. Repoint on new app: WORDHOP_API_URL + META_LEGACY_WEBHOOK_URL +
-      LEGACY_SLACK_INTERACTIONS_URL → https://legacy.janis.ai
-      (cosmetic — herokuapp URLs keep working).
+   c. Repoint on new app: WORDHOP_API_URL + META_LEGACY_WEBHOOK_URL →
+      https://legacy.janis.ai (cosmetic — herokuapp URLs keep working).
+      LEGACY_SLACK_INTERACTIONS_URL is wordhop-slack (DIFFERENT app —
+      leave it, or give that app its own subdomain).
    d. Cloudflare: www.janis.ai → new app origin (mirror however
       app.janis.ai is wired); webhook.janis.ai optional (new app's
       /messenger handles it). Leave slackbot./web.janis.ai alone.
