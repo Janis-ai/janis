@@ -96,4 +96,44 @@ describe('legacy passthrough', () => {
     const res = await app.request('/subscribe', { method: 'POST', body: 'x=1' });
     expect(res.status).toBe(502);
   });
+
+  it('relays uncovered /messenger routes (keyless chatfuel fallback, deletemessages)', async () => {
+    const fetchMock = upstream(new Response('{"sent":true}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await app.request('/messenger/chatfuel/fallback', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ client_key: 'ck-1' }),
+    });
+    expect(res.status).toBe(200);
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+      'https://legacy.test/messenger/chatfuel/fallback',
+    );
+  });
+
+  it('native /messenger routes win over the relay (mount order)', async () => {
+    const { LEGACY_PASSTHROUGH_PREFIXES, legacyPassthrough } = await import(
+      './legacyPassthrough.js'
+    );
+    const combined = new Hono();
+    combined.all('/messenger/client/:k/chatfuel/fallback', (c) => c.text('native'));
+    for (const p of LEGACY_PASSTHROUGH_PREFIXES) {
+      combined.all(p, legacyPassthrough);
+      combined.all(`${p}/*`, legacyPassthrough);
+    }
+    const fetchMock = upstream();
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await combined.request('/messenger/client/ck-1/chatfuel/fallback', {
+      method: 'POST',
+      body: 'x=1',
+    });
+    expect(await res.text()).toBe('native');
+    expect(fetchMock).not.toHaveBeenCalled();
+    const relay = await combined.request('/messenger/deletemessages', {
+      method: 'POST',
+      body: 'x=1',
+    });
+    expect(relay.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });

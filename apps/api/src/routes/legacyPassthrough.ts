@@ -12,11 +12,15 @@ import { clientKeyOf } from './legacyApi.js';
  *   /report_users /report_emails /prior /log /add_bot /update_bot
  *   /add_email /archive_channel /send_chat_response /intents
  *   /get_longterm_access_token /update_bot_messenger
- *   /update_bot_socket_id /subscribe /smooch /azure
+ *   /update_bot_socket_id /subscribe /smooch /azure /messenger
  *
- * Unlike the /api/v1 + /messenger surfaces this is a pure relay — upstream's
- * response is authoritative, nothing is stored locally. Each call logs the
- * path so Cloud Logging doubles as the who's-still-legacy ledger.
+ * Pure relay — upstream's response is authoritative, nothing is stored
+ * locally. /messenger is mounted AFTER legacyWebhookRoutes so the native
+ * fallback/webhook routes still win; this catches the routes they don't
+ * cover (/chatfuel/fallback keyless, /deletemessages, /fixalert, anything
+ * else a bot config calls) instead of letting them fall into the SPA.
+ * Each call logs the path so Cloud Logging doubles as the
+ * who's-still-legacy ledger.
  */
 export const LEGACY_PASSTHROUGH_PREFIXES = [
   '/bot_subscriptions',
@@ -39,6 +43,7 @@ export const LEGACY_PASSTHROUGH_PREFIXES = [
   '/subscribe',
   '/smooch',
   '/azure',
+  '/messenger',
 ];
 
 const REQ_STRIP = /^(host|connection|content-length|cf-|x-forwarded|keep-alive|te|trailer|upgrade|transfer-encoding)/i;
