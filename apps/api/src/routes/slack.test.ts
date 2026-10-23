@@ -103,6 +103,9 @@ describe('interactions fan-out', () => {
 
     const res = await signedPost(`payload=${encodeURIComponent(payload)}`);
     expect(res.status).toBe(200);
+    // Slack renders a non-empty block_actions body as message text — the ack
+    // must be empty so no {"ok":true} leaks into the channel.
+    expect(await res.text()).toBe('');
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
@@ -472,6 +475,65 @@ describe('slash commands', () => {
         .set({ migrated: false })
         .where(eq(slackInstallations.teamId, 'T_NEW'));
     }
+  });
+});
+
+describe('classic-mode slash acks', () => {
+  beforeAll(async () => {
+    const [ws] = await db.insert(workspaces).values({ name: 'WS Classic' }).returning();
+    const { hash, preview } = generateApiKey();
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'Classic Bot', apiKeyHash: hash, apiKeyPreview: preview })
+      .returning();
+    const [inst] = await db
+      .insert(slackInstallations)
+      .values({ workspaceId: ws.id, teamId: 'T_CLASSIC', botToken: 'xoxb-cls', mode: 'classic' })
+      .returning();
+    await db.insert(slackClassicChannels).values({
+      installationId: inst.id,
+      sourceChannel: 'srcA',
+      slackChannelId: 'CJ1',
+      name: 'j-srcA',
+    });
+    await db.insert(conversations).values({ agentId: agent.id, externalId: 'messenger:srcA' });
+  });
+
+  const command = (body: Record<string, string>) =>
+    signedPost(new URLSearchParams(body).toString(), '/slack/commands');
+
+  it('a successful classic /pause acks with an EMPTY body — Slack renders any body text', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(() => Promise.resolve(new Response('{"ok":true}'))),
+    );
+    const res = await command({
+      command: '/pause',
+      channel_id: 'CJ1',
+      team_id: 'T_CLASSIC',
+      user_id: 'U_OP',
+      text: '',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe('');
+    const [chan] = await db
+      .select()
+      .from(slackClassicChannels)
+      .where(eq(slackClassicChannels.slackChannelId, 'CJ1'));
+    expect(chan.paused).toBe(true);
+  });
+
+  it('an unmapped classic channel still returns the ephemeral warning body', async () => {
+    const res = await command({
+      command: '/pause',
+      channel_id: 'C_NOWHERE',
+      team_id: 'T_CLASSIC',
+      user_id: 'U_OP',
+      text: '',
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.response_type).toBe('ephemeral');
   });
 });
 

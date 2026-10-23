@@ -29,6 +29,7 @@ import {
   slackWidgetBlocks,
   verifyAvatarSig,
   verifySlackSignature,
+  welcomeAppHomeOpen,
   welcomeInstallerDm,
 } from '../lib/slack.js';
 import { fetchAvatar } from '../lib/avatar.js';
@@ -1226,6 +1227,26 @@ export function slackPublicRoutes(db: Db) {
       return c.json({ ok: true });
     }
 
+    // App Home Messages tab — Marketplace requires a welcome on first open.
+    // New/migrated installs get the concierge hello once per user; classic
+    // installs keep classic behavior (legacy never subscribed this event).
+    if (ev?.type === 'app_home_opened' && evTeamInstall) {
+      const slackUser = typeof ev.user === 'string' ? ev.user : undefined;
+      if (evTeamInstall.mode !== 'classic' && slackUser) {
+        const cfg = (evTeamInstall.classicConfig ?? {}) as { welcomed_users?: string[] };
+        const welcomed = new Set(cfg.welcomed_users ?? []);
+        if (!welcomed.has(slackUser)) {
+          welcomed.add(slackUser);
+          await db
+            .update(slackInstallations)
+            .set({ classicConfig: { ...cfg, welcomed_users: [...welcomed] } })
+            .where(eq(slackInstallations.id, evTeamInstall.id));
+          void welcomeAppHomeOpen(evTeamInstall, slackUser).catch(() => {});
+        }
+      }
+      return c.json({ ok: true });
+    }
+
     // Classic-mode installs: the WHOLE incoming surface (ambient j-channel
     // relay, thread-reply channelTrain, DM/@mention incoming(), training
     // channels) feeds incoming() verbatim — concierge never sees it.
@@ -1485,7 +1506,7 @@ export function slackPublicRoutes(db: Db) {
     const raw = await c.req.text();
     if (!verify(c, raw)) return c.text('invalid signature', 401);
     const payloadParam = new URLSearchParams(raw).get('payload');
-    if (!payloadParam) return c.json({ ok: true });
+    if (!payloadParam) return c.body(null);
     const payload = JSON.parse(payloadParam) as {
       type: string;
       user?: { id: string };
@@ -1577,7 +1598,7 @@ export function slackPublicRoutes(db: Db) {
       return forwardToLegacySlack(raw);
     }
 
-    if (!payload.user) return c.json({ ok: true });
+    if (!payload.user) return c.body(null);
     const action = payload.actions![0];
 
     // Concierge quick-reply button — the value is the reply TEXT, not a conv
@@ -1594,7 +1615,7 @@ export function slackPublicRoutes(db: Db) {
         // Double-click guard — a re-fired click on buttons already stripped
         // by chat.update would inject the same inbound twice.
         const clickKey = `${chan}:${msgTs}:${payload.user.id}:${picked}`;
-        if (msgTs && qrClickSeen.get(clickKey) !== undefined) return c.json({ ok: true });
+        if (msgTs && qrClickSeen.get(clickKey) !== undefined) return c.body(null);
         if (msgTs) {
           qrClickSeen.set(clickKey, Date.now());
           if (qrClickSeen.size > 2000) qrClickSeen.clear();
@@ -1639,11 +1660,11 @@ export function slackPublicRoutes(db: Db) {
           });
         }
       }
-      return c.json({ ok: true });
+      return c.body(null);
     }
 
     let convId = action.value;
-    if (!convId) return c.json({ ok: true });
+    if (!convId) return c.body(null);
     // Approval buttons carry the pending_action id — resolve the conversation
     // through it
     if (
@@ -1656,7 +1677,7 @@ export function slackPublicRoutes(db: Db) {
         .where(eq(pendingActions.id, convId))
         .limit(1);
       convId = act?.conversationId;
-      if (!convId) return c.json({ ok: true });
+      if (!convId) return c.body(null);
     }
     // Send carries the suggestion id — resolve the conversation through it
     if (
@@ -1669,7 +1690,7 @@ export function slackPublicRoutes(db: Db) {
         .where(eq(suggestions.id, convId))
         .limit(1);
       convId = sug?.conversationId;
-      if (!convId) return c.json({ ok: true });
+      if (!convId) return c.body(null);
     }
 
     // Resolve workspace via the thread record (or conversation → agent chain)
@@ -1705,7 +1726,7 @@ export function slackPublicRoutes(db: Db) {
         action.action_id !== 'janis_approve_action' &&
         action.action_id !== 'janis_deny_action'
       )
-        return c.json({ ok: true });
+        return c.body(null);
       const teamId = clickTeamId;
       const [row] = teamId
         ? await db
@@ -1714,7 +1735,7 @@ export function slackPublicRoutes(db: Db) {
             .where(eq(slackInstallations.teamId, teamId))
             .limit(1)
         : [];
-      if (!row) return c.json({ ok: true });
+      if (!row) return c.body(null);
       const [act] = await db
         .select()
         .from(pendingActions)
@@ -1732,11 +1753,11 @@ export function slackPublicRoutes(db: Db) {
         act.workspaceId !== row.workspaceId ||
         !isConciergeAction(act.workspaceId, cardConv?.userProfile)
       )
-        return c.json({ ok: true });
+        return c.body(null);
       inst = row;
       conciergeCard = true;
     }
-    if (!inst) return c.json({ ok: true });
+    if (!inst) return c.body(null);
     const user = await slackUserToMember(db, inst, payload.user.id);
     if (!user) {
       // Ephemeral denial via response_url — visible only to the clicker.
@@ -1750,7 +1771,7 @@ export function slackPublicRoutes(db: Db) {
           }),
         }).catch(() => {});
       }
-      return c.json({ ok: true });
+      return c.body(null);
     }
     // Concierge cards gate admin-only workspace writes — the clicker must be
     // an admin/owner, not just any linked member.
@@ -1777,7 +1798,7 @@ export function slackPublicRoutes(db: Db) {
             }),
           }).catch(() => {});
         }
-        return c.json({ ok: true });
+        return c.body(null);
       }
     }
 
@@ -1901,7 +1922,7 @@ export function slackPublicRoutes(db: Db) {
             });
           }
         }
-        return c.json({ ok: true });
+        return c.body(null);
       } else if (action.action_id === 'janis_suggest' && conv && agent) {
         // Draft in the background (LLM takes seconds), then post the
         // suggestion ephemerally — visible only to the person who clicked.
@@ -1956,7 +1977,7 @@ export function slackPublicRoutes(db: Db) {
           });
           if (!res.ok) console.error('slack ephemeral failed:', res.error);
         })();
-        return c.json({ ok: true });
+        return c.body(null);
       }
     } catch (err) {
       if (err instanceof TakeoverError) {
@@ -1970,7 +1991,7 @@ export function slackPublicRoutes(db: Db) {
     }
 
     // takeover()/resume() already refresh the alert message via updateSlackAlert
-    return c.json({ ok: true });
+    return c.body(null);
   });
 
   // Slash commands: /pause [N|forever], /resume. Commands are channel-scoped —
@@ -2019,7 +2040,7 @@ export function slackPublicRoutes(db: Db) {
       );
       if (result.errors.length) console.error('classic slash errors:', result.errors);
       if (out.ephemeral) return c.json({ response_type: 'ephemeral', text: out.ephemeral });
-      return c.json({ ok: true });
+      return c.body(null);
     }
 
     if (command !== '/pause' && command !== '/resume') return forwardToLegacySlack(raw);
