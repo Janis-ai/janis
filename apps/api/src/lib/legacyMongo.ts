@@ -23,6 +23,7 @@ let opsOverride:
       channels?: (teamId: string) => Promise<Record<string, unknown>[]>;
       mark?: (teamId: string) => Promise<boolean>;
       bots?: (teamId: string) => Promise<LegacyBotDoc[]>;
+      bot?: (clientKey: string) => Promise<LegacyBotDoc | undefined>;
     }
   | undefined;
 export function setLegacyOps(o: typeof opsOverride): void {
@@ -66,6 +67,22 @@ export async function legacyTeamBots(teamId: string): Promise<LegacyBotDoc[]> {
     .collection('bots')
     .find({ client_key: { $in: keys } })
     .toArray()) as unknown as LegacyBotDoc[];
+}
+
+/** One legacy `bots` doc by client_key — the per-agent credential retry
+ *  (POST /api/agents/:id/retry-legacy-engine) re-resolves creds from the
+ *  live doc so a bot whose owner re-connected Dialogflow on the classic
+ *  dashboard flips to the DF engine without re-running team migration. */
+export async function legacyBotDoc(clientKey: string): Promise<LegacyBotDoc | undefined> {
+  if (opsOverride?.bot) return opsOverride.bot(clientKey);
+  if (!env.legacyMongoUri) return undefined;
+  client ??= await MongoClient.connect(env.legacyMongoUri, {
+    serverSelectionTimeoutMS: 2500,
+  });
+  return ((await client
+    .db()
+    .collection('bots')
+    .findOne({ client_key: clientKey })) ?? undefined) as LegacyBotDoc | undefined;
 }
 
 /** The botkit `channels` collection docs for one team — transcript/training

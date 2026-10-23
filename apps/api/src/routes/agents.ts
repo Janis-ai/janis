@@ -33,6 +33,8 @@ import {
   recheckGaps,
 } from '../services/knowledgeGaps.js';
 import { encryptSecret, loadSecretsMap } from '../lib/secrets.js';
+import { legacyBotDoc } from '../lib/legacyMongo.js';
+import { resolveLegacyBotCreds } from '../lib/legacyDfCreds.js';
 import { connectionSecrets } from '../lib/connections.js';
 import { llmFor, MAX_KNOWLEDGE_CHARS, MAX_NOTES_CHARS, resolveWidgetRef } from '../lib/hostedAgent.js';
 import {
@@ -2116,6 +2118,61 @@ export function agentRoutes(db: Db) {
     delete metadata.legacy_engine;
     await db.update(agents).set({ config: cfg, metadata }).where(eq(agents.id, agent.id));
     return c.json({ ok: true });
+  });
+
+  // Per-agent credential retry for migrated monitor agents. Team migration
+  // resolves DF creds once — an OAuth-era bot whose grant was revoked lands
+  // as engine:'monitor' with no way back. Re-reading the legacy bot doc lets
+  // the owner re-connect Dialogflow on the classic dashboard and retry, and
+  // picks up creds that appeared after the team migrated.
+  app.post('/:id/retry-legacy-engine', agentAdmin, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const legacyKey = ((agent.metadata ?? {}) as { legacy_client_key?: string }).legacy_client_key;
+    if (!legacyKey) return c.json({ error: 'not a migrated legacy agent' }, 409);
+    const cfg = (agent.config ?? {}) as { engine?: string; dialogflow?: { project?: string; lang?: string } };
+    if (cfg.engine === 'dialogflow') return c.json({ error: 'already on the dialogflow engine' }, 409);
+    const bot = await legacyBotDoc(legacyKey);
+    if (!bot) return c.json({ error: 'legacy bot doc not found — the legacy lookup may be unavailable' }, 404);
+    const creds = await resolveLegacyBotCreds(bot);
+    if (!creds.project || !creds.saJson) {
+      return c.json({ error: creds.reason ?? 'credentials still unavailable' }, 422);
+    }
+    const enc = encryptSecret(JSON.stringify(creds.saJson));
+    const [secret] = await db
+      .select()
+      .from(agentSecrets)
+      .where(and(eq(agentSecrets.agentId, agent.id), eq(agentSecrets.name, 'DIALOGFLOW_SA_JSON')))
+      .limit(1);
+    if (secret) {
+      await db
+        .update(agentSecrets)
+        .set({ valueEnc: enc, updatedAt: new Date() })
+        .where(eq(agentSecrets.id, secret.id));
+    } else {
+      await db
+        .insert(agentSecrets)
+        .values({ workspaceId: c.get('workspaceId'), agentId: agent.id, name: 'DIALOGFLOW_SA_JSON', valueEnc: enc });
+    }
+    await db
+      .update(agents)
+      .set({
+        config: {
+          ...cfg,
+          engine: 'dialogflow',
+          dialogflow: { project: creds.project, lang: bot.dialogflow?.agent_object?.defaultLanguageCode ?? 'en' },
+        },
+      })
+      .where(eq(agents.id, agent.id));
+    await audit(db, {
+      workspaceId: c.get('workspaceId'),
+      userId: c.get('user').id,
+      userName: c.get('user').name,
+      action: 'agent.retry_legacy_engine',
+      targetType: 'agent',
+      targetId: agent.id,
+    });
+    return c.json({ ok: true, engine: 'dialogflow', project: creds.project });
   });
 
   app.delete('/:id', agentAdmin, async (c) => {

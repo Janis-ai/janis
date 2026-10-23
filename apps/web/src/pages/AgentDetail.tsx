@@ -369,6 +369,21 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     onError: (e) => setError(e.message),
   });
 
+  const retryLegacyEngine = useMutation({
+    mutationFn: () =>
+      api<{ ok: boolean; project?: string }>(`/api/agents/${agent.id}/retry-legacy-engine`, {
+        method: 'POST',
+      }),
+    onSuccess: async (r) => {
+      refresh();
+      await confirm(
+        `Dialogflow connected — this agent now answers on its legacy engine (project ${r.project}).`,
+        [{ key: 'ok', label: 'OK' }],
+      );
+    },
+    onError: (e) => setError(e.message),
+  });
+
   const addRule = useMutation({
     mutationFn: (body: { kind: string; config: Record<string, unknown> }) =>
       api('/api/rules', {
@@ -601,6 +616,20 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
 
       {isAdmin && hasDrafts && (
         <div className="row" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
+          {section === 'settings' &&
+            (agent.config as { engine?: string } | null)?.engine === 'monitor' &&
+            !!(agent.metadata as { legacy_client_key?: string } | undefined)?.legacy_client_key && (
+            <button
+              className="btn"
+              disabled={retryLegacyEngine.isPending}
+              title="Re-check the legacy bot for Dialogflow credentials — use after re-connecting Dialogflow on the legacy dashboard"
+              onClick={async () => {
+                if (await confirm('Retry importing this agent\'s Dialogflow credentials from the legacy setup?', [{ key: 'ok', label: 'Retry import' }, { key: 'cancel', label: 'Cancel' }]) === 'ok') retryLegacyEngine.mutate();
+              }}
+            >
+              {retryLegacyEngine.isPending ? 'Retrying…' : 'Retry Dialogflow import'}
+            </button>
+          )}
           {section === 'settings' && (agent.config as { engine?: string } | null)?.engine === 'dialogflow' && (
             <button
               className="btn"

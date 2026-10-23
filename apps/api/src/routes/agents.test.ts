@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -10,6 +10,7 @@ import { agentConnections, agentSecrets, agents, agentTests, channelBindings, ch
 import { generateSessionToken } from '../lib/crypto.js';
 import { generateKeyPairSync } from 'node:crypto';
 import { encryptSecret } from '../lib/secrets.js';
+import { setLegacyOps } from '../lib/legacyMongo.js';
 import { setStripeClient } from '../lib/stripe.js';
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { env } from '../env.js';
@@ -1981,6 +1982,99 @@ describe('legacy dialogflow → hosted conversion', () => {
       headers: { cookie: parentCookie },
     });
     expect(conv.status).toBe(409);
+  });
+});
+
+
+describe('legacy engine credential retry', () => {
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const saJson = {
+    client_email: 'df@test.iam.gserviceaccount.com',
+    private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    project_id: 'legacy-proj',
+  };
+  const saKeyResource = JSON.stringify({
+    privateKeyData: Buffer.from(JSON.stringify(saJson)).toString('base64'),
+  });
+
+  const monitorAgentId = async (metadata: Record<string, unknown> = {}) => {
+    const res = await postAgent(parentCookie);
+    const { agent } = (await res.json()) as { agent: { id: string } };
+    const [row] = await db
+      .update(agents)
+      .set({
+        config: { engine: 'monitor' },
+        metadata: { legacy_client_key: 'CK_RETRY', migrated_from: 'wordhopapi', ...metadata },
+      })
+      .where(eq(agents.id, agent.id))
+      .returning();
+    return row.id;
+  };
+
+  it('flips a monitor agent to dialogflow when the legacy doc has a stored SA key', async () => {
+    setLegacyOps({
+      bot: async (k) =>
+        k === 'CK_RETRY'
+          ? {
+              name: 'RetryBot',
+              client_key: 'CK_RETRY',
+              dialogflow: {
+                agent: 'legacy-proj',
+                agent_object: { defaultLanguageCode: 'en' },
+                service_account: { key: saKeyResource },
+              },
+            }
+          : undefined,
+    });
+    try {
+      const id = await monitorAgentId();
+      const res = await app.request(`/api/agents/${id}/retry-legacy-engine`, {
+        method: 'POST',
+        headers: { cookie: parentCookie },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean; project: string };
+      expect(body.project).toBe('legacy-proj');
+      const [row] = await db.select().from(agents).where(eq(agents.id, id));
+      const cfg = row.config as { engine?: string; dialogflow?: { project?: string } };
+      expect(cfg.engine).toBe('dialogflow');
+      expect(cfg.dialogflow?.project).toBe('legacy-proj');
+      const [sec] = await db
+        .select()
+        .from(agentSecrets)
+        .where(and(eq(agentSecrets.agentId, id), eq(agentSecrets.name, 'DIALOGFLOW_SA_JSON')));
+      expect(sec).toBeTruthy();
+    } finally {
+      setLegacyOps(undefined);
+    }
+  });
+
+  it('422s with an actionable reason when creds are still unavailable', async () => {
+    setLegacyOps({
+      bot: async () => ({ name: 'NoCreds', client_key: 'CK_RETRY', dialogflow: { agent: 'p' } }),
+    });
+    try {
+      const id = await monitorAgentId();
+      const res = await app.request(`/api/agents/${id}/retry-legacy-engine`, {
+        method: 'POST',
+        headers: { cookie: parentCookie },
+      });
+      expect(res.status).toBe(422);
+      const [row] = await db.select().from(agents).where(eq(agents.id, id));
+      expect((row.config as { engine?: string }).engine).toBe('monitor');
+    } finally {
+      setLegacyOps(undefined);
+    }
+  });
+
+  it('refuses a non-migrated agent', async () => {
+    const res = await postAgent(parentCookie);
+    const { agent } = (await res.json()) as { agent: { id: string } };
+    const r = await app.request(`/api/agents/${agent.id}/retry-legacy-engine`, {
+      method: 'POST',
+      headers: { cookie: parentCookie },
+    });
+    expect(r.status).toBe(409);
   });
 });
 
