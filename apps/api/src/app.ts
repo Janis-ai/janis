@@ -60,6 +60,7 @@ import { trackRoutes } from './routes/track.js';
 import { webchatRoutes } from './routes/webchat.js';
 import { legacyWebhookRoutes } from './routes/legacy.js';
 import { legacyApiRoutes } from './routes/legacyApi.js';
+import { LEGACY_PASSTHROUGH_PREFIXES, legacyPassthrough } from './routes/legacyPassthrough.js';
 
 export function createApp(db: Db) {
   const app = new Hono();
@@ -212,6 +213,15 @@ export function createApp(db: Db) {
   // Legacy npm-SDK transcript/detectIntent API (api.janis.ai) — clientkey-auth'd.
   app.use('/api/v1/*', rateLimit({ scope: 'legacy-api', windowMs: 60_000, max: 300 }));
   app.route('/api/v1', legacyApiRoutes(db));
+  // Legacy passthrough — the rest of wordhopapi's mount table, verbatim relay
+  // so www.janis.ai can cut over without stranding external callers. Remove
+  // prefixes as traffic (see 'legacy-passthrough' logs) dies off.
+  for (const p of LEGACY_PASSTHROUGH_PREFIXES) {
+    app.use(p, rateLimit({ scope: 'legacy-pt', windowMs: 60_000, max: 300 }));
+    app.use(`${p}/*`, rateLimit({ scope: 'legacy-pt', windowMs: 60_000, max: 300 }));
+    app.all(p, legacyPassthrough);
+    app.all(`${p}/*`, legacyPassthrough);
+  }
 
   // WorkOS Directory Sync webhooks (SCIM provisioning) — HMAC-signed.
   app.use('/workos/*', rateLimit({ scope: 'workos', windowMs: 60_000, max: 120 }));

@@ -38,7 +38,7 @@ const REFUSED = { error: 'no subscription found' };
  * so must we, or header-less callers get REFUSED and their escalation
  * calls silently die.
  */
-function clientKeyOf(c: Context, bodyText: string | null): string {
+export function clientKeyOf(c: Context, bodyText: string | null): string {
   const fromHeader = c.req.header('clientkey');
   if (fromHeader) return fromHeader;
   const fromQuery =

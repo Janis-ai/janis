@@ -153,6 +153,16 @@ is a day on launch)*
    mapping, OAuth redirect re-registration (Google/Slack/Meta consoles),
    Stripe webhook re-registration, DNS, CORS tighten, cookie flags. Old
    app stays up for legacy clients.
+   2026-10-23: legacy surface fully covered — /api/v1 + /messenger are
+   native, and EVERY other wordhopapi mount (/report*, /intents,
+   /send_chat_response, /subscribe, /smooch, /azure, /log, /add_bot,
+   /update_bot*, /archive_channel, /bot_subscriptions, /prior,
+   /add_email, /get_longterm_access_token) relays verbatim via
+   routes/legacyPassthrough.ts → WORDHOP_API_URL (already set in prod).
+   Point api.janis.ai + www.janis.ai + webhook.janis.ai at the new app;
+   give wordhopapi legacy.janis.ai and repoint WORDHOP_API_URL /
+   META_LEGACY_WEBHOOK_URL / LEGACY_SLACK_INTERACTIONS_URL at it.
+   'legacy-passthrough' logs = who's-still-legacy ledger.
 2. Verify + export the 17k legacy list (Mongo export) — campaign prep is
    fiction without it. (2026-10-20: archived in-place on the wordhopapi
    cluster via scripts/archive-legacy-collections.mjs —
@@ -210,6 +220,23 @@ is a day on launch)*
    SearXNG init is ~4min cold; proxy's 30s upstream timeout would 502
    during boot). Rotate token → update .env+.env.production +
    redeploy both services.
+10. Shopify app approval — listing assets DONE 2026-10 (console
+    screenshots, embedded-app home shot, walkthrough video, PCD
+    questionnaire + security policy). Remaining: the submission +
+    review cycle itself.
+11. Google OAuth verification — Gmail channel scopes; restricted
+    scopes may need CASA security assessment.
+12. Azure — app reg + MS_* envs DONE (A6); publisher verification in
+    Partner Center may still be open — confirm status.
+13. LLM pro accounts — paid/raised-tier API accounts for
+    platform-hosted inference before real traffic (rate limits,
+    spend headroom).
+14. Meta Page Public Metadata Access — submitted, NOT approved
+    (2026-10). Nothing in the app uses unowned-page metadata today —
+    all Meta calls go through client page tokens or the User Profile
+    API — so the denial breaks nothing. Reapply only with a concrete
+    feature consuming it (e.g., public IG profile enrichment of
+    senders) + a screencast of that flow; generic asks get denied.
 
 *B. Quick wins — ALL DONE or moot* (10 plan-meter + /billing/status ✓,
 11 Agents View/Manage ✓, 12 per-event notify prefs grid ✓, 13 DB_POOL_MAX
