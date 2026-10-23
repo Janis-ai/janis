@@ -333,8 +333,10 @@ export function createApp(db: Db) {
     app.get('*', async (c) => {
       // Unknown API-ish paths should 404, not render the SPA
       // (/channels and /billing are web pages; only /channels/meta/* and
-      // /billing/stripe-webhook are API routes)
-      if (/^\/(api|auth|v1|slack|uploads|chat|messenger)(\/|$)/.test(c.req.path) ||
+      // /billing/stripe-webhook are API routes. /slack/legacy is also a web
+      // page — the classic-team migration chooser the OAuth callback lands on.)
+      if ((c.req.path !== '/slack/legacy' &&
+           /^\/(api|auth|v1|slack|uploads|chat|messenger)(\/|$)/.test(c.req.path)) ||
           /^\/widget\.js$/.test(c.req.path) ||
           /^\/channels\/meta(\/|$)/.test(c.req.path) ||
           /^\/billing\/stripe-webhook(\/|$)/.test(c.req.path)) {
