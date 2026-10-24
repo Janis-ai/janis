@@ -338,7 +338,7 @@ await seg('seg4-builder', async (page) => {
 if (!process.env.ONLY || process.env.ONLY === 'seg5')
 await seg('seg5-deploy-landing', async (page) => {
   await page.goto(`${APP}/agents/51a81b16-f6a1-4dfa-ac83-15e116690269`, { waitUntil: 'domcontentloaded' });
-  await cap(page, '94% of conversations resolve without a human \u2014 real usage, real leverage.');
+  await cap(page, '80 conversations this week \u2014 88% resolved by AI, zero missed handoffs.');
   await page.waitForTimeout(3000);
   await page.click('.push-banner-dismiss').catch(() => {});
   await cap(page, 'One agent, every channel \u2014 web, Shopify, Meta, email, Slack, SMS, voice. One inbox.');

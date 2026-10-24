@@ -1,9 +1,17 @@
-# Janis product demo — script (~2:30)
+# Janis product demo — scripts (customer cut ~3:30 / investor cut ~4:00)
 
-Audience: founders + support leads evaluating AI customer service.
-Differentiator the whole script is built around:
-**"AI when AI is best. Humans when humans are needed. One seamless
-customer conversation."**
+Two cuts, same footage pipeline:
+
+| cut | file | audience | spine |
+|---|---|---|---|
+| Customer | `docs/marketing/janis-demo.mp4` | founders + support leads evaluating AI support | "AI when AI is best. Humans when humans are needed." |
+| **Investor** | `docs/marketing/janis-demo-investor.mp4` | investors evaluating the company | product reality → the rescue→test moat → distribution as a rail |
+
+The investor cut reframes the same story: the storefront isn't a
+support demo, it's proof of a revenue surface on a real catalog; the
+rescue loop isn't a feature, it's the compounding moat; and the close
+isn't a tagline, it's the migration rail — 17k legacy installs that
+convert in one click.
 
 Tone: calm, no hype. Let the product do the flexing. Every claim is
 shown, not said.
@@ -93,6 +101,36 @@ is the one the human saves and the agent learns from.
 
 ---
 
+## Investor cut — shot list + burned-in captions (filmed 2026-10-24)
+
+Same rig, same store, investor spine. Captions are rendered as a DOM
+overlay at film time (this ffmpeg build lacks libass) — they're timed
+to beat marks, so sync is exact by construction. Light-mode console
+(`janis_theme=light`), widget panel expanded via `#janis-expand`.
+
+| # | seg | duration | what's on screen | caption |
+|---|---|---|---|---|
+| 1 | `seg1-storefront` | ~2:36 | password gate → browse → bubble → **expanded panel** → catalog ask → **product carousel** (sale badges, stock, add-to-cart, "Showing 10 of 11") → sizing form → buy → **checkout card** (Order #D31, $2,629.95, "Complete your purchase") → email collect → return ask → **send-to-team form** | "Customer support is the last workflow still priced per human hour." → "This is Janis running a real storefront — live catalog, live pricing, in the chat bubble." → "Not an FAQ — a revenue surface. Real products, real prices, in-chat." → "The loop closes in-chat — a checkout link, not a ticket." → "Until it needs judgment. Then it stops — by design." |
+| 2 | `seg2-inbox` | ~0:29 | `/conversations` → newest thread (carousel preview, intent: sales, BUBBLE/Shopify channel) → **Take over** → typed human reply | "Same conversation, other side — full context, instant human takeover." → "Every rescue is captured — not just answered." |
+| 3 | `seg3-learn` | ~0:15 | agent → Test → expand "N rescued conversations" → the seg2 reply as top row → **Save as tests** → scenario with AI-drafted expectation | "The moat: rescued threads surface here —" → "…and one click turns a save into a regression test. The product compounds with use." |
+| 4 | `seg4-build` | ~0:22 | rail montage: Knowledge → Behavior → Actions → Test | "Knowledge, behavior, actions, tests, channels — a platform, not a feature." |
+| 5 | `seg5-migration` | ~0:20 | **Michael's workspace** → Settings → Escalation → janistest3 card → "Migrated from the classic setup — 5 agents" (HOSTED/MONITOR/DIALOGFLOW badges, channel bindings, Manage links) → landing hero | "17,000 legacy installs migrate in one click — distribution is a rail, not an ad spend." → "AI when AI is best. Humans when humans are needed. Janis — janis.ai" |
+
+```bash
+SNOW_TOKEN=<demo-ws session> SNOW_TOKEN2=<main-ws session> \
+  SHOP_PASS=<storefront pw> node scripts/ui/demo-film.mjs
+# concat (captions already in-frame — plain concat, no ass filter):
+ffmpeg -f concat -safe 0 -i concat.txt -c:v libx264 -pix_fmt yuv420p \
+  -crf 20 -movflags +faststart docs/marketing/janis-demo-investor.mp4
+```
+
+seg5 needs `SNOW_TOKEN2` — the migrated-agents panel lives in the main
+workspace, not the demo one. `beats.json` records the mark for every
+caption (only segments filmed in that run appear — merge when a cut is
+assembled from multiple runs).
+
+---
+
 ## Filming — `scripts/ui/demo-film.mjs` (built + proven)
 
 Extends `demo-video.mjs` (which recorded the Shopify review video).
@@ -150,3 +188,12 @@ ffmpeg -f concat -safe 0 -i <(printf "file '%s'\n" seg1-storefront.webm seg2-inb
   rescue to exist — seg2's takeover creates one.
 - The minted session shows operator "Maya Chen" — on-screen takeover
   markers read as the shop's teammate. Keep reply text name-free.
+- **Collections-picker tap is a dead loop** (product bug, found on
+  camera 2026-10-24): tapping a collection row posts its name as a
+  visitor message and the agent answers with the SAME picker again
+  instead of listing products. The rig no longer taps it — if the
+  browse ask draws the picker, it waits 15s then sends the sharper
+  "just show me all the boards you carry", which reliably pulls the
+  carousel. Don't film the tap until the bug is fixed.
+- `ONLY=segN` runs rewrite `beats.json` — restore marks for segments
+  not re-filmed before referencing timings.

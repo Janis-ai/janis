@@ -8,8 +8,9 @@
 //   SNOW_TOKEN=<minted session> SHOP_PASS=… node scripts/ui/demo-film.mjs
 //   ONLY=seg2 node scripts/ui/demo-film.mjs        # single segment
 //
-// Output: /tmp/janis-film/seg-*.webm + beats.json → demo-subs.mjs concats,
-// lays subtitles on the beat marks, and burns janis-demo.mp4 via ffmpeg.
+// Output: /tmp/janis-film/seg-*.webm + beats.json — captions render as a
+// DOM overlay at beat() time (synced by construction, no libass needed);
+// a plain ffmpeg concat produces the final mp4.
 import { chromium } from 'playwright';
 import { mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -218,7 +219,7 @@ if ((!ONLY || ONLY === 'seg1') && SHOP_PASS)
       await cur.click(page.locator('button[type="submit"], input[type="submit"]'));
       await page.waitForLoadState('domcontentloaded');
     }
-    beat('open', 'Your customers are already talking to you.\nThe question is who’s answering.', 'bl');
+    beat('open', 'Customer support is the last workflow\nstill priced per human hour.', 'bl');
     await page.waitForSelector('#janis-bubble', { timeout: 30000 });
     await page.waitForTimeout(2500);           // browse beat — let the store read
     await page.evaluate(() => window.scrollTo({ top: 600, behavior: 'smooth' }));
@@ -231,39 +232,24 @@ if ((!ONLY || ONLY === 'seg1') && SHOP_PASS)
       await cur.click(expand);
       await page.waitForTimeout(800);
     }
-    beat('chat-open', 'Janis answers from your actual catalog —\nproduct questions, sizing, orders — live, in the chat bubble.', 'bl');
+    beat('chat-open', 'This is Janis running a real storefront —\nlive catalog, live pricing, in the chat bubble.', 'bl');
     await page.waitForTimeout(2500);
 
     await say(page, cur, 'Show me the snowboards you have for sale');
     // The agent may answer a browse ask with the collections picker ("What
-    // would you like to browse?") or the "find your board" form — not the
-    // product list Mike wants on camera. Tap the biggest collection row to
-    // get the carousel; fall back to a sharper ask if neither shows.
+    // would you like to browse?") instead of the product carousel. NB: the
+    // picker TAP is a dead loop in the widget today (posts the name, agent
+    // re-asks) — so don't tap it on camera. Give the cards a short window,
+    // then a sharper follow-up ask that reliably pulls the carousel.
     if (!(await page.locator('.janis-wcards').count())) {
-      // collections picker rows ("Name — N products") — click the BIGGEST
-      // one so the carousel shows a real list, not a single card
-      const pick = await page.evaluate(() => {
-        const rows = [...document.querySelectorAll('.janis-wopts button, .janis-wlist > *, .janis-wopts > *')];
-        let best = null, bestN = -1;
-        rows.forEach((el, i) => {
-          const m = (el.textContent ?? '').match(/(\d+)\s*product/i);
-          if (m && +m[1] > bestN) { bestN = +m[1]; best = i; }
-        });
-        return best;
-      });
-      if (pick !== null) {
-        const rows = page.locator('.janis-wopts button, .janis-wlist > *, .janis-wopts > *');
-        await cur.click(rows.nth(pick));
-        await page.waitForSelector('.janis-wcards', { timeout: 90000 }).catch(() => {});
-        await settle(page);
-      }
+      await page.waitForSelector('.janis-wcards', { timeout: 15000 }).catch(() => {});
     }
     if (!(await page.locator('.janis-wcards').count())) {
       await say(page, cur, 'just show me all the boards you carry');
       await page.waitForSelector('.janis-wcards', { timeout: 90000 }).catch(() => {});
     }
     await scrollEnd(page);
-    beat('cards', 'Real products, live prices — answered\nfrom the catalog itself.', 'bl');
+    beat('cards', 'Not an FAQ — a revenue surface.\nReal products, real prices, in-chat.', 'bl');
     await page.waitForTimeout(2500);
 
     await say(page, cur, "what size board should I get? I'm 5'10\", 170lb");
@@ -273,11 +259,11 @@ if ((!ONLY || ONLY === 'seg1') && SHOP_PASS)
     if (!(await page.locator('#janis-msgs a[href*="checkout"], #janis-msgs a[href*="cart"]').count())) {
       await say(page, cur, 'my email is mike@example.com');
     }
-    beat('checkout', 'It closes the loop — a checkout link,\nright in the conversation. No forms, no dead ends.', 'bl');
+    beat('checkout', 'The loop closes in-chat —\na checkout link, not a ticket.', 'bl');
     await page.waitForTimeout(2000);
 
     await say(page, cur, 'Actually I need to return an order I already received');
-    beat('return', 'Until something needs judgment. A refund, a promise,\nan upset customer — that’s not a job for a confidence score.', 'bl');
+    beat('return', 'Until it needs judgment.\nThen it stops — by design.', 'bl');
     await page.waitForTimeout(6000);
     await caption(page, '');
   });
@@ -292,7 +278,7 @@ if (!ONLY || ONLY === 'seg2')
     await tidy(page);
     await page.waitForTimeout(2500);
     await cur.click(page.locator('a.conv-row').first());
-    beat('thread', 'Same conversation, other side. A human sees it\nthe moment it matters — with everything the AI already learned.', 'up');
+    beat('thread', 'Same conversation, other side —\nfull context, instant human takeover.', 'up');
     // composer only exists in human state — on an agent-owned conv the
     // action row is the signal the page is ready, not a textarea
     await page.waitForSelector('button:has-text("Take over"), textarea', { timeout: 20000 });
@@ -305,7 +291,7 @@ if (!ONLY || ONLY === 'seg2')
 
     // the differentiator beat: AI → human, same thread
     await cur.click(page.locator('button:has-text("Take over")'));
-    beat('takeover', 'And just types. The customer never leaves the bubble,\nnever repeats themselves.', 'up');
+    beat('takeover', 'Every rescue is captured — not just answered.', 'up');
     await page.waitForSelector('.composer-inner textarea, textarea', { timeout: 20000 });
     await page.waitForTimeout(1800);
     const ta = page.locator('.composer-inner textarea, textarea').last();
@@ -343,10 +329,10 @@ if (!ONLY || ONLY === 'seg3')
       await page.waitForTimeout(1500);
       await cur.click(card.locator('summary'));
       await page.waitForTimeout(1500);
-      beat('rescues', 'Every human rescue becomes a lesson.');
+      beat('rescues', 'The moat: rescued threads surface here —');
       const sug = page.locator('button:has-text("Save as tests")').first();
       await cur.click(sug);
-      beat('saved', 'The gap is flagged, the fix becomes a test —\nthe next customer never waits on a human for that question.');
+      beat('saved', '…and one click turns a save into a regression test.\nThe product compounds with use.');
       await page.waitForTimeout(3000);
       await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
       await page.waitForTimeout(2500);
@@ -369,7 +355,7 @@ if (!ONLY || ONLY === 'seg4')
     ];
     await page.goto(stops[0][1], { waitUntil: 'domcontentloaded' });
     await tidy(page);
-    beat('montage', 'Point it at what you know, tell it how to behave,\ntest it like a customer, deploy it where your customers are.');
+    beat('montage', 'Knowledge, behavior, actions, tests, channels —\na platform, not a feature.');
     await page.waitForTimeout(3000);
     for (const [name] of stops.slice(1)) {
       // click the real nav item like an operator would
@@ -380,19 +366,29 @@ if (!ONLY || ONLY === 'seg4')
     }
   }, TOKEN);
 
-// ==== seg5: where it lives + close =====================================
+// ==== seg5: the distribution rail — investor beat ======================
+// TOKEN2 = a session on Mike's main workspace — that's where the migrated
+// janistest3 install lives. The migrated-agents panel is the "17k legacy
+// installs, one-click migration" shot without running a real migration.
 if (!ONLY || ONLY === 'seg5')
-  await seg('seg5-close', async (page, cur, beat) => {
-    await page.goto(`${APP}/agents/${AGENT}/channels`, { waitUntil: 'domcontentloaded' });
+  await seg('seg5-migration', async (page, cur, beat) => {
+    await page.goto(`${APP}/settings?section=escalation`, { waitUntil: 'domcontentloaded' });
     await tidy(page);
-    beat('channels', 'Web chat, social, email, voice —\none agent, one inbox, one set of rules.');
-    await page.waitForTimeout(4500);
-    await page.evaluate(() => window.scrollTo({ top: 500, behavior: 'smooth' }));
-    await page.waitForTimeout(3000);
+    await page.waitForSelector('text=janistest3', { timeout: 20000 });
+    await page.waitForTimeout(2000);
+    await page.evaluate(() => {
+      const el = [...document.querySelectorAll('*')].find((e) => e.textContent?.trim() === 'janistest3');
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+    await page.waitForTimeout(2500);
+    beat('migrated', '17,000 legacy installs migrate in one click —\ndistribution is a rail, not an ad spend.');
+    await page.waitForTimeout(6500);
+    await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
+    await page.waitForTimeout(2500);
     await page.goto('https://www.janis.ai', { waitUntil: 'domcontentloaded' });
     beat('landing', 'AI when AI is best. Humans when humans are needed.\nJanis — janis.ai');
     await page.waitForTimeout(4000);
-  }, TOKEN);
+  }, process.env.SNOW_TOKEN2 ?? TOKEN);
 
 await browser.close();
 writeFileSync(join(VID, 'beats.json'), JSON.stringify(BEATS, null, 1));
