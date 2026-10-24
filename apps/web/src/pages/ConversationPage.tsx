@@ -79,9 +79,20 @@ export default function ConversationPage() {
   // Returning via the agent-page breadcrumb restores scroll — disarm the
   // bottom-stick before the snap effect below can run.
   if (returnScroll) stickRef.current = false;
-  const snapToBottom = () => {
+  // A message taller than the pane anchors at its top — the iMessage-style
+  // bottom snap would land the reader on the signature of a long email.
+  const snapToLatest = () => {
     const el = transcriptRef.current;
-    if (stickRef.current && el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const last = bottomRef.current?.previousElementSibling;
+    if (last instanceof HTMLElement && last.offsetHeight > el.clientHeight) {
+      el.scrollTop += last.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
+  };
+  const snapToBottom = () => {
+    if (stickRef.current) snapToLatest();
   };
 
   // Optimistic outbound entries + which one currently owns the receipt.
@@ -1420,7 +1431,7 @@ export default function ConversationPage() {
                 setOlderHasMore(null);
                 stickRef.current = true;
                 void qc.invalidateQueries({ queryKey: ['conversation', id] });
-                setTimeout(() => bottomRef.current?.scrollIntoView(), 80);
+                setTimeout(snapToLatest, 80);
               }}
             >
               ↓ Jump to latest
