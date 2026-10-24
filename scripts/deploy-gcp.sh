@@ -14,14 +14,17 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Serialize deploys — two runs racing shared /tmp state produced a broken
-# revision (01082). Exclusive lock + per-run temp files instead.
-exec 200>/tmp/janis-deploy.lock
-flock -n 200 || { echo "another deploy-gcp.sh is already running — aborting" >&2; exit 1; }
+# revision (01082). mkdir is atomic on macOS + Linux (no flock on macOS).
+LOCK=/tmp/janis-deploy.lock.d
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "another deploy-gcp.sh is already running — aborting" >&2
+  exit 1
+fi
 ENV_YAML=$(mktemp /tmp/janis-env.XXXXXX.yaml)
 SECRETS_TXT=$(mktemp /tmp/janis-secrets.XXXXXX.txt)
 CLOUDSQL_TXT=$(mktemp /tmp/janis-cloudsql.XXXXXX.txt)
 export ENV_YAML SECRETS_TXT CLOUDSQL_TXT
-trap 'rm -f "$ENV_YAML" "$SECRETS_TXT" "$CLOUDSQL_TXT"' EXIT
+trap 'rm -rf "$LOCK" "$ENV_YAML" "$SECRETS_TXT" "$CLOUDSQL_TXT"' EXIT
 
 PROJECT=janis-prod-mn REGION=us-east1 SERVICE=janis-api
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
