@@ -6090,17 +6090,18 @@ async function replyAsHostedAgent(
     if (!reply) {
       // Widget-only reply — the component IS the answer (a plan picker, a
       // form). It still needs a text line on the wire, and the line should
-      // say what the component is FOR — the widget's own title when it has
-      // one, a per-type lead-in otherwise. A bare "Here you go:" tells the
-      // customer nothing.
+      // say what the component is FOR. The widget's own title is the best
+      // lead-in — but then the component must NOT render it again, or the
+      // question prints twice in a row.
       const w0 = widgets[0] as { type?: string; title?: string } | undefined;
-      const lead = w0?.title?.trim();
+      const title = w0?.title?.trim();
+      if (title && w0) delete w0.title;
       await emit([
         {
           type: 'message_out',
           conversation_id: externalId,
           text:
-            (lead ? (/[.!?…:]$/.test(lead) ? lead : `${lead}:`) : null) ??
+            (title ? (/[.!?…:]$/.test(title) ? title : `${title}:`) : null) ??
             (
               {
                 form: 'Just a few details:',
