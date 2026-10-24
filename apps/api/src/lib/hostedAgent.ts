@@ -2077,6 +2077,12 @@ const CLAIM_WIDGET_RES = [
   ),
   new RegExp(`\\bthe\\s+${WIDGET_NOUN}\\b[^.!?\\n]{0,40}?\\b(?:above|below|appear|shown)\\b`, 'i'),
 ];
+// Colon lead-in promising a list — "Here are some of our popular boards:",
+// "Here's what I found:" — as the reply's LAST line. Only checked against the
+// final sentence and only when rendered === 0: a lead-in followed by real
+// cards or a text list is fine; a lead-in ending the message fronts for
+// cards that never shipped.
+const CLAIM_LEADIN_RE = /\bhere(?:\s+are|['’]?s|\s+is)\b[^.!?\n]{0,60}:\s*$/i;
 const DENY_WIDGET_RES = [
   new RegExp(
     `\\b(?:didn't|did\\s+not|doesn't|does\\s+not|couldn't|could\\s+not|can't|cannot|won't|unable\\s+to|wasn't\\s+able\\s+to)\\b[^.!?\\n]{0,60}?\\b(?:render|show|display|appear|load|come\\s+through|show\\s+up)\\b`,
@@ -2094,13 +2100,17 @@ function isWidgetDeny(s: string): boolean {
   return DENY_WIDGET_RES.some((p) => p.test(s));
 }
 export function claimsWidgetShown(text: string): boolean {
-  return sentencesOf(text).some(isWidgetClaim);
+  const sents = sentencesOf(text);
+  if (sents.some(isWidgetClaim)) return true;
+  const last = sents[sents.length - 1];
+  return !!last && CLAIM_LEADIN_RE.test(last);
 }
 export function deniesWidgetShown(text: string): boolean {
   return sentencesOf(text).some(isWidgetDeny);
 }
 export function stripWidgetClaims(text: string): string {
-  return stripSentencesByLine(text, (s) => isWidgetClaim(s) || isWidgetDeny(s)).text;
+  const out = stripSentencesByLine(text, (s) => isWidgetClaim(s) || isWidgetDeny(s)).text;
+  return out.replace(CLAIM_LEADIN_RE, '').trimEnd();
 }
 
 // Deferred-lookup narration — "let me grab my calendar connection", "give
@@ -3069,6 +3079,9 @@ export interface InspectorToolCall {
   /** approval-gated tool — the call is/was proposed, not executed. */
   gated?: boolean;
   outcome: 'ran' | 'failed' | 'proposed' | 'simulated';
+  /** Wall time for the call + its widget post-processing — the inspector's
+   *  answer to "is the latency Shopify or us". */
+  ms?: number;
   /** Args the model sent (truncated) — the inspector's only record of what
    *  the call actually attempted when it misfires. */
   args?: Record<string, unknown>;
@@ -3528,6 +3541,7 @@ export async function complete(
       const gated = !!tool?.approval && !!ctx?.agent;
       let outcome: InspectorToolCall['outcome'] = 'ran';
       let result: string;
+      const tCall = Date.now();
       let args: Record<string, unknown> = {};
       try {
         args = JSON.parse(call.function.arguments || '{}') as Record<string, unknown>;
@@ -3555,9 +3569,13 @@ export async function complete(
           const handle = String(args.collection).trim().toLowerCase();
           const cid = await shopifyCollectionId(secrets, handle);
           const clause = `collection_id:${cid ?? '0'}`;
-          const q = String(args.query ?? '').trim();
-          if (!q.toLowerCase().includes(clause))
-            args.query = `${q} ${clause}`.trim();
+          // The resolved handle wins over any collection_id: clause the model
+          // wrote into the query itself — keeping both ANDs them (a wrong or
+          // stale id intersected the 8-item collection down to 2 cards).
+          const q = String(args.query ?? '')
+            .replace(/\bcollection_id\s*:\s*\S+/gi, ' ')
+            .trim();
+          args.query = `${q} ${clause}`.trim();
         }
         const SORT_ALIASES: Record<string, { key: string; rev?: boolean }> = {
           // No popularity sort exists on Admin products() — ProductSortKeys
@@ -3738,6 +3756,7 @@ export async function complete(
         name: call.function.name,
         gated,
         outcome,
+        ms: Date.now() - tCall,
         args: inspectorArgs(args),
         ...(outcome === 'failed' ? { error: result.slice(0, 300) } : {}),
       });

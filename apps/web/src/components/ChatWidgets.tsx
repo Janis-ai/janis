@@ -261,14 +261,15 @@ function Options({ w, onSend }: { w: Extract<ChatWidget, { type: 'options' }>; o
   return (
     <>
       {w.title && <div className="wgt-title">{w.title}</div>}
-      <div className={`wgt-opts${picked !== null ? ' wgt-done' : ''}`}>
+      <div className="wgt-opts">
         {w.items.map((item, i) => (
           <button
             key={i}
             type="button"
             className={`wgt-opt${picked === i ? ' wgt-sel' : ''}`}
             onClick={() => {
-              if (picked !== null) return;
+              // Picks mark, never lock — a browse picker (collections,
+              // categories) stays live so the customer can switch lanes.
               setPicked(i);
               onSend(item.send ?? item.label, { of: w.title });
             }}

@@ -877,6 +877,22 @@ describe('claimsWidgetShown / deniesWidgetShown', () => {
       ),
     ).toBe("The Free tier covers 1 agent. Let me know if you'd like details.");
   });
+
+  it('flags a dangling colon lead-in as the last line — prod "Here are some of our popular boards:" over zero widgets', () => {
+    expect(claimsWidgetShown('Here are some of our popular boards:')).toBe(true);
+    expect(claimsWidgetShown("Here's what I found:")).toBe(true);
+    // …but a lead-in followed by a real text list is untouched.
+    expect(claimsWidgetShown('Here are your options:\n1) refund\n2) exchange')).toBe(false);
+    expect(
+      claimsWidgetShown('Here are the steps:\n- First, do this\n- Then, do that'),
+    ).toBe(false);
+  });
+
+  it('strips a dangling colon lead-in', () => {
+    expect(stripWidgetClaims('We carry boards. Here are some of our popular boards:')).toBe(
+      'We carry boards.',
+    );
+  });
 });
 
 describe('promisesLookup / stripLookupPromises', () => {
@@ -1828,7 +1844,7 @@ describe('testRun tool stubbing', () => {
       testRun: true,
     });
     expect(r.text).toBe('Your refund request is pending approval.');
-    expect(r.toolCalls).toEqual([
+    expect(r.toolCalls).toMatchObject([
       { name: 'create_refund', gated: true, outcome: 'proposed', args: { order: '5' } },
     ]);
     // the tool result fed back says "queued for review", not "treat as proposed, not done"
@@ -2054,7 +2070,7 @@ describe('testRun tool stubbing', () => {
     }, [cardBuiltin]);
     expect(r.text).toBeNull();
     expect(r.actionCards).toBe(1);
-    expect(r.toolCalls).toEqual([
+    expect(r.toolCalls).toMatchObject([
       { name: 'update_agent', gated: false, outcome: 'ran', args: { greeting: 'hi' } },
     ]);
   });
@@ -2233,7 +2249,7 @@ describe('identity-scoped customer-record tools', () => {
       workspaceId: wsId,
       identity: { emails: new Set(), operator: false },
     });
-    expect(r.toolCalls).toEqual([
+    expect(r.toolCalls).toMatchObject([
       {
         name: 'stripe_find_customer',
         gated: false,

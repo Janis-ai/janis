@@ -1578,6 +1578,38 @@ describe('filterRowsByQuery — strong_fields (Shopify product search)', () => {
     const titles = out.data.products.nodes.map((r: { title: string }) => r.title);
     expect(titles).toEqual(['Gift Card']);
   });
+
+  it('passes rows through on operator-only queries — collection_id: is a filter, not a term', () => {
+    // Prod bug: "collection_id:361138290865" tokenized to {collection, id,
+    // 361138290865} and dropped every row whose title lacked those words —
+    // an 8-product collection rendered only the two "Collection Snowboard"s.
+    const out = JSON.parse(
+      filterRowsByQuery(cfg, { query: 'collection_id:361138290865' }, result),
+    );
+    expect(out.data.products.nodes).toHaveLength(3);
+  });
+
+  it('passes rows through on wildcard operator queries — title:* is not the word "title"', () => {
+    // Prod bug: "title:*" left token {title} and dropped every card,
+    // shipping "Here are some of our popular boards:" with zero widgets.
+    const out = JSON.parse(filterRowsByQuery(cfg, { query: 'title:*' }, result));
+    expect(out.data.products.nodes).toHaveLength(3);
+  });
+
+  it('passes rows through on compare_at_price:>0 sale filters', () => {
+    const out = JSON.parse(
+      filterRowsByQuery(cfg, { query: 'compare_at_price:>0' }, result),
+    );
+    expect(out.data.products.nodes).toHaveLength(3);
+  });
+
+  it('still filters by the free-text tail of a mixed query', () => {
+    const out = JSON.parse(
+      filterRowsByQuery(cfg, { query: 'snowboard product_type:snowboards vendor:x' }, result),
+    );
+    const titles = out.data.products.nodes.map((r: { title: string }) => r.title);
+    expect(titles).toEqual(['The Collection Snowboard: Liquid', 'The Videographer Snowboard']);
+  });
 });
 
 describe('titlesMatch / namedProductsInReply', () => {

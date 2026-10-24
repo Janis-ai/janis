@@ -1657,7 +1657,10 @@
         b.appendChild(sEl);
       }
       b.onclick = function () {
-        list.classList.add('janis-wdone');
+        // Browsing pickers stay live after a pick — "shop by collection" is a
+        // switch, not a one-shot choice; the customer can tap a sibling next.
+        var sels = list.querySelectorAll('.janis-wsel');
+        for (var i = 0; i < sels.length; i++) sels[i].classList.remove('janis-wsel');
         b.classList.add('janis-wsel');
         sendText(item.send || item.label, { of: w.title });
       };

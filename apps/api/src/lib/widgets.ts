@@ -1450,9 +1450,21 @@ export function relevanceRowPredicate(
   if (!rel) return null;
   const q = String(args[rel.arg] ?? '').trim().toLowerCase();
   if (!q) return null;
+  // field:value clauses (collection_id:…, title:*snow*, variants.price:<=800,
+  // status:active, vendor:…) are FILTER OPERATORS the upstream search already
+  // applied — tokenizing them keeps only rows whose fields literally contain
+  // "collection" or "title" (a collection_id: query dropped every card but
+  // the two products named "The Collection Snowboard"; title:* dropped all).
+  // Strip operators and wildcard markers; a query made only of operators
+  // means the upstream did the narrowing — pass rows through unfiltered.
+  const free = q
+    .replace(/\b[a-z_]+(?:\.[a-z_]+)*\s*:\s*(?:"[^"]*"|'[^']*'|[^\s]+)/g, ' ')
+    .replace(/\*/g, ' ')
+    .trim();
+  if (!free) return null;
   // Accent-fold so "café" and "cafe" tokenize identically.
   const fold = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '');
-  const qTokens = [...new Set(fold(q).split(/[^a-z0-9]+/).filter((t) => t.length > 1))];
+  const qTokens = [...new Set(fold(free).split(/[^a-z0-9]+/).filter((t) => t.length > 1))];
   if (!qTokens.length) return null;
   const strong = rel.strong_fields;
   // Word-bounded, trailing-'s' tolerant: "snowboard" must not match
@@ -1473,7 +1485,7 @@ export function relevanceRowPredicate(
     if (!hay.trim()) return false;
     // Whole-phrase match must be word-bounded too — plain `includes` lets a
     // "snowboard" query keep a row whose only hit is "snowboarder" in prose.
-    if (tokRe(q).test(hay)) return true;
+    if (tokRe(free).test(hay)) return true;
     if (strong) {
       // Identifying columns must carry a query token — title/type/tags are
       // what a shopper means by "snowboards"; description prose doesn't
