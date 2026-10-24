@@ -835,19 +835,30 @@ export async function welcomeInstallerDm(inst: Installation): Promise<void> {
   if (inst.installerSlackUserId) {
     await dmWelcome(inst, inst.installerSlackUserId, text);
   }
-  // The same hello in the alerts channel — the team sees the connect, not
-  // just the installer's DM. Nothing picked yet → #general (every Slack
-  // workspace has one); join+retry rides inside postChannelMessage.
+  // The team's announcement in the alerts channel — everyone sees who
+  // connected Janis and why a bot just joined the channel. Nothing picked
+  // yet → #general (every Slack workspace has one); join+retry rides inside
+  // postChannelMessage.
   let channelId = inst.alertChannelId;
+  let alertsHere = true;
   if (!channelId) {
     const { channels } = await listSlackChannels(inst.botToken).catch(() => ({
       channels: [] as { id: string; name: string }[],
       complete: false,
     }));
     channelId = channels.find((c) => c.name === 'general')?.id ?? null;
+    alertsHere = false;
   }
   if (channelId) {
-    const res = await postChannelMessage(inst, channelId, { text, unfurl_links: false });
+    const channelText =
+      `Janis is connected to this workspace` +
+      (inst.installerSlackUserId ? ` — <@${inst.installerSlackUserId}> just set it up` : '') +
+      `. ` +
+      (alertsHere
+        ? `Agent alerts will post here. `
+        : `Pick an alert channel in Settings — `) +
+      `agents, inbox and settings live at ${env.webOrigin}`;
+    const res = await postChannelMessage(inst, channelId, { text: channelText, unfurl_links: false });
     if (!res.ok) console.error('slack install announce failed:', res.error);
   }
 }

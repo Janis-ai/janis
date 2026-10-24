@@ -1590,7 +1590,7 @@ describe('public OAuth install', () => {
     expect(String(post![1]?.body)).toContain('Team Welcome');
   });
 
-  it('mirrors the install welcome to the alerts channel (or #general)', async () => {
+  it('announces the install in the alerts channel (or #general)', async () => {
     const fetchMock = vi.fn().mockImplementation(async (url: string | URL) => {
       if (String(url).includes('oauth.v2.access')) {
         return slackOk({
@@ -1622,11 +1622,18 @@ describe('public OAuth install', () => {
       await new Promise((r) => setTimeout(r, 10));
     }
     const posts = fetchMock.mock.calls.filter(([u]) => String(u).includes('chat.postMessage'));
-    const bodies = posts.map((p) => String(p[1]?.body));
-    const channels = posts.map((p) => JSON.parse(String(p[1]?.body)).channel);
-    expect(bodies.every((b) => b.includes('Welcome to Janis'))).toBe(true);
-    expect(channels).toContain('D_WELCH');
-    expect(channels).toContain('C_GENERAL');
+    const byChannel = new Map(
+      posts.map((p) => {
+        const body = String(p[1]?.body);
+        return [JSON.parse(body).channel, body];
+      }),
+    );
+    // DM keeps the personal welcome; the channel post is its own message —
+    // who installed it and why the bot is posting here.
+    expect(byChannel.get('D_WELCH')).toContain('Welcome to Janis');
+    expect(byChannel.get('C_GENERAL')).toContain('Janis is connected');
+    expect(byChannel.get('C_GENERAL')).toContain('<@U_WELCH>');
+    expect(byChannel.get('C_GENERAL')).not.toContain('Welcome to Janis');
   });
 
   it('refuses an expired pending install', async () => {
