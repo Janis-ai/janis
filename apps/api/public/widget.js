@@ -535,7 +535,8 @@
     '.janis-wopt.janis-wsel{border-color:var(--janis-accent);background:var(--janis-accent);color:#fff}' +
     '.janis-wopt.janis-wsel small{color:rgba(255,255,255,.8)}' +
     '.janis-wopts.janis-wdone .janis-wopt:not(.janis-wsel){opacity:.5;pointer-events:none}' +
-    '.janis-wform{display:flex;flex-direction:column;gap:6px;min-width:200px}' +
+    '.janis-wform{display:flex;flex-direction:column;gap:12px;min-width:200px}' +
+    '.janis-wfield{display:flex;flex-direction:column;gap:3px}' +
     '.janis-wform input,.janis-wform textarea,.janis-wform select{border:1px solid #d1d5db;border-radius:8px;' +
     'padding:7px 10px;font-size:13px;font-family:inherit;background:#fff;color:#1f2937;outline:none;width:100%;box-sizing:border-box}' +
     '.janis-wform input:focus,.janis-wform textarea:focus,.janis-wform select:focus{border-color:var(--janis-accent)}' +
@@ -1670,6 +1671,7 @@
     var form = el('div', {}, { class: 'janis-wform' });
     var fields = [];
     (w.fields || []).forEach(function (f) {
+      var fw = el('div', {}, { class: 'janis-wfield' });
       var lab = document.createElement('label');
       wtext(lab, f.label + (f.required ? ' *' : ''));
       var input;
@@ -1677,6 +1679,17 @@
         input = document.createElement('textarea');
       } else if (f.type === 'select' && f.options && f.options.length) {
         input = document.createElement('select');
+        // A required select must not silently carry the first option — a
+        // return logged as "Shipping delay" because the shopper never
+        // touched the dropdown is a misroute, not an answer.
+        if (f.required) {
+          var ph = document.createElement('option');
+          ph.value = '';
+          ph.disabled = true;
+          ph.selected = !f.value;
+          wtext(ph, 'Choose…');
+          input.appendChild(ph);
+        }
         f.options.forEach(function (o) {
           var opt = document.createElement('option');
           opt.value = o;
@@ -1687,8 +1700,11 @@
         input = document.createElement('input');
         input.type = f.type === 'email' ? 'email' : f.type === 'tel' ? 'tel' : 'text';
       }
-      form.appendChild(lab);
-      form.appendChild(input);
+      // Server prefills facts it already knows (email, name) — editable.
+      if (f.value) input.value = f.value;
+      fw.appendChild(lab);
+      fw.appendChild(input);
+      form.appendChild(fw);
       fields.push({ f: f, input: input });
     });
     var submit = el('button', {}, { class: 'janis-wbtn janis-wbtn-primary', type: 'button' });

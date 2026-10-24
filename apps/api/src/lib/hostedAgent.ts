@@ -899,6 +899,7 @@ export function systemPrompt(
           '\nRules: images and links must be URLs that appear verbatim in your context — never invent one. For a card about a specific page or listing, use only the "Image:" URL attached to that page\'s knowledge — never reuse another document\'s image, and omit "image" if the page has none. Max 3 widgets per reply, only when a component is genuinely better than words (products to browse, slots to pick, fields to fill, progress to show). The widget replaces describing it — keep the surrounding text short.' +
           '\nNever rebuild a product card by hand — catalogue cards come ONLY from the product-search tool (re-call it if you need them). And once the customer has picked an item and confirmed, act on the pick — buy it, book it, apply it with the right tool — instead of re-rendering the same card or a card whose only action sends their own words back to you.' +
           '\nCards show exactly what the customer asked to see — every item you emit is a claim about a real thing, so render only items a tool result this turn returned (unverifiable items are stripped). Asked to show specific products ("just the two", "the red ones")? Include ALL of them — and only them — in ONE cards widget; never pad the row with unrelated items. Show cards only when they answer the ask: a "yes" to your offer of help is not a browse request, and a single named product deserves one card, not the whole catalogue. Never re-render a card already shown this conversation unless the customer asks or its data changed.' +
+          '\nWhen the customer points back at something you showed ("the first one", "that board", "the red one"), resolve it against the [cards shown] list attached to your earlier reply in the transcript — the numbered order is the order they saw. Never substitute a different item, and never draft a checkout or add-to-cart for an item that list marked out of stock: say it\'s unavailable and offer the nearest in-stock alternative instead.' +
           '\nNever paste a product, cart, checkout or pay URL as a bare link in your text — the card carries the link and the button. If the customer needs a page and no card carries it, name the page and offer to show the item instead.' +
           '\nA message reporting an item added to the cart ("I just added … to my cart", a tap on an add-to-cart button) is a cart event — the add already happened in the store, so acknowledge it in one line, quote the current cart contents from the cart context trait when present, and offer the next step: checking out in their cart (the cart widget renders a checkout button). Never re-run a product search, re-verify stock, or re-render the product card in reply to a cart event, and never create or offer a draft order unless the customer explicitly asks for a done-for-you checkout — the cart is already the done-for-them path.' +
           '\nWhen the customer asks to see products, plans or options that carry data (price, image, description), prefer a "cards" or "options" widget over a BUTTON: list — and when a tool call returns list data (search results, products, availability), render it as a widget rather than retelling it as text. Some tool results arrive already rendered as a component — the result says so; never emit a WIDGET: line restating data that was already rendered. Always pair a widget with a one-line lead-in ("Here are our plans:") — never emit a WIDGET: line alone.' +
@@ -4129,6 +4130,78 @@ function attachmentNote(payload: unknown): string {
   return atts.length ? ` [attachments: ${atts.map((a) => a.name ?? 'file').join(', ')}]` : '';
 }
 
+/** Form prefill — stamp fields whose names match facts we already know
+ * (contact profile, or an earlier-collected metadata value). The input stays
+ * editable; this saves re-typing, it doesn't answer for them. */
+export function prefillFormFields(
+  widgets: { type: string; fields?: { name: string; value?: string }[] }[],
+  profile: UserProfile & { metadata?: Record<string, unknown> },
+): void {
+  const meta = (k: string): string => {
+    const v = profile.metadata?.[k];
+    return typeof v === 'string' ? v : '';
+  };
+  const guess = (name: string): string => {
+    const n = name.toLowerCase().replace(/[\s-]+/g, '_');
+    if (n === 'email' || n === 'e_mail' || n === 'email_address')
+      return profile.email || meta('email') || meta(name);
+    if (n === 'phone' || n === 'tel' || n === 'telephone' || n === 'mobile' || n === 'phone_number')
+      return profile.phone || meta('phone') || meta(name);
+    if (n === 'name' || n === 'full_name' || n === 'fullname' || n === 'your_name')
+      return profile.name || meta('name') || meta(name);
+    if (n === 'first_name' || n === 'firstname')
+      return (profile.name ?? '').split(/\s+/)[0] || meta('first_name') || meta(name);
+    if (n === 'last_name' || n === 'lastname') {
+      const parts = (profile.name ?? '').split(/\s+/).filter(Boolean);
+      return (parts.length > 1 ? parts[parts.length - 1]! : '') || meta('last_name') || meta(name);
+    }
+    return meta(name);
+  };
+  for (const w of widgets) {
+    if (w.type !== 'form' || !Array.isArray(w.fields)) continue;
+    for (const f of w.fields) {
+      if (f.value) continue;
+      const v = guess(f.name);
+      if (v) f.value = v;
+    }
+  }
+}
+
+/** What the customer actually SAW — card titles + stock, option labels, form
+ * titles. Without it the transcript is narration-only and "the first one you
+ * showed me" resolves against nothing: the model re-searches and picks by
+ * rank instead of reading its own carousel. */
+function widgetAnnotation(payload: unknown): string {
+  const ws = (payload as { widgets?: unknown[] } | null)?.widgets;
+  if (!Array.isArray(ws) || !ws.length) return '';
+  const parts: string[] = [];
+  for (const w of ws as Record<string, unknown>[]) {
+    const items = w.items as
+      | { title?: string; price?: string; stock?: string; label?: string }[]
+      | undefined;
+    if (w.type === 'cards' && items?.length) {
+      parts.push(
+        '[cards shown — ' +
+          items
+            .slice(0, 10)
+            .map(
+              (i, n) =>
+                `${n + 1}) "${(i.title ?? '').slice(0, 60)}"${i.price ? ` ${i.price}` : ''}${i.stock ? ` (${i.stock.toLowerCase()})` : ''}`,
+            )
+            .join('; ') +
+          ']',
+      );
+    } else if (w.type === 'options' && items?.length) {
+      parts.push(
+        `[options shown: ${items.map((i) => `"${(i.label ?? '').slice(0, 40)}"`).join(', ')}]`,
+      );
+    } else if (w.type === 'form') {
+      parts.push(`[form shown${w.title ? `: "${String(w.title).slice(0, 60)}"` : ''}]`);
+    }
+  }
+  return parts.length ? ` ${parts.join(' ')}` : '';
+}
+
 // Same cap as the widget upload limit — anything a shopper can attach is
 // viewable, so a 9MB photo never silently lands as a filename annotation.
 const MAX_VISION_BYTES = 10 * 1024 * 1024;
@@ -4466,7 +4539,7 @@ export async function transcriptFor(
       content:
         (m.direction === 'human' ? `(human operator) ${m.text}` : m.text!) +
         tapAnnotation(tap) +
-        (m.direction === 'out' ? toolCallAnnotation(m.payload) : '') +
+        (m.direction === 'out' ? toolCallAnnotation(m.payload) + widgetAnnotation(m.payload) : '') +
         attachmentNote(m.payload),
     });
   }
@@ -5906,6 +5979,7 @@ async function replyAsHostedAgent(
     // a card's own button are dropped; offers the card can't answer stay.
     const keptButtons = cardsTap ? [] : filterChipsAgainstCards(buttons, widgets);
     const buttonFlag = keptButtons.length ? { quick_replies: keptButtons } : {};
+    prefillFormFields(widgets, (conv.userProfile ?? {}) as UserProfile);
     // interactive components render inside the widget on webchat
     const widgetFlag = widgets.length ? { widgets } : {};
     // "Why did it say that?" — model/token/tool trace stamped on the stored
@@ -5998,13 +6072,29 @@ async function replyAsHostedAgent(
     };
     if (!reply) {
       // Widget-only reply — the component IS the answer (a plan picker, a
-      // form). It still needs a text line on the wire; a bare lead-in is
-      // better than escalating a perfectly good widget as "empty reply".
+      // form). It still needs a text line on the wire, and the line should
+      // say what the component is FOR — the widget's own title when it has
+      // one, a per-type lead-in otherwise. A bare "Here you go:" tells the
+      // customer nothing.
+      const w0 = widgets[0] as { type?: string; title?: string } | undefined;
+      const lead = w0?.title?.trim();
       await emit([
         {
           type: 'message_out',
           conversation_id: externalId,
-          text: 'Here you go:',
+          text:
+            (lead ? (/[.!?…:]$/.test(lead) ? lead : `${lead}:`) : null) ??
+            (
+              {
+                form: 'Just a few details:',
+                options: 'Take your pick:',
+                cards: "Here's what I found:",
+                cart: 'Your cart:',
+                status: "Here's where things stand:",
+                pricing: 'Our plans:',
+              } as Record<string, string>
+            )[w0?.type ?? ''] ??
+            'Here you go:',
           payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
         },
       ]);

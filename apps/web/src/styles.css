@@ -326,11 +326,11 @@ button, input, select, textarea { font: inherit; }
 .wgt-opt.wgt-sel { border-color: var(--accent); background: var(--accent); color: #fff; }
 .wgt-opt.wgt-sel small { color: rgba(255,255,255,.8); }
 .wgt-opts.wgt-done .wgt-opt:not(.wgt-sel) { opacity: .5; pointer-events: none; }
-.wgt-form { display: flex; flex-direction: column; gap: 6px; }
-.wgt-form input, .wgt-form textarea, .wgt-form select { border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 13px; font-family: inherit; background: var(--bg); color: inherit; }
+.wgt-form { display: flex; flex-direction: column; gap: 12px; }
+.wgt-form label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+.wgt-form input, .wgt-form textarea, .wgt-form select { border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 13px; font-family: inherit; background: var(--bg); color: inherit; width: 100%; box-sizing: border-box; }
 .wgt-form input:focus, .wgt-form textarea:focus, .wgt-form select:focus { border-color: var(--accent); outline: none; }
 .wgt-form textarea { min-height: 56px; resize: vertical; }
-.wgt-form label { font-size: 12px; color: var(--muted); display: block; }
 .wgt-sent { color: var(--ok); font-size: 12.5px; font-weight: 600; padding: 4px 0; }
 /* Pricing — plan cards mirroring the billing page grid. Scrolls sideways
    like .wgt-cards when the plans outgrow the rail. */

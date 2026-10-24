@@ -33,6 +33,8 @@ export interface WidgetField {
   type?: 'text' | 'email' | 'tel' | 'textarea' | 'select';
   options?: string[];
   required?: boolean;
+  /** Server-stamped prefill — a fact the agent already knows. */
+  value?: string;
 }
 export interface WidgetStep {
   label: string;
@@ -280,7 +282,9 @@ function Options({ w, onSend }: { w: Extract<ChatWidget, { type: 'options' }>; o
 
 function WForm({ w, onSend }: { w: Extract<ChatWidget, { type: 'form' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
   const [sent, setSent] = useState(false);
-  const [vals, setVals] = useState<Record<string, string>>({});
+  const [vals, setVals] = useState<Record<string, string>>(() =>
+    Object.fromEntries(w.fields.filter((f) => f.value).map((f) => [f.name, f.value!])),
+  );
   if (sent) return <div className="wgt-sent">Sent ✓</div>;
   const submit = () => {
     const pairs: string[] = [];
@@ -305,7 +309,15 @@ function WForm({ w, onSend }: { w: Extract<ChatWidget, { type: 'form' }>; onSend
             {f.type === 'textarea' ? (
               <textarea value={vals[f.name] ?? ''} onChange={(e) => setVals({ ...vals, [f.name]: e.target.value })} />
             ) : f.type === 'select' && f.options?.length ? (
-              <select value={vals[f.name] ?? f.options[0]} onChange={(e) => setVals({ ...vals, [f.name]: e.target.value })}>
+              <select
+                value={vals[f.name] ?? (f.required ? '' : f.options[0])}
+                onChange={(e) => setVals({ ...vals, [f.name]: e.target.value })}
+              >
+                {f.required && (
+                  <option value="" disabled>
+                    Choose…
+                  </option>
+                )}
                 {f.options.map((o) => (
                   <option key={o} value={o}>
                     {o}

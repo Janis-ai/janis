@@ -840,9 +840,10 @@ export async function welcomeInstallerDm(inst: Installation): Promise<void> {
   // workspace has one); join+retry rides inside postChannelMessage.
   let channelId = inst.alertChannelId;
   if (!channelId) {
-    const { channels } = await listSlackChannels(inst.botToken).catch(
-      () => ({ channels: [] }) as { channels: { id: string; name: string }[]; complete: boolean },
-    );
+    const { channels } = await listSlackChannels(inst.botToken).catch(() => ({
+      channels: [] as { id: string; name: string }[],
+      complete: false,
+    }));
     channelId = channels.find((c) => c.name === 'general')?.id ?? null;
   }
   if (channelId) {

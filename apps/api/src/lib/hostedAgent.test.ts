@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, matchSavedComponent, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, deniesLiveData, ungroundedFigures, ungroundedSource, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems } from './hostedAgent.js';
+import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, matchSavedComponent, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, deniesLiveData, ungroundedFigures, ungroundedSource, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems, prefillFormFields } from './hostedAgent.js';
 import { identityBlockReason, type ToolDef } from './toolExec.js';
 import { env } from '../env.js';
 import { extractWidgets } from './widgets.js';
@@ -158,6 +158,66 @@ describe('transcriptFor file analysis', () => {
     const last = history.at(-1)!;
     expect(last.content as string).toContain('[add to cart FAILED "The Compare at Price Snowboard"');
     expect(last.content as string).not.toContain('confirmed it went through');
+  });
+
+  it('annotates outbound cards/options/forms with what the customer saw', async () => {
+    // prod incident: "I want to buy the first board you showed me" resolved
+    // to a fresh search pick — the transcript carried the agent's words but
+    // not the carousel, so the model could not see card order or stock.
+    await db.insert(messages).values({
+      conversationId: convId,
+      direction: 'out',
+      text: 'Here are our snowboards:',
+      payload: {
+        widgets: [
+          {
+            type: 'cards',
+            items: [
+              { title: 'The Inventory Not Tracked Snowboard', price: '$949.95' },
+              { title: 'The Out of Stock Snowboard', price: '$885.95', stock: 'Out of stock' },
+            ],
+          },
+          { type: 'options', items: [{ label: 'All boards' }, { label: 'Sale' }] },
+          { type: 'form', title: 'A few details so we can help' },
+        ],
+      },
+      createdAt: new Date(),
+    });
+    const history = await transcriptFor(db, convId, true);
+    const last = history.at(-1)!;
+    expect(last.role).toBe('assistant');
+    expect(last.content as string).toContain(
+      '[cards shown — 1) "The Inventory Not Tracked Snowboard" $949.95; 2) "The Out of Stock Snowboard" $885.95 (out of stock)]',
+    );
+    expect(last.content as string).toContain('[options shown: "All boards", "Sale"]');
+    expect(last.content as string).toContain('[form shown: "A few details so we can help"]');
+  });
+
+  it('prefills form fields from the contact profile and collected metadata', () => {
+    const widgets = [
+      {
+        type: 'form',
+        fields: [
+          { name: 'email' },
+          { name: 'phone' },
+          { name: 'first_name' },
+          { name: 'order_id' },
+          { name: 'email', value: 'keep@me.com' },
+        ] as { name: string; value?: string }[],
+      },
+    ];
+    prefillFormFields(widgets, {
+      email: 'mike@example.com',
+      name: 'Mike Nathanson',
+      metadata: { order_id: '#1042' },
+    });
+    const f = widgets[0].fields;
+    expect(f[0].value).toBe('mike@example.com');
+    expect(f[1].value).toBeUndefined();
+    expect(f[2].value).toBe('Mike');
+    expect(f[3].value).toBe('#1042');
+    // a model-emitted value is never overwritten
+    expect(f[4].value).toBe('keep@me.com');
   });
 
   it('drops out-direction audit lines but keeps flagged markers and human whispers', async () => {

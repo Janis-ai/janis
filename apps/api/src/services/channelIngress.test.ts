@@ -1024,7 +1024,9 @@ describe('hosted handoff offers', () => {
     const widgetMsg = out.find(
       (m) => ((m.payload as { widgets?: unknown[] })?.widgets?.length ?? 0) > 0,
     );
-    expect(widgetMsg?.text).toBe('Here you go:');
+    // the lead-in is the widget's own title — instructive, not a bare
+    // "Here you go:" that says nothing about what the component is for
+    expect(widgetMsg?.text).toBe('Pick a plan:');
     expect(
       (widgetMsg?.payload as { widgets?: { type: string }[] }).widgets[0].type,
     ).toBe('options');
