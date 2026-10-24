@@ -4,10 +4,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 import { applyTheme, currentTheme } from './lib/theme';
 import { installErrorReporter } from './lib/errorReporter';
+import { installTranslateGuard } from './lib/translateGuard';
 import './styles.css';
 
 applyTheme(currentTheme());
 installErrorReporter();
+installTranslateGuard();
 
 // Registered here (not the plugin's injected registerSW.js) so a rejected
 // registration — crawlers expose navigator.serviceWorker but refuse
