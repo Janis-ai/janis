@@ -483,4 +483,26 @@ describe('gmail oauth', () => {
     const cb = await app.request('/gmail/callback?state=bogus&code=x', { redirect: 'manual' });
     expect(cb.headers.get('location')).toContain('gmail_error=');
   });
+
+  it('GMAIL_CONNECT_DISABLED gates new connects; status reports enabled:false', async () => {
+    const { env } = await import('../env.js');
+    env.gmailConnectDisabled = true;
+    try {
+      const connect = await app.request(`/api/gmail/connect?agent_id=${agentId}`, {
+        headers: { cookie },
+        redirect: 'manual',
+      });
+      expect(connect.status).toBe(403);
+      const link = await app.request(`/api/gmail/connect-link?agent_id=${agentId}`, {
+        headers: { cookie },
+      });
+      expect(link.status).toBe(403);
+      const status = await app.request('/api/gmail/status', { headers: { cookie } });
+      expect(((await status.json()) as { enabled: boolean }).enabled).toBe(false);
+      const start = await app.request('/gmail/start?key=bogus', { redirect: 'manual' });
+      expect(start.status).toBe(403);
+    } finally {
+      env.gmailConnectDisabled = false;
+    }
+  });
 });

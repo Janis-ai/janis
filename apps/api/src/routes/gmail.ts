@@ -77,11 +77,18 @@ export function gmailApiRoutes(db: Db) {
   app.use('/*', sessionAuth(db));
 
   app.get('/status', (c) =>
-    c.json({ configured: Boolean(env.googleClientId && env.googleClientSecret) }),
+    c.json({
+      configured: Boolean(env.googleClientId && env.googleClientSecret),
+      enabled:
+        Boolean(env.googleClientId && env.googleClientSecret) && !env.gmailConnectDisabled,
+    }),
   );
 
   // Self-serve connect — the admin completes consent right now.
   app.get('/connect', adminOnly, async (c) => {
+    if (env.gmailConnectDisabled) {
+      return c.json({ error: 'Gmail connect is disabled' }, 403);
+    }
     if (!env.googleClientId || !env.googleClientSecret) {
       return c.json({ error: 'Google OAuth not configured (GOOGLE_CLIENT_ID/SECRET)' }, 400);
     }
@@ -101,6 +108,9 @@ export function gmailApiRoutes(db: Db) {
   // Mint a shareable link for whoever controls the mailbox — a client, a
   // teammate, or your own other Google account. No Janis session required.
   app.get('/connect-link', adminOnly, async (c) => {
+    if (env.gmailConnectDisabled) {
+      return c.json({ error: 'Gmail connect is disabled' }, 403);
+    }
     if (!env.googleClientId || !env.googleClientSecret) {
       return c.json({ error: 'Google OAuth not configured (GOOGLE_CLIENT_ID/SECRET)' }, 400);
     }
@@ -163,6 +173,7 @@ export function gmailPublicRoutes(db: Db) {
   // Shareable entry: validate the long-lived link key, re-mint a short-lived
   // OAuth state, and send them into Google consent.
   app.get('/start', (c) => {
+    if (env.gmailConnectDisabled) return c.text('Gmail connect is disabled', 403);
     const intent = verifyIntent(c.req.query('key') ?? '');
     if (!intent) return c.text('invalid or expired link', 400);
     return c.redirect(consentUrl(requestOrigin(c), signIntent({ ...intent, x: Date.now() + STATE_TTL_MS })));

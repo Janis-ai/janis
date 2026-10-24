@@ -228,8 +228,8 @@ is a day on launch)*
    left 'active' at freeze); the top-level stripe_subscription field
    is a $0 tracking shell from a different era — do NOT use it for
    billing signals.)
-3. IG App Review — submit `instagram_manage_messages` screencast +
-   business verification (scope already declared in meta.ts).
+3. DONE 2026-10-24 — IG App Review approved (`instagram_manage_messages`
+   + business verification).
 4. Zapier publishing tail — toggle existing Zaps off/on (old polling
    triggers → REST hooks now), 2 more users via Sharing-tab invite, ToS
    checkbox.
@@ -264,8 +264,14 @@ is a day on launch)*
     screenshots, embedded-app home shot, walkthrough video, PCD
     questionnaire + security policy). Remaining: the submission +
     review cycle itself.
-11. Google OAuth verification — Gmail channel scopes; restricted
-    scopes may need CASA security assessment.
+11. PARKED 2026-10-24 — Google OAuth verification deferred (CASA/
+    restricted-scope assessment too expensive for now). Gmail connect is
+    hidden until it's done: GMAIL_CONNECT_DISABLED=1 in .env +
+    .env.production → /api/gmail /connect + /connect-link + /gmail/start
+    403, /status reports enabled:false, the connect card + builder
+    suggested_channels drop gmail (the "Email" sorter pick falls back to
+    the forwarding channel), existing gmail channels keep polling/sending
+    on stored refresh tokens. Re-enable: unset the flag + redeploy.
 12. Azure — app reg + MS_* envs DONE (A6); publisher verification in
     Partner Center may still be open — confirm status.
 13. LLM pro accounts — paid/raised-tier API accounts for

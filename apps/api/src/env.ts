@@ -136,6 +136,11 @@ export const env = {
   // in the same Google OAuth client's authorized URIs.
   gmailPubsubTopic: process.env.GMAIL_PUBSUB_TOPIC ?? '',
   gmailPushToken: process.env.GMAIL_PUSH_TOKEN ?? '',
+  // Gmail connect parked while Google OAuth verification (CASA/restricted
+  // scopes) is on hold: GMAIL_CONNECT_DISABLED=1 hides the connect card and
+  // 403s new mailbox connects. Existing channels keep polling on stored
+  // refresh tokens.
+  gmailConnectDisabled: process.env.GMAIL_CONNECT_DISABLED === '1',
   gmailRedirectUri:
     process.env.GMAIL_REDIRECT_URI ??
     `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/gmail/callback`,

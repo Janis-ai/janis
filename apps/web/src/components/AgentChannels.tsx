@@ -51,6 +51,15 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     staleTime: Infinity,
     enabled: isAdmin,
   });
+  // Gmail connect is gated API-side while Google OAuth verification is
+  // parked — the card only renders when the API reports the feature on.
+  const gmailStatus = useQuery({
+    queryKey: ['gmail-status'],
+    queryFn: () => api<{ configured: boolean; enabled: boolean }>('/api/gmail/status'),
+    staleTime: Infinity,
+    enabled: isAdmin,
+  });
+  const gmailEnabled = gmailStatus.data?.enabled === true;
   const session = useQuery({
     queryKey: ['meta-session'],
     queryFn: () =>
@@ -81,16 +90,18 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   };
   type ChKey = 'bubble' | 'meta' | 'gmail' | 'outlook' | 'email' | 'voice' | 'sms';
   const ALL_CH: ChKey[] = ['bubble', 'meta', 'gmail', 'outlook', 'email', 'voice', 'sms'];
+  // While Gmail connect is gated, the "Email" sorter pick lands on the
+  // forwarding channel — the always-available mailbox path.
   const NEED_TARGETS: Record<string, string> = {
     site: 'ch-bubble',
     social: 'ch-meta',
-    email: 'ch-gmail',
+    email: gmailEnabled ? 'ch-gmail' : 'ch-email',
     phone: 'ch-voice',
   };
   const NEED_TO_CH: Record<string, ChKey> = {
     site: 'bubble',
     social: 'meta',
-    email: 'gmail',
+    email: gmailEnabled ? 'gmail' : 'email',
     phone: 'voice',
   };
   const connectId =
@@ -420,11 +431,12 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   // carries the screen's one primary button); everything else collapses
   // under "More channels". Agents without a suggestion default to the two
   // most common paths: the website bubble and Meta.
+  const visibleCh = ALL_CH.filter((k) => k !== 'gmail' || gmailEnabled);
   const suggestedCh = ((agent.config?.builder?.suggested_channels ?? []) as string[]).filter(
-    (k): k is ChKey => (ALL_CH as string[]).includes(k),
+    (k): k is ChKey => (visibleCh as string[]).includes(k),
   );
   const leadCh: ChKey[] = suggestedCh.length ? suggestedCh : ['bubble', 'meta'];
-  const moreCh = ALL_CH.filter((k) => !leadCh.includes(k));
+  const moreCh = visibleCh.filter((k) => !leadCh.includes(k));
   const primaryCh = leadCh[0];
   const CH_SUMMARY: Record<ChKey, string> = {
     bubble: 'chat bubble for your website',
@@ -705,7 +717,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         );
       case 'email':
         return (
-          <div className="card">
+          <div className={`card${rec ? ' recommended' : ''}`} id="ch-email">
             <details className="appearance-details">
               <summary>
                 <span className="details-title">Email — any provider{sTag && <> — {sTag}</>}</span>
