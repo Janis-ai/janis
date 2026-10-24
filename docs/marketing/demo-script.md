@@ -113,11 +113,15 @@ right brand automatically):
 
 | Seg | Script | Surface | Auth | Status |
 |---|---|---|---|---|
-| `seg1` | S0–S2 visitor chat | storefront widget | `SHOP_PASS` | **needs password** |
-| `seg2` | S3 inbox + takeover | `/conversations` | session | filmed, verified |
-| `seg3` | S4 rescue→learn | agent Test | session | filmed — the seg2 conv appeared as the top suggestion |
-| `seg4` | S5 montage | agent rail | session | filmed, verified |
-| `seg5` | S6+S7 | channels + landing | session | filmed, verified |
+| `seg1` | S0–S2 visitor chat | storefront widget | `SHOP_PASS` | **filmed 2026-10-23** — cards, sizing form, buy→checkout, return→"Send to the team" |
+| `seg2` | S3 inbox + takeover | `/conversations` | session | **filmed** — picked up seg1's conv (mike@example.com) |
+| `seg3` | S4 rescue→learn | agent Test | session | **filmed** — seg2's reply (11s old) was the top suggestion |
+| `seg4` | S5 montage | agent rail | session | **filmed** |
+| `seg5` | S6+S7 | channels + landing | session | **filmed** |
+
+**Delivered:** `docs/marketing/janis-demo.mp4` — 3:13, 1600×1000, H.264.
+The whole arc is one continuous story: the seg1 refund chat is the conv
+seg2 takes over, whose rescue is the scenario seg3 saves.
 
 **Verdict: it does not look bad.** The cursor reads as intentional,
 typing reads human, LLM latency is a feature not a bug. Review-grade
