@@ -1259,6 +1259,190 @@ describe('hosted handoff offers', () => {
       .where(eq(conversations.id, conv.id));
     expect(after.state).not.toBe('needs_human');
   });
+
+  it('a regenerated attempt cannot leak the abandoned attempt\'s tool widgets', async () => {
+    // Prod incident (SnowboardsAreUs 2026-10-24): tapping "Home page" ran an
+    // unscoped catalogue search on attempt 0, the attempt was regenerated
+    // (dropped component line), and the retry emitted only the collections
+    // picker — but the reply shipped BOTH widgets because toolWidgets
+    // accumulated across attempts while gen.toolCalls showed the survivor's
+    // (empty) call list. Only the surviving attempt's widgets may ship.
+    const toolCall = {
+      id: 'c1',
+      function: { name: 'catalogue_search', arguments: '{"query":"boards"}' },
+    };
+    const llmReply = (body: object) =>
+      new Response(JSON.stringify({ choices: [{ message: body }], usage: {} }), { status: 200 });
+    const fetchMock = vi.fn().mockImplementation((url: unknown) => {
+      if (!String(url).includes('llm.test'))
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              products: [
+                { title: 'Board A', price: '$10', link: 'https://x/a' },
+                { title: 'Board B', price: '$20', link: 'https://x/b' },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      const n = fetchMock.mock.calls.filter((c) => String(c[0]).includes('llm.test')).length;
+      if (n === 1) return Promise.resolve(llmReply({ tool_calls: [toolCall] }));
+      if (n === 2)
+        return Promise.resolve(
+          llmReply({
+            content:
+              'WIDGET: {"type":"receipt","title":"Your orders","rows":[{"label":"#1","value":"$9"}],"total":{"label":"Total","value":"$9"}}',
+          }),
+        );
+      return Promise.resolve(
+        llmReply({ content: 'What would you like to browse?\nWIDGET_REF: browse-collections' }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'ShopBot',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: {
+          llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' },
+          tools: [
+            {
+              name: 'catalogue_search',
+              description: 'search the catalogue',
+              method: 'POST',
+              url: 'https://shop.example/products',
+              params: { query: 'search terms' },
+              widget: {
+                type: 'cards',
+                items: 'products',
+                map: { title: 'title', price: 'price', link: 'link' },
+              },
+            },
+            {
+              name: 'shopify_customer_orders',
+              description: 'list orders for the verified customer',
+              method: 'POST',
+              url: 'https://shop.example/orders',
+            },
+          ],
+        },
+      })
+      .returning();
+    // receipt is owned by a tool-bound component → the hand-written WIDGET:
+    // drops and forces the regen that used to leak attempt-0 cards.
+    await db.insert(agentWidgets).values({
+      agentId: hosted.id,
+      name: 'your-orders',
+      description: 'show the customer their recent orders',
+      spec: {
+        type: 'receipt',
+        title: 'Your orders',
+        rows: [{ label: '{order}', value: '{total}' }],
+        total: { label: 'Total', value: '{grand}' },
+      },
+      tool: { name: 'shopify_customer_orders' },
+    });
+    await db.insert(agentWidgets).values({
+      agentId: hosted.id,
+      name: 'browse-collections',
+      description: 'pick a collection to browse',
+      spec: {
+        type: 'options',
+        title: 'What would you like to browse?',
+        items: [{ label: 'Home page' }, { label: 'Hydrogen' }],
+      },
+    });
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-widget-leak' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'browse the shop' });
+
+    await runHostedEvent(db, hosted, {
+      type: 'message.user',
+      conversation_id: 'ext-widget-leak',
+      janis_conversation_id: conv.id,
+      text: 'browse the shop',
+    } as Parameters<typeof runHostedEvent>[2]);
+
+    const out = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id))
+      .then((rows) => rows.filter((m) => m.direction === 'out'));
+    const widgetMsg = out.find(
+      (m) => ((m.payload as { widgets?: unknown[] })?.widgets?.length ?? 0) > 0,
+    );
+    const shipped = (widgetMsg?.payload as { widgets?: { type: string }[] }).widgets;
+    // The picker survived; the abandoned attempt's product cards did not.
+    expect(shipped.map((w) => w.type)).toEqual(['options']);
+  });
+
+  it('a picker tap is not nudged toward re-emitting the same saved component', async () => {
+    // The same prod loop from the other side: a tap on "Automated
+    // Collection" shares the token "collection" with the component's
+    // use-when text, so matchSavedComponent pushed the model to emit
+    // WIDGET_REF: browse-collections again — the very picker the customer
+    // just picked from. Taps carry their own intent; no component nudge.
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(() => Promise.resolve(llmResponse('Here is that collection.')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'TapBot',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' } },
+      })
+      .returning();
+    await db.insert(agentWidgets).values({
+      agentId: hosted.id,
+      name: 'browse-collections',
+      description: 'customer wants to browse product categories or pick a collection',
+      spec: {
+        type: 'options',
+        title: 'What would you like to browse?',
+        items: [{ label: 'Automated Collection' }, { label: 'Home page' }],
+      },
+    });
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-tap-nudge' })
+      .returning();
+    await db.insert(messages).values({
+      conversationId: conv.id,
+      direction: 'in',
+      text: 'Automated Collection',
+      payload: { tap: true, tap_of: 'What would you like to browse?' },
+    });
+
+    await runHostedEvent(db, hosted, {
+      type: 'message.user',
+      conversation_id: 'ext-tap-nudge',
+      janis_conversation_id: conv.id,
+      text: 'Automated Collection',
+    } as Parameters<typeof runHostedEvent>[2]);
+
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(1);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const sysPrompt = body.messages[0].content as string;
+    expect(sysPrompt).not.toContain('matches your saved component');
+  });
 });
 
 describe('cross-channel externalId collisions', () => {

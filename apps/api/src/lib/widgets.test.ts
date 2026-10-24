@@ -810,6 +810,59 @@ describe('specProps / interpolateSpec / stripEmptyStrings', () => {
   });
 });
 
+describe('itemsFromResult — collection picker taps', () => {
+  // Prod loop (SnowboardsAreUs 2026-10-24): the browse-collections options
+  // widget maps label+description but no `send`, so a tap arrived as the
+  // bare label "Home page" — an ask the model re-answered with the same
+  // picker. Collections-bound items get a default send naming the handle.
+  it('stamps a resolvable send on shopify_list_collections options', async () => {
+    const { itemsFromResult } = await import('./widgets.js');
+    const tool = {
+      name: 'shopify_list_collections',
+      items: 'data.collections.nodes',
+      item_map: { label: '{title}', description: '{productsCount.count} products' },
+    } as never;
+    const items = itemsFromResult(
+      tool,
+      {
+        data: {
+          collections: {
+            nodes: [
+              { title: 'Home page', handle: 'frontpage', productsCount: { count: 1 } },
+              { title: 'Hydrogen', handle: 'hydrogen', productsCount: { count: 3 } },
+            ],
+          },
+        },
+      },
+      {},
+    );
+    expect(items).toMatchObject([
+      { label: 'Home page', send: 'Show me the frontpage collection' },
+      { label: 'Hydrogen', send: 'Show me the hydrogen collection' },
+    ]);
+  });
+
+  it('leaves an explicit send mapping and non-collections tools alone', async () => {
+    const { itemsFromResult } = await import('./widgets.js');
+    const explicit = itemsFromResult(
+      {
+        name: 'shopify_list_collections',
+        item_map: { label: '{title}', send: 'Browse {handle}' },
+      } as never,
+      [{ title: 'Home page', handle: 'frontpage' }],
+      {},
+    );
+    expect(explicit).toMatchObject([{ label: 'Home page', send: 'Browse frontpage' }]);
+    const other = itemsFromResult(
+      { name: 'list_departments', item_map: { label: '{name}' } } as never,
+      [{ name: 'Support' }],
+      {},
+    );
+    expect(other).toMatchObject([{ label: 'Support' }]);
+    expect((other as Record<string, unknown>[])[0].send).toBeUndefined();
+  });
+});
+
 describe('resolveWidgetRef', () => {
   const ctx = { db: null, convId: 'c1', workspaceId: 'w1' } as never;
 

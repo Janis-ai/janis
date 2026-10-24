@@ -905,7 +905,7 @@ export function systemPrompt(
           '\nWhen the customer asks to see products, plans or options that carry data (price, image, description), prefer a "cards" or "options" widget over a BUTTON: list — and when a tool call returns list data (search results, products, availability), render it as a widget rather than retelling it as text. Some tool results arrive already rendered as a component — the result says so; never emit a WIDGET: line restating data that was already rendered. Always pair a widget with a one-line lead-in ("Here are our plans:") — never emit a WIDGET: line alone.' +
           metaOnly +
           (opts.savedWidgets?.length
-            ? '\nSaved components (built by your team). Each entry\'s "use when" names the asks it covers — when the customer\'s ask matches a use-when, emitting "WIDGET_REF: <name>" IS the answer: do it right away rather than asking to clarify, apologizing for missing data, or calling a tool for the same information. When the digest lists props, args or states, add a JSON object on the same line — "WIDGET_REF: order-status {\"order_id\":\"1234\"}" supplies a bound tool its args or fills {prop} placeholders (only values you actually have — never invent them), and {"state":"<name>"} selects one of its named states. A component bound to a tool IS that tool\'s invocation — emitting the ref runs it and renders the result, so never call the bound tool directly to narrate the same data:\n' +
+            ? '\nSaved components (built by your team). Each entry\'s "use when" names the asks it covers — when the customer\'s ask matches a use-when, emitting "WIDGET_REF: <name>" IS the answer: do it right away rather than asking to clarify, apologizing for missing data, or calling a tool for the same information. When the digest lists props, args or states, add a JSON object on the same line — "WIDGET_REF: order-status {\"order_id\":\"1234\"}" supplies a bound tool its args or fills {prop} placeholders (only values you actually have — never invent them), and {"state":"<name>"} selects one of its named states. A component bound to a tool IS that tool\'s invocation — emitting the ref runs it and renders the result, so never call the bound tool directly to narrate the same data. Copy a ref name verbatim from this list — it is the complete set; inventing a name renders nothing and burns a retry:\n' +
               opts.savedWidgets.map(widgetDigest).join('\n')
             : ''),
       );
@@ -5041,6 +5041,7 @@ async function replyAsHostedAgent(
   let lastInboundText: string | undefined;
   let shopperMarket: string | undefined;
   let paginationTap = false;
+  let lastInboundTap = false;
   const emit = (e: Parameters<typeof processEvents>[2]) =>
     processEvents(
       db,
@@ -5097,6 +5098,7 @@ async function replyAsHostedAgent(
           confirmedAddTap = p.tap_of!;
         }
         if (p.tap === true && p.tap_of === 'pagination') paginationTap = true;
+        if (p.tap === true) lastInboundTap = true;
         if (typeof p.market === 'string') shopperMarket = p.market;
       }
     }
@@ -5294,7 +5296,12 @@ async function replyAsHostedAgent(
     // Saved-component routing — a keyword hit between the ask and a
     // component's use-when becomes a named directive. Soft guidance left
     // the choice to the model, which kept reaching for tools instead.
-    const matchedComponent = matchSavedComponent(lastInboundText, refSpecs);
+    // A button/option tap already carries intent (label/send + the widget it
+    // came from) — nudging toward a saved component on a tap re-rendered the
+    // collections picker when the customer picked a collection (prod loop).
+    const matchedComponent = lastInboundTap
+      ? null
+      : matchSavedComponent(lastInboundText, refSpecs);
     if (matchedComponent) {
       prompt +=
         `\nThe visitor's latest message matches your saved component "${matchedComponent}" — ` +
@@ -5375,6 +5382,12 @@ async function replyAsHostedAgent(
       );
       promptTokens += gen.promptTokens;
       completionTokens += gen.completionTokens;
+      // Only the SURVIVING attempt's tool widgets ship — a regenerated
+      // reply that took a different path (or didn't re-issue the call)
+      // can't leak the abandoned attempt's carousel into the final reply.
+      // An identical re-issued call replays through toolMemo and re-renders
+      // its widget, so scoping costs nothing.
+      toolWidgets.length = 0;
       toolWidgets.push(...gen.widgets);
       const { text: noLearns, learns: l } = extractLearns(stripTranscriptNotes(gen.text));
       const { text: noWidgets, widgets: w, refs, dropped } = extractWidgets(noLearns);

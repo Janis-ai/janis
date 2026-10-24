@@ -278,7 +278,11 @@ export function itemsFromResult(
     rows = Object.values(data as Record<string, unknown>).find(Array.isArray);
   }
   if (!Array.isArray(rows) || !rows.length) return null;
-  const map = tool.item_map ?? {};
+  const map = { ...(tool.item_map ?? {}) };
+  // A collections-picker tap must arrive as an instruction the model can
+  // scope a search to — a bare "Home page" label just re-renders the picker.
+  if (tool.name === 'shopify_list_collections' && !map.send)
+    map.send = 'Show me the {handle} collection';
   return rows
     .slice(0, 12)
     .map((r) =>
@@ -1180,6 +1184,9 @@ export function widgetFromToolResult(
             .map((r) => ({
               label: str(mapValue(r, map.label ?? 'label', secrets)) ?? str(mapValue(r, map.title ?? 'title', secrets)),
               description: str(mapValue(r, map.description ?? 'description', secrets)),
+              // A mapped `send` makes the tap arrive as a real instruction —
+              // without it the bare label goes back as the message.
+              send: map.send ? str(mapValue(r, map.send, secrets)) : undefined,
             }))
             .filter((it) => it.label),
         }
