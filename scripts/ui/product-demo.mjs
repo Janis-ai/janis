@@ -1,0 +1,281 @@
+// Product demo film — segments per docs/marketing/demo-script.md.
+//   SNOW_TOKEN=<session> SHOP_PASS=… node scripts/ui/product-demo.mjs
+//   ONLY=seg2 node scripts/ui/product-demo.mjs    (single segment)
+// Output: /tmp/janis-demo/seg-*.webm → concat + grade via ffmpeg.
+//
+// Playwright records no OS cursor — CURSOR_JS injects a fake one that
+// tracks CDP mouse events (page.mouse.move fires real mousemove), with a
+// click pulse. Typing is char-by-char via keyboard.type, never fill().
+
+import { chromium } from 'playwright';
+import { mkdirSync, readdirSync, renameSync, statSync } from 'node:fs';
+import { join } from 'node:path';
+
+const SHOP = 'https://snowboardsareus.myshopify.com';
+const APP = 'https://app.janis.ai';
+const SHOP_PASS = process.env.SHOP_PASS ?? '';
+const TOKEN = process.env.SNOW_TOKEN;
+const VID = '/tmp/janis-demo';
+mkdirSync(VID, { recursive: true });
+
+const CURSOR_JS = `
+(() => {
+  if (document.getElementById('__demo-cursor')) return;
+  const el = document.createElement('div');
+  el.id = '__demo-cursor';
+  Object.assign(el.style, {
+    position: 'fixed', width: '14px', height: '14px', borderRadius: '50%',
+    border: '2px solid rgba(15,17,23,.85)', background: 'rgba(255,255,255,.65)',
+    boxShadow: '0 1px 4px rgba(0,0,0,.35)', zIndex: 2147483647,
+    pointerEvents: 'none', left: '-40px', top: '-40px',
+    transition: 'transform .08s ease-out',
+  });
+  document.documentElement.appendChild(el);
+  let x = -40, y = -40, cx = -40, cy = -40;
+  addEventListener('mousemove', (e) => { x = e.clientX; y = e.clientY; }, true);
+  addEventListener('mousedown', () => { el.style.transform = 'scale(.7)'; }, true);
+  addEventListener('mouseup', () => { el.style.transform = 'scale(1)'; }, true);
+  (function loop() {
+    cx += (x - cx) * .35; cy += (y - cy) * .35;
+    el.style.left = (cx - 7) + 'px'; el.style.top = (cy - 7) + 'px';
+    requestAnimationFrame(loop);
+  })();
+})();
+`;
+
+const browser = await chromium.launch({ headless: true });
+
+const seg = async (name, fn, cookie) => {
+  const ctx = await browser.newContext({
+    viewport: { width: 1600, height: 1000 },
+    recordVideo: { dir: VID, size: { width: 1600, height: 1000 } },
+  });
+  await ctx.addInitScript(CURSOR_JS);
+  if (cookie) {
+    await ctx.addCookies([{
+      name: 'janis_session', value: cookie, domain: 'app.janis.ai', path: '/',
+      httpOnly: true, secure: true, sameSite: 'Lax',
+    }]);
+  }
+  const page = await ctx.newPage();
+  try {
+    await fn(page);
+  } catch (e) {
+    console.log(`${name} ERR:`, e.message);
+  } finally {
+    await ctx.close();
+    const files = readdirSync(VID)
+      .filter((f) => f.endsWith('.webm') && !f.startsWith('seg-'))
+      .map((f) => ({ f, t: statSync(join(VID, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    if (files[0]) renameSync(join(VID, files[0].f), join(VID, `${name}.webm`));
+    console.log('seg', name);
+  }
+};
+
+// --- helpers ---------------------------------------------------------------
+
+/** Move the (fake) cursor to an element, pause, click — reads as deliberate. */
+const clickAt = async (page, locator, pause = 350) => {
+  const box = await locator.boundingBox();
+  if (box) {
+    const target = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await page.mouse.move(target.x, target.y, { steps: 18 });
+    await page.waitForTimeout(pause);
+  }
+  await locator.click();
+};
+
+/** Type like a person — focus the field, then keyboard, ~55ms jitter. */
+const typeIn = async (page, selector, text) => {
+  const el = page.locator(selector).first();
+  await clickAt(page, el, 250);
+  await page.keyboard.type(text, { delay: 55 });
+};
+
+const agentMsgs = (page) => page.locator('#janis-msgs .janis-msg:not(.janis-me)').count();
+const scrollEnd = (page) => page.evaluate(() => {
+  const el = document.querySelector('#janis-msgs');
+  if (el) el.scrollTop = el.scrollHeight;
+});
+const settle = async (page) => {
+  let last = '';
+  for (let i = 0; i < 40; i++) {
+    const cur = await page.evaluate(() => document.querySelector('#janis-msgs')?.innerHTML ?? '');
+    const typing = await page.evaluate(
+      () => !!document.querySelector('#janis-msgs [class*="typing"], #janis-msgs .janis-typing'),
+    );
+    if (cur === last && !typing) { await scrollEnd(page); return; }
+    last = cur;
+    await page.waitForTimeout(4000);
+  }
+};
+
+/** Visitor says something and we wait for the agent's reply bubble. */
+const say = async (page, text) => {
+  const before = await agentMsgs(page);
+  await typeIn(page, '#janis-input', text);
+  await page.waitForTimeout(300);
+  await page.press('#janis-input', 'Enter');
+  console.log('said:', text);
+  await page.waitForFunction(
+    (b) => document.querySelectorAll('#janis-msgs .janis-msg:not(.janis-me)').length > b,
+    before,
+    { timeout: 150000 },
+  );
+  await settle(page);
+  await page.waitForTimeout(1800); // beat for viewers
+};
+
+// --- seg 1: storefront visitor chat (S1+S2) ---------------------------------
+if (!process.env.ONLY || process.env.ONLY === 'seg1')
+await seg('seg1-storefront', async (page) => {
+  await page.goto(SHOP, { waitUntil: 'domcontentloaded' });
+  if (await page.locator('input[type="password"]').count()) {
+    await typeIn(page, 'input[type="password"]', SHOP_PASS);
+    await page.waitForTimeout(400);
+    await clickAt(page, page.locator('button[type="submit"], input[type="submit"]').first());
+    await page.waitForLoadState('domcontentloaded');
+  }
+  await page.waitForSelector('#janis-bubble', { timeout: 30000 });
+  await page.waitForTimeout(2500);
+  await clickAt(page, page.locator('#janis-bubble'), 500);
+  await page.waitForSelector('#janis-input', { timeout: 10000 });
+  await page.waitForTimeout(2000);
+
+  await say(page, 'Show me the snowboards you have for sale');
+  if (!(await page.locator('.janis-wcards').count())) {
+    await say(page, 'yes');
+    await page.waitForSelector('.janis-wcards', { timeout: 90000 }).catch(() => {});
+  }
+  await page.waitForTimeout(2000);
+
+  await say(page, "what size board should I get? I'm 5'10\", 170lb");
+  await page.waitForTimeout(1500);
+
+  await say(page, "I'll take the first one you showed me");
+  await page.waitForTimeout(1500);
+
+  // S2 — the moment AI should stop
+  await say(page, 'Actually the board I got last month is cracked and I want a refund');
+  await page.waitForTimeout(2500);
+});
+
+// --- seg 2: console inbox — the human end (S3) ------------------------------
+if (!process.env.ONLY || process.env.ONLY === 'seg2')
+await seg('seg2-inbox', async (page) => {
+  await page.goto(`${APP}/conversations`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('a.conv-row, [class*="conv"]', { timeout: 20000 });
+  await page.click('.push-banner-dismiss').catch(() => {});
+  await page.waitForTimeout(2000);
+  // newest thread = the visitor conversation seg1 just created
+  await clickAt(page, page.locator('a.conv-row').first(), 600);
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(2500);
+
+  const takeOver = page.locator('button', { hasText: 'Take over' }).first();
+  if (await takeOver.count()) {
+    await clickAt(page, takeOver, 800);
+    await page.waitForTimeout(1500);
+  }
+  // human reply — same thread, customer never knows a handoff happened.
+  // NB: the transcript's collect-form preview has textareas too — target
+  // the composer by its placeholder, never .last().
+  await typeIn(page, 'textarea[placeholder*="Reply as a human"]', "Hi! Maya here from SnowboardsAreUs — so sorry the board arrived cracked. I'm shipping a replacement today and emailing you a prepaid return label. You don't need to do anything else.");
+  await page.waitForTimeout(600);
+  await clickAt(page, page.getByRole('button', { name: 'Send', exact: true }), 400);
+  await page.waitForTimeout(2500);
+}, TOKEN);
+
+// --- seg 3: rescue → learn loop (S4) ----------------------------------------
+if (!process.env.ONLY || process.env.ONLY === 'seg3')
+await seg('seg3-teach', async (page) => {
+  await page.goto(`${APP}/conversations`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('a.conv-row', { timeout: 20000 });
+  await page.click('.push-banner-dismiss').catch(() => {});
+  await clickAt(page, page.locator('a.conv-row').first(), 600);
+  await page.waitForLoadState('networkidle');
+  await page.waitForTimeout(2000);
+  // hand the thread back to the AI first — Teach agent only shows when
+  // the agent owns the conversation (post-takeover it's hidden)
+  const resume = page.locator('button', { hasText: 'Resume agent' }).first();
+  if (await resume.count()) {
+    await clickAt(page, resume, 700);
+    await page.waitForTimeout(4000);
+  }
+  let teach = page.locator('button', { hasText: 'Teach agent' }).first();
+  // still human-owned (resume pending/failed)? walk conv rows for an
+  // AI-owned thread instead — the beat is Teach, not this specific conv
+  for (let i = 1; !(await teach.count()) && i < 5; i++) {
+    const rows = page.locator('a.conv-row');
+    if (await rows.count() <= i) break;
+    await page.goto(`${APP}/conversations`, { waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('a.conv-row', { timeout: 15000 });
+    await clickAt(page, rows.nth(i), 500);
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(2000);
+    teach = page.locator('button', { hasText: 'Teach agent' }).first();
+  }
+  if (await teach.count()) {
+    await clickAt(page, teach, 700);
+    await page.waitForTimeout(3000); // let the teach surface open/settle
+  } else {
+    console.log('no Teach agent button — skipped');
+  }
+}, TOKEN);
+
+// --- seg 4: builder montage (S5) --------------------------------------------
+if (!process.env.ONLY || process.env.ONLY === 'seg4')
+await seg('seg4-builder', async (page) => {
+  await page.goto(`${APP}/agents/new`, { waitUntil: 'domcontentloaded' });
+  await page.click('.push-banner-dismiss').catch(() => {});
+  await page.waitForTimeout(2500);
+  // chooser first: "Build an agent with Janis" enters the staged builder
+  const build = page.locator('text=Build an agent with Janis').first();
+  if (await build.count()) {
+    await clickAt(page, build, 600);
+    await page.waitForLoadState('networkidle');
+    await page.waitForTimeout(2000);
+  }
+  // Create stage: purpose textarea first, optional name, then Create —
+  // the LLM drafts the config live ("Building agent…" is a good beat)
+  const descIn = page.locator('textarea').first();
+  if (await descIn.count()) {
+    await typeIn(page, 'textarea', 'Answer customer questions about our hiking gear — sizing, availability, order status and returns — and help them check out.');
+    await page.waitForTimeout(800);
+  }
+  const nameIn = page.locator('input').first();
+  if (await nameIn.count()) {
+    await typeIn(page, 'input', 'Trailhead Outdoor Support');
+    await page.waitForTimeout(800);
+  }
+  const createBtn = page.locator('button', { hasText: 'Create agent' }).first();
+  if (await createBtn.count()) {
+    await clickAt(page, createBtn, 600);
+    // LLM draft can take a while — let it build
+    await page.waitForSelector('text=Building agent', { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(25000);
+  }
+  // click through the stage rail for the montage
+  for (const label of ['Teach it', 'Guide it', 'Abilities', 'Try it', 'Deploy']) {
+    const t = page.locator('.builder-step', { hasText: label }).first();
+    if (await t.count() && await t.isEnabled()) {
+      await clickAt(page, t, 500);
+      await page.waitForTimeout(2800);
+    }
+  }
+}, TOKEN);
+
+// --- seg 5: deploy + landing (S6+S7) -----------------------------------------
+if (!process.env.ONLY || process.env.ONLY === 'seg5')
+await seg('seg5-deploy-landing', async (page) => {
+  // channel card with the live widget preview
+  await page.goto(`${APP}/agents/51a81b16-f6a1-4dfa-ac83-15e116690269`, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(3000);
+  // landing close
+  await page.goto(`${APP}/`, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+}, TOKEN);
+
+await browser.close();
+console.log('done — segments in', VID);
