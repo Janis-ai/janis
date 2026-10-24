@@ -592,8 +592,15 @@ export function AskJanis({
       el.scrollTop = pendingAdjust.current.prevTop + (el.scrollHeight - pendingAdjust.current.prevHeight);
       pendingAdjust.current = null;
     } else if (stick.current) {
-      const last = el.lastElementChild;
-      if (last instanceof HTMLElement && last.offsetHeight > el.clientHeight) {
+      // Own sends always land at the tail; a tall incoming message anchors
+      // at its top so the reader starts at the greeting, not the signature.
+      const rows = el.querySelectorAll('.ask-msg');
+      const last = rows[rows.length - 1];
+      if (
+        last instanceof HTMLElement &&
+        !last.classList.contains('me') &&
+        last.offsetHeight > el.clientHeight
+      ) {
         el.scrollTop += last.getBoundingClientRect().top - el.getBoundingClientRect().top;
       } else {
         el.scrollTo({ top: el.scrollHeight });
@@ -895,6 +902,7 @@ export function AskJanis({
     const t = body.trim();
     if ((!t && !atts.length) || sending || !loaded) return;
     if (t) onCustomerMessage?.(t);
+    stick.current = true; // a send always lands at the tail, even scrolled up
     setSending(true);
     setText('');
     requestAnimationFrame(autoresize);

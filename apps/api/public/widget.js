@@ -944,10 +944,12 @@
   // bottom; if they've scrolled up to read, a "new messages" pill offers
   // the jump instead of ripping them out of their place.
   function scrollBottom() {
-    // A message taller than the pane anchors at its top — snapping to the
-    // tail lands a long reply on its signature.
-    var last = msgs.lastElementChild;
-    if (last && last.offsetHeight > msgs.clientHeight) {
+    // Your own send always lands at the tail — you wrote it, you want to
+    // see it land. A tall INCOMING message anchors at its top instead —
+    // bottom-snap would drop the reader on its signature.
+    var all = msgs.querySelectorAll('.janis-msg');
+    var last = all.length ? all[all.length - 1] : null;
+    if (last && !last.classList.contains('in') && last.offsetHeight > msgs.clientHeight) {
       msgs.scrollTop += last.getBoundingClientRect().top - msgs.getBoundingClientRect().top;
     } else {
       msgs.scrollTop = msgs.scrollHeight;

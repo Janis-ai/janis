@@ -84,8 +84,13 @@ export default function ConversationPage() {
   const snapToLatest = () => {
     const el = transcriptRef.current;
     if (!el) return;
-    const last = bottomRef.current?.previousElementSibling;
-    if (last instanceof HTMLElement && last.offsetHeight > el.clientHeight) {
+    const rows = el.querySelectorAll('.msg');
+    const last = rows[rows.length - 1];
+    if (
+      last instanceof HTMLElement &&
+      last.classList.contains('in') &&
+      last.offsetHeight > el.clientHeight
+    ) {
       el.scrollTop += last.getBoundingClientRect().top - el.getBoundingClientRect().top;
     } else {
       el.scrollTop = el.scrollHeight;
@@ -603,6 +608,7 @@ export default function ConversationPage() {
   });
 
   const send = (attachments: Attachment[], retryOf?: OutEntry) => {
+    stickRef.current = true; // your own send always lands at the tail
     const mode = retryOf?.mode ?? sendAs;
     const entry: OutEntry =
       retryOf ??
