@@ -178,6 +178,10 @@ else
     --add-volume-mount volume=data,mount-path=/app/data \
     --env-vars-file "$ENV_YAML"
 fi
+# Deploying while traffic is manually pinned leaves the new revision at 0%
+# (seen 3x today: 01082/01083/01084 built, never promoted). Route traffic to
+# it explicitly so the probe below actually tests the new code.
+gcloud run services update-traffic "$SERVICE" --region "$REGION" --project "$PROJECT" --to-latest
 # Cloud Run marks a revision Ready when the container answers — the app can
 # still be broken (01082 404'd / while /health stayed 200). Probe the real
 # surfaces and snap traffic back rather than leave a bad revision serving.
