@@ -1590,6 +1590,45 @@ describe('public OAuth install', () => {
     expect(String(post![1]?.body)).toContain('Team Welcome');
   });
 
+  it('mirrors the install welcome to the alerts channel (or #general)', async () => {
+    const fetchMock = vi.fn().mockImplementation(async (url: string | URL) => {
+      if (String(url).includes('oauth.v2.access')) {
+        return slackOk({
+          access_token: 'xoxb-T_WELCH',
+          team: { id: 'T_WELCH', name: 'Team Channel' },
+          authed_user: { id: 'U_WELCH', access_token: 'xoxp-T_WELCH' },
+        });
+      }
+      if (String(url).includes('conversations.open')) {
+        return slackOk({ channel: { id: 'D_WELCH' } });
+      }
+      if (String(url).includes('conversations.list')) {
+        return slackOk({ channels: [{ id: 'C_GENERAL', name: 'general' }] });
+      }
+      return slackOk({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const oauth = await api.request(
+      `/slack/oauth/callback?code=C&state=${encodeURIComponent(await pubState())}`,
+    );
+    await claim(pendingCookieOf(oauth));
+    // fire-and-forget — wait for the DM AND the #general post to land
+    for (
+      let i = 0;
+      i < 100 &&
+      fetchMock.mock.calls.filter(([u]) => String(u).includes('chat.postMessage')).length < 2;
+      i++
+    ) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    const posts = fetchMock.mock.calls.filter(([u]) => String(u).includes('chat.postMessage'));
+    const bodies = posts.map((p) => String(p[1]?.body));
+    const channels = posts.map((p) => JSON.parse(String(p[1]?.body)).channel);
+    expect(bodies.every((b) => b.includes('Welcome to Janis'))).toBe(true);
+    expect(channels).toContain('D_WELCH');
+    expect(channels).toContain('C_GENERAL');
+  });
+
   it('refuses an expired pending install', async () => {
     const [p] = await db
       .insert(slackPendingInstalls)

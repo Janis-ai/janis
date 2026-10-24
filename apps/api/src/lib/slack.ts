@@ -826,14 +826,29 @@ export async function removeMemberFromAlertChannels(
  * Fire-and-forget at the bind site; failure must not break OAuth/claim.
  */
 export async function welcomeInstallerDm(inst: Installation): Promise<void> {
-  if (!inst.installerSlackUserId) return;
   const text =
     `Welcome to Janis — *${inst.teamName ?? 'your Slack team'}* is connected. ` +
     `A few ways to reach me:\n` +
     `• *DM me* anything — I'm the same concierge as Ask Janis in the console\n` +
     `• */janis* in any channel shows controls\n` +
     `• ${env.webOrigin} for agents, inbox, alerts and settings`;
-  await dmWelcome(inst, inst.installerSlackUserId, text);
+  if (inst.installerSlackUserId) {
+    await dmWelcome(inst, inst.installerSlackUserId, text);
+  }
+  // The same hello in the alerts channel — the team sees the connect, not
+  // just the installer's DM. Nothing picked yet → #general (every Slack
+  // workspace has one); join+retry rides inside postChannelMessage.
+  let channelId = inst.alertChannelId;
+  if (!channelId) {
+    const { channels } = await listSlackChannels(inst.botToken).catch(
+      () => ({ channels: [] }) as { channels: { id: string; name: string }[]; complete: boolean },
+    );
+    channelId = channels.find((c) => c.name === 'general')?.id ?? null;
+  }
+  if (channelId) {
+    const res = await postChannelMessage(inst, channelId, { text, unfurl_links: false });
+    if (!res.ok) console.error('slack install announce failed:', res.error);
+  }
 }
 
 /**
