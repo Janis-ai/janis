@@ -13,6 +13,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Serialize deploys — two runs racing shared /tmp state produced a broken
+# revision (01082). Exclusive lock + per-run temp files instead.
+exec 200>/tmp/janis-deploy.lock
+flock -n 200 || { echo "another deploy-gcp.sh is already running — aborting" >&2; exit 1; }
+ENV_YAML=$(mktemp /tmp/janis-env.XXXXXX.yaml)
+SECRETS_TXT=$(mktemp /tmp/janis-secrets.XXXXXX.txt)
+CLOUDSQL_TXT=$(mktemp /tmp/janis-cloudsql.XXXXXX.txt)
+export ENV_YAML SECRETS_TXT CLOUDSQL_TXT
+trap 'rm -f "$ENV_YAML" "$SECRETS_TXT" "$CLOUDSQL_TXT"' EXIT
+
 PROJECT=janis-prod-mn REGION=us-east1 SERVICE=janis-api
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
 export PROJECT PROJECT_NUMBER BASE
@@ -52,7 +62,7 @@ if db_url:
     m = re.search(r'host=/cloudsql/([^&\s]+)', db_url)
     if m:
         cloudsql = m.group(1)
-        open('/tmp/janis-cloudsql.txt', 'w').write(cloudsql)
+        open(os.environ['CLOUDSQL_TXT'], 'w').write(cloudsql)
     r = subprocess.run(
         ['gcloud', 'secrets', 'describe', 'janis-database-url', '--project', PROJECT],
         capture_output=True)
@@ -127,28 +137,28 @@ if 'SESSION_SECRET' not in envs:
     envs['SESSION_SECRET'] = secrets.token_urlsafe(32)
 # Always rewrite — a stale file from an earlier deploy must not attach
 # secrets this run doesn't mean to.
-open('/tmp/janis-secrets.txt', 'w').write(','.join(SECRET_BINDINGS))
-yaml.safe_dump(envs, open('/tmp/janis-env.yaml', 'w'))
+open(os.environ['SECRETS_TXT'], 'w').write(','.join(SECRET_BINDINGS))
+yaml.safe_dump(envs, open(os.environ['ENV_YAML'], 'w'))
 print('DATABASE_URL' if db_url else 'PGlite', 'mode')
 PY
 
 # DATABASE_URL mode: no volume. PGlite mode: FUSE bucket for persistence.
-SECRETS=$(cat /tmp/janis-secrets.txt 2>/dev/null || true)
+SECRETS=$(cat "$SECRETS_TXT" 2>/dev/null || true)
 SECRETS_FLAG=()
 [ -n "$SECRETS" ] && SECRETS_FLAG=(--update-secrets "$SECRETS")
-if python3 -c "import yaml; exit(0 if 'PGLITE_DIR' in yaml.safe_load(open('/tmp/janis-env.yaml')) else 1)"; then
+if python3 -c "import yaml, os; exit(0 if 'PGLITE_DIR' in yaml.safe_load(open(os.environ['ENV_YAML'])) else 1)"; then
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
     --max-instances 1 --memory 1Gi --no-cpu-throttling \
     ${SECRETS_FLAG[@]+"${SECRETS_FLAG[@]}"} \
     --add-volume name=data,type=cloud-storage,bucket=janis-data-$PROJECT \
     --add-volume-mount volume=data,mount-path=/app/data \
-    --env-vars-file /tmp/janis-env.yaml
+    --env-vars-file "$ENV_YAML"
 else
   # Multi-instance safe on Postgres: SSE relays through bus_events, voice
   # replies through voice_queue, presence through viewers, and background
   # work is leader-elected via sweeper_locks. Scale cap keeps cost bounded.
-  CLOUDSQL=$(cat /tmp/janis-cloudsql.txt 2>/dev/null || true)
+  CLOUDSQL=$(cat "$CLOUDSQL_TXT" 2>/dev/null || true)
   EXTRA=()
   [ -n "$CLOUDSQL" ] && EXTRA+=(--add-cloudsql-instances "$CLOUDSQL")
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
@@ -159,6 +169,6 @@ else
     ${SECRETS_FLAG[@]+"${SECRETS_FLAG[@]}"} \
     --add-volume name=data,type=cloud-storage,bucket=janis-data-$PROJECT \
     --add-volume-mount volume=data,mount-path=/app/data \
-    --env-vars-file /tmp/janis-env.yaml
+    --env-vars-file "$ENV_YAML"
 fi
 echo "Deployed: $BASE"
