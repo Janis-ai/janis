@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 import type { UserProfile } from '@janis/shared';
 import { contactForBinding, linkConversationContact } from '../lib/contacts.js';
 import type { Db } from '../db/client.js';
@@ -197,9 +197,19 @@ export async function adoptVisitorConversation(
 
     const vId = vb.conversation.id;
     const uId = uConv.id;
-    for (const t of [messages, alerts, suggestions, usageEvents] as const) {
+    for (const t of [messages, suggestions, usageEvents] as const) {
       await db.update(t).set({ conversationId: uId }).where(eq(t.conversationId, vId));
     }
+    // alerts_one_open_per_type is unique per (conversation,type): if the
+    // survivor already has an open alert of that type the source's copy is
+    // a true duplicate — drop it rather than let the retarget violate.
+    await db.delete(alerts).where(and(
+      eq(alerts.conversationId, vId),
+      eq(alerts.status, 'open'),
+      inArray(alerts.type, db.select({ t: alerts.type }).from(alerts)
+        .where(and(eq(alerts.conversationId, uId), eq(alerts.status, 'open')))),
+    ));
+    await db.update(alerts).set({ conversationId: uId }).where(eq(alerts.conversationId, vId));
     // A conversation can own many Slack threads and all of them stay live —
     // repoint every one of the anonymous visitor's threads onto the merged
     // user conversation so replies there keep routing.
