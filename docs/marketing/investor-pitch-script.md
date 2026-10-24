@@ -75,10 +75,10 @@ appears with its AI-drafted expectation.
 card → "Migrated from the classic setup — 5 agents" panel with engine
 badges + Manage links.
 
-> "And here's the part you can't buy: seventeen thousand businesses run
-> the classic Janis inside Slack today. Migrating is one click — agents,
-> channels, credentials come with them. Distribution is a rail, not an
-> ad spend."
+> "And here's the part you can't buy: seventeen thousand businesses
+> signed up for the classic Janis inside Slack. Migrating is one click —
+> agents, channels, credentials come with them. Distribution is a rail,
+> not an ad spend."
 
 ## Act 5 — Close (3:00–3:15)
 

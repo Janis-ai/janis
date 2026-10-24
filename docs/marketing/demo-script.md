@@ -114,7 +114,7 @@ to beat marks, so sync is exact by construction. Light-mode console
 | 2 | `seg2-inbox` | ~0:29 | `/conversations` → newest thread (carousel preview, intent: sales, BUBBLE/Shopify channel) → **Take over** → typed human reply | "Same conversation, other side — full context, instant human takeover." → "Every rescue is captured — not just answered." |
 | 3 | `seg3-learn` | ~0:15 | agent → Test → expand "N rescued conversations" → the seg2 reply as top row → **Save as tests** → scenario with AI-drafted expectation | "The moat: rescued threads surface here —" → "…and one click turns a save into a regression test. The product compounds with use." |
 | 4 | `seg4-build` | ~0:22 | rail montage: Knowledge → Behavior → Actions → Test | "Knowledge, behavior, actions, tests, channels — a platform, not a feature." |
-| 5 | `seg5-migration` | ~0:20 | **Michael's workspace** → Settings → Escalation → janistest3 card → "Migrated from the classic setup — 5 agents" (HOSTED/MONITOR/DIALOGFLOW badges, channel bindings, Manage links) → landing hero | "17,000 legacy installs migrate in one click — distribution is a rail, not an ad spend." → "AI when AI is best. Humans when humans are needed. Janis — janis.ai" |
+| 5 | `seg5-migration` | ~0:20 | **Michael's workspace** → Settings → Escalation → janistest3 card → "Migrated from the classic setup — 5 agents" (HOSTED/MONITOR/DIALOGFLOW badges, channel bindings, Manage links) → landing hero | "17,000 legacy signups migrate in one click — distribution is a rail, not an ad spend." → "AI when AI is best. Humans when humans are needed. Janis — janis.ai" |
 
 ```bash
 SNOW_TOKEN=<demo-ws session> SNOW_TOKEN2=<main-ws session> \
