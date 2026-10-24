@@ -5735,8 +5735,13 @@ async function replyAsHostedAgent(
       // shipped a bare lead-in when the model emitted a dead gated ref,
       // SnowboardsAreUs 2026-10-24).
       if (
-        attempt === 2 &&
-        memoryCatalogue &&
+        // memoryCatalogue waits for the final attempt (a mid-run draft can
+        // still self-correct); a dead colon lead-in is *always* broken, so
+        // it rescues one round earlier — saves a model call on the common
+        // dead-end path.
+        (attempt === 2
+          ? memoryCatalogue || (reply !== null && CLAIM_LEADIN_RE.test(reply))
+          : attempt >= 1 && reply !== null && CLAIM_LEADIN_RE.test(reply)) &&
         productSearch &&
         !ctx?.testRun &&
         // Only the dead-end case — a surviving picker/buttons means the
