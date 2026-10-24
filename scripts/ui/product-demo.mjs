@@ -20,26 +20,52 @@ mkdirSync(VID, { recursive: true });
 
 const CURSOR_JS = `
 (() => {
-  if (document.getElementById('__demo-cursor')) return;
-  const el = document.createElement('div');
-  el.id = '__demo-cursor';
-  Object.assign(el.style, {
-    position: 'fixed', width: '14px', height: '14px', borderRadius: '50%',
-    border: '2px solid rgba(15,17,23,.85)', background: 'rgba(255,255,255,.65)',
-    boxShadow: '0 1px 4px rgba(0,0,0,.35)', zIndex: 2147483647,
-    pointerEvents: 'none', left: '-40px', top: '-40px',
-    transition: 'transform .08s ease-out',
-  });
-  document.documentElement.appendChild(el);
-  let x = -40, y = -40, cx = -40, cy = -40;
-  addEventListener('mousemove', (e) => { x = e.clientX; y = e.clientY; }, true);
-  addEventListener('mousedown', () => { el.style.transform = 'scale(.7)'; }, true);
-  addEventListener('mouseup', () => { el.style.transform = 'scale(1)'; }, true);
-  (function loop() {
-    cx += (x - cx) * .35; cy += (y - cy) * .35;
-    el.style.left = (cx - 7) + 'px'; el.style.top = (cy - 7) + 'px';
-    requestAnimationFrame(loop);
-  })();
+  // init scripts run BEFORE the document parses — documentElement can be
+  // null. Defer injection until the DOM exists (this silently killed the
+  // cursor + captions in early takes).
+  const boot = () => {
+    if (!document.documentElement || document.getElementById('__demo-cursor')) return;
+    const el = document.createElement('div');
+    el.id = '__demo-cursor';
+    Object.assign(el.style, {
+      position: 'fixed', width: '14px', height: '14px', borderRadius: '50%',
+      border: '2px solid rgba(15,17,23,.85)', background: 'rgba(255,255,255,.65)',
+      boxShadow: '0 1px 4px rgba(0,0,0,.35)', zIndex: 2147483647,
+      pointerEvents: 'none', left: '-40px', top: '-40px',
+      transition: 'transform .08s ease-out',
+    });
+    document.documentElement.appendChild(el);
+    let x = -40, y = -40, cx = -40, cy = -40;
+    addEventListener('mousemove', (e) => { x = e.clientX; y = e.clientY; }, true);
+    addEventListener('mousedown', () => { el.style.transform = 'scale(.7)'; }, true);
+    addEventListener('mouseup', () => { el.style.transform = 'scale(1)'; }, true);
+    (function loop() {
+      cx += (x - cx) * .35; cy += (y - cy) * .35;
+      el.style.left = (cx - 7) + 'px'; el.style.top = (cy - 7) + 'px';
+      requestAnimationFrame(loop);
+    })();
+
+    // narration caption bar — window.__cap('line') shows it, __cap('') hides.
+    // Baked into the video itself: perfectly synced, no ffmpeg needed.
+    const cap = document.createElement('div');
+    cap.id = '__demo-caption';
+    Object.assign(cap.style, {
+      position: 'fixed', left: '50%', bottom: '28px', transform: 'translateX(-50%)',
+      maxWidth: '1180px', padding: '14px 26px', borderRadius: '14px',
+      background: 'rgba(12,13,16,.85)', color: '#fff',
+      font: '500 26px/1.35 -apple-system, system-ui, sans-serif',
+      textAlign: 'center', letterSpacing: '.1px',
+      zIndex: 2147483646, pointerEvents: 'none', opacity: '0',
+      transition: 'opacity .35s ease',
+    });
+    document.documentElement.appendChild(cap);
+    window.__cap = (t) => {
+      cap.textContent = t || '';
+      cap.style.opacity = t ? '1' : '0';
+    };
+  };
+  if (document.documentElement) boot();
+  else addEventListener('DOMContentLoaded', boot, { once: true });
 })();
 `;
 
@@ -51,6 +77,7 @@ const seg = async (name, fn, cookie) => {
     recordVideo: { dir: VID, size: { width: 1600, height: 1000 } },
   });
   await ctx.addInitScript(CURSOR_JS);
+  await ctx.addInitScript(`localStorage.setItem('janis_theme', 'light')`);
   if (cookie) {
     await ctx.addCookies([{
       name: 'janis_session', value: cookie, domain: 'app.janis.ai', path: '/',
@@ -74,6 +101,9 @@ const seg = async (name, fn, cookie) => {
 };
 
 // --- helpers ---------------------------------------------------------------
+
+/** Show a narration caption on screen (empty string hides it). */
+const cap = (page, text) => page.evaluate((t) => window.__cap?.(t), text);
 
 /** Move the (fake) cursor to an element, pause, click — reads as deliberate. */
 const clickAt = async (page, locator, pause = 350) => {
@@ -138,11 +168,16 @@ await seg('seg1-storefront', async (page) => {
     await page.waitForLoadState('domcontentloaded');
   }
   await page.waitForSelector('#janis-bubble', { timeout: 30000 });
-  await page.waitForTimeout(2500);
+  // cap() before goto lands on about:blank — set on the real document
+  await cap(page, 'Your customers are already talking to you. The question is who\u2019s answering.');
+  await page.waitForTimeout(3500);
+
+  await cap(page, 'Meet Janis — an AI support agent that lives where your customers already are.');
   await clickAt(page, page.locator('#janis-bubble'), 500);
   await page.waitForSelector('#janis-input', { timeout: 10000 });
   await page.waitForTimeout(2000);
 
+  await cap(page, 'It answers from your real catalog — collections, products, prices — right inside the chat.');
   await say(page, 'Show me the snowboards you have for sale');
   if (!(await page.locator('.janis-wcards').count())) {
     await say(page, 'yes');
@@ -150,15 +185,31 @@ await seg('seg1-storefront', async (page) => {
   }
   await page.waitForTimeout(2000);
 
+  // drill into a collection so real product cards (image/price/buttons) show
+  await cap(page, 'Real product cards — tap to view or buy without leaving the conversation.');
+  const coll = page.locator('.janis-wcards a, .janis-wcards button, .janis-wcards [class*="card"]').first();
+  if (await coll.count()) {
+    await clickAt(page, coll, 500);
+    await settle(page);
+    await page.waitForTimeout(2500);
+  } else {
+    await say(page, 'the snowboard collection');
+  }
+
+  await cap(page, 'Sizing question? It collects the details it needs — no forms page, no email tag.');
   await say(page, "what size board should I get? I'm 5'10\", 170lb");
   await page.waitForTimeout(1500);
 
+  await cap(page, 'And it closes the loop — a checkout link right in the thread.');
   await say(page, "I'll take the first one you showed me");
   await page.waitForTimeout(1500);
 
   // S2 — the moment AI should stop
+  await cap(page, 'But some moments need a human. A return. A complaint. Judgment.');
   await say(page, 'Actually the board I got last month is cracked and I want a refund');
-  await page.waitForTimeout(2500);
+  await cap(page, 'Janis doesn\u2019t freestyle a refund — it collects what your team needs and hands off.');
+  await page.waitForTimeout(3500);
+  await cap(page, '');
 });
 
 // --- seg 2: console inbox — the human end (S3) ------------------------------
@@ -167,6 +218,7 @@ await seg('seg2-inbox', async (page) => {
   await page.goto(`${APP}/conversations`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('a.conv-row, [class*="conv"]', { timeout: 20000 });
   await page.click('.push-banner-dismiss').catch(() => {});
+  await cap(page, 'Same conversation — the operator\u2019s side. Full context. Take over, type, done.');
   await page.waitForTimeout(2000);
   // newest thread = the visitor conversation seg1 just created
   await clickAt(page, page.locator('a.conv-row').first(), 600);
@@ -183,8 +235,10 @@ await seg('seg2-inbox', async (page) => {
   // the composer by its placeholder, never .last().
   await typeIn(page, 'textarea[placeholder*="Reply as a human"]', "Hi! Maya here from SnowboardsAreUs — so sorry the board arrived cracked. I'm shipping a replacement today and emailing you a prepaid return label. You don't need to do anything else.");
   await page.waitForTimeout(600);
+  await cap(page, 'The customer never leaves the bubble — the human reply lands in the same thread.');
   await clickAt(page, page.getByRole('button', { name: 'Send', exact: true }), 400);
-  await page.waitForTimeout(2500);
+  await page.waitForTimeout(3000);
+  await cap(page, '');
 }, TOKEN);
 
 // --- seg 3: rescue → learn loop (S4) ----------------------------------------
@@ -193,6 +247,7 @@ await seg('seg3-teach', async (page) => {
   await page.goto(`${APP}/conversations`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('a.conv-row', { timeout: 20000 });
   await page.click('.push-banner-dismiss').catch(() => {});
+  await cap(page, 'And every rescue becomes a lesson — the thread becomes a test the agent is checked against.');
   await clickAt(page, page.locator('a.conv-row').first(), 600);
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(2000);
@@ -218,10 +273,11 @@ await seg('seg3-teach', async (page) => {
   }
   if (await teach.count()) {
     await clickAt(page, teach, 700);
-    await page.waitForTimeout(3000); // let the teach surface open/settle
+    await page.waitForTimeout(4000); // let the teach surface open/settle
   } else {
     console.log('no Teach agent button — skipped');
   }
+  await cap(page, '');
 }, TOKEN);
 
 // --- seg 4: builder montage (S5) --------------------------------------------
@@ -229,6 +285,7 @@ if (!process.env.ONLY || process.env.ONLY === 'seg4')
 await seg('seg4-builder', async (page) => {
   await page.goto(`${APP}/agents/new`, { waitUntil: 'domcontentloaded' });
   await page.click('.push-banner-dismiss').catch(() => {});
+  await cap(page, 'Setup isn\u2019t a config file — describe the job and Janis drafts the agent.');
   await page.waitForTimeout(2500);
   // chooser first: "Build an agent with Janis" enters the staged builder
   const build = page.locator('text=Build an agent with Janis').first();
@@ -244,18 +301,28 @@ await seg('seg4-builder', async (page) => {
     await typeIn(page, 'textarea', 'Answer customer questions about our hiking gear — sizing, availability, order status and returns — and help them check out.');
     await page.waitForTimeout(800);
   }
-  const nameIn = page.locator('input').first();
-  if (await nameIn.count()) {
-    await typeIn(page, 'input', 'Trailhead Outdoor Support');
-    await page.waitForTimeout(800);
-  }
+  // names must be unique workspace-wide — retry list in case a prior
+  // take left one reserved (soft-deleted agents still hold the name)
+  const NAMES = ['Ridgeline Gear Co', 'Summit Trail Outfitters', 'Cascade Ridge Supply'];
   const createBtn = page.locator('button', { hasText: 'Create agent' }).first();
   if (await createBtn.count()) {
-    await clickAt(page, createBtn, 600);
-    // LLM draft can take a while — let it build
-    await page.waitForSelector('text=Building agent', { timeout: 15000 }).catch(() => {});
-    await page.waitForTimeout(25000);
+    let created = false;
+    for (const nm of NAMES) {
+      await page.locator('input').first().fill('');
+      await typeIn(page, 'input', nm);
+      await page.waitForTimeout(600);
+      await clickAt(page, createBtn, 600);
+      const clash = await page.waitForSelector("text=already an agent's name", { timeout: 4000 }).catch(() => null);
+      if (!clash) { created = true; break; }
+      await page.waitForTimeout(800);
+    }
+    if (created) {
+      // LLM draft can take a while — let it build
+      await page.waitForSelector('text=Building agent', { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(25000);
+    }
   }
+  await cap(page, 'Teach it what you know. Guide how it behaves. Give it abilities. Test it like a customer.');
   // click through the stage rail for the montage
   for (const label of ['Teach it', 'Guide it', 'Abilities', 'Try it', 'Deploy']) {
     const t = page.locator('.builder-step', { hasText: label }).first();
@@ -264,17 +331,22 @@ await seg('seg4-builder', async (page) => {
       await page.waitForTimeout(2800);
     }
   }
+  await cap(page, '');
 }, TOKEN);
 
 // --- seg 5: deploy + landing (S6+S7) -----------------------------------------
 if (!process.env.ONLY || process.env.ONLY === 'seg5')
 await seg('seg5-deploy-landing', async (page) => {
-  // channel card with the live widget preview
   await page.goto(`${APP}/agents/51a81b16-f6a1-4dfa-ac83-15e116690269`, { waitUntil: 'domcontentloaded' });
+  await cap(page, 'One agent — website, Shopify, Meta, email, Slack, SMS, voice. One inbox.');
   await page.waitForTimeout(3000);
-  // landing close
+  await page.click('.push-banner-dismiss').catch(() => {});
+  // landing close — caption lives in the DOM, so set it AFTER the nav
   await page.goto(`${APP}/`, { waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(4000);
+  await page.waitForTimeout(1500);
+  await cap(page, 'AI when AI is best. Humans when humans are needed. janis.ai');
+  await page.waitForTimeout(3500);
+  await cap(page, '');
 }, TOKEN);
 
 await browser.close();
