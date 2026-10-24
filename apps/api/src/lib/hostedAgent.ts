@@ -808,7 +808,7 @@ export function systemPrompt(
       .slice(0, 8);
     if (forms.length) {
       parts.push(
-        '\nData-collection forms — when the conversation matches one, present it by emitting WIDGET_REF: <name> on its own line (it renders as a real form). A submission arrives as the customer\'s message AND is saved to their contact + routed automatically — do NOT also call save_user_profile for fields the form collected:\n' +
+        '\nData-collection forms — when the conversation matches one, present it by emitting WIDGET_REF: <name> on its own line (it renders as a real form). A submission arrives as the customer\'s message AND is saved to their contact + routed automatically — do NOT also call save_user_profile for fields the form collected. Never ask for a fact the customer already gave you: if they stated a field the form asks for (they said their height and the form asks height), call save_user_profile with it BEFORE emitting the form — the field arrives prefilled — or drop that field from the ask entirely:\n' +
           forms
             .map(
               (f) =>
@@ -4138,8 +4138,15 @@ export function prefillFormFields(
   profile: UserProfile & { metadata?: Record<string, unknown> },
 ): void {
   const meta = (k: string): string => {
-    const v = profile.metadata?.[k];
-    return typeof v === 'string' ? v : '';
+    const bag = profile.metadata ?? {};
+    // metadata keys come from model-emitted facts — try the field name as
+    // written, then normalized forms ("Height" vs "height", "order id" vs
+    // "order_id").
+    for (const key of [k, k.toLowerCase(), k.toLowerCase().replace(/[\s-]+/g, '_')]) {
+      const v = bag[key];
+      if (typeof v === 'string' && v) return v;
+    }
+    return '';
   };
   const guess = (name: string): string => {
     const n = name.toLowerCase().replace(/[\s-]+/g, '_');
@@ -5979,7 +5986,17 @@ async function replyAsHostedAgent(
     // a card's own button are dropped; offers the card can't answer stay.
     const keptButtons = cardsTap ? [] : filterChipsAgainstCards(buttons, widgets);
     const buttonFlag = keptButtons.length ? { quick_replies: keptButtons } : {};
-    prefillFormFields(widgets, (conv.userProfile ?? {}) as UserProfile);
+    // Re-read the profile — a same-turn save_user_profile (or a concurrent
+    // ingress write) landed after `conv` was loaded and is invisible to it.
+    const [freshProfile] = await db
+      .select({ userProfile: conversations.userProfile })
+      .from(conversations)
+      .where(eq(conversations.id, convId))
+      .limit(1);
+    prefillFormFields(
+      widgets,
+      (freshProfile?.userProfile ?? conv.userProfile ?? {}) as UserProfile,
+    );
     // interactive components render inside the widget on webchat
     const widgetFlag = widgets.length ? { widgets } : {};
     // "Why did it say that?" — model/token/tool trace stamped on the stored
