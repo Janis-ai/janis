@@ -19,7 +19,6 @@ const browser = await chromium.launch({ headless: true });
 
 const CURSOR_INIT = () => {
   try { localStorage.setItem('janis_theme', 'light'); } catch {}
-  if (window !== window.top) return;
   const mount = () => {
     if (document.getElementById('__filmcur')) return;
     const s = document.createElement('style');
@@ -157,6 +156,7 @@ const ONLY = process.env.ONLY;
 // ==== Act 0 — the queue ================================================
 if (!ONLY || ONLY === 'act0')
   await seg('act0-queue', async (page, cur, beat) => {
+    beat('open', 'This is Janis.');
     await page.goto(`${APP}/conversations`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('a.conv-row', { timeout: 20000 });
     await tidy(page);
@@ -174,11 +174,15 @@ if ((!ONLY || ONLY === 'act1') && SHOP_PASS)
       await cur.click(page.locator('button[type="submit"], input[type="submit"]'));
       await page.waitForLoadState('domcontentloaded');
     }
-    marks.push({ n: 'cut_before', t: Date.now() - t0 });
+    beat('cut_before');
     beat('store', "This is Janis inside a real Shopify storefront —\nlive catalog, live pricing, inside the chat bubble.");
     await page.waitForSelector('#janis-bubble', { timeout: 30000 });
-    await page.waitForTimeout(2000);
-    await cur.click(page.locator('#janis-bubble'));
+    // the teaser blurb invites the click — let it live on camera
+    await page.waitForSelector('#janis-teaser', { timeout: 30000 }).catch(() => {});
+    await page.waitForTimeout(4000);
+    beat('teaser', 'The widget introduces itself — proactive, branded,\ninviting the shopper in before they even click.');
+    await page.waitForTimeout(2500);
+    await cur.click(page.locator('#janis-teaser, #janis-bubble').first());
     await page.waitForSelector('#janis-input', { timeout: 10000 });
     const expand = page.locator('#janis-expand');
     if (await expand.count()) { await cur.click(expand); await page.waitForTimeout(800); }
@@ -202,31 +206,34 @@ if ((!ONLY || ONLY === 'act1') && SHOP_PASS)
     if (await seeOpts.count()) {
       await cur.click(seeOpts);
       await page.waitForTimeout(1200);
-      const add = page.locator('#janis-msgs button:has-text("Add to cart"), #janis-msgs button:has-text("Add")').first();
-      if (await add.count()) await cur.click(add);
+      const add = page.locator('.janis-opts-wrap button:has-text("Add"), .janis-opts-wrap button:has-text("cart")').first();
+      if (await add.count()) { await cur.click(add); }
       await page.waitForTimeout(2000);
     }
     await say(page, cur, 'checkout');
     beat('cart', 'Sees options, picks a size, adds to cart —\nand the checkout link closes the loop, in-chat.');
     await page.waitForTimeout(2500);
 
-    await say(page, cur, 'Actually I need to return an order I already received');
-    beat('form', 'Then a return — judgment territory. It collects the details\nstructured, email included, and hands off to a human.');
-    await page.waitForTimeout(6000);
+    await say(page, cur, 'Actually — can I talk to a person about a return?');
+    beat('handoff', "A request AI shouldn't guess on — it doesn't fake it.\nIt raises a human alert instead. Watch what happens next.");
+    await page.waitForTimeout(7000);
   });
 else if (!ONLY || ONLY === 'act1') console.log('act1 skipped — SHOP_PASS unset');
 
 // ==== Act 2 — one thread, console side =================================
 if (!ONLY || ONLY === 'act2')
   await seg('act2-thread', async (page, cur, beat) => {
-    await page.goto(`${APP}/agents/${AGENT}/inbox/${CONV}`, { waitUntil: 'domcontentloaded' });
+    await page.goto(`${APP}/agents/${AGENT}/inbox`, { waitUntil: 'domcontentloaded' });
     await tidy(page);
+    await page.waitForTimeout(2500);
+    const firstRow = page.locator('a[href*="/inbox/"]').first();
+    if (await firstRow.count()) await cur.click(firstRow);
     await page.waitForTimeout(4000);
     await page.evaluate(() => {
       const sc = document.querySelector('.msgs, .conv-msgs, [class*="scroll"]');
       (sc ?? document.scrollingElement)?.scrollTo?.(0, 0);
     });
-    beat('thread', 'Same conversation, other side — the operator sees\nthe full thread: cards sent, forms filled, every turn.');
+    beat('alert', 'Inside Janis, that request is an open alert —\nrouted, prioritized, waiting on a human. The same alert\nlands in the team\'s Slack the moment it fires.');
     await page.waitForTimeout(3000);
     await page.evaluate(() => {
       const sc = document.querySelector('.msgs, .conv-msgs, [class*="scroll"]');
@@ -244,8 +251,23 @@ if (!ONLY || ONLY === 'act2')
       await humanType(page, ta, "So sorry about the cracked board — I'll get a prepaid return label to you right now.");
       await page.waitForTimeout(600);
       await page.keyboard.press('Enter');
+      beat('reply', 'The operator replies — one thread, full context,\nno re-explaining, no lost history.');
       await page.waitForTimeout(2500);
     }
+    // back to the storefront — the human's reply lands in the visitor's bubble
+    await page.goto(SHOP, { waitUntil: 'domcontentloaded' });
+    if (page.url().includes('/password')) {
+      await cur.click(page.locator('input[name="password"]'));
+      await humanType(page, page.locator('input[name="password"]'), SHOP_PASS);
+      await cur.click(page.locator('button[type="submit"], input[type="submit"]'));
+      await page.waitForLoadState('domcontentloaded');
+    }
+    await page.waitForSelector('#janis-bubble', { timeout: 30000 }).catch(() => {});
+    beat('backtostore', 'And back on the store — the human\'s answer\nlands in the same bubble. Seamless, both sides.');
+    await page.waitForTimeout(2500);
+    await cur.click(page.locator('#janis-bubble')).catch(() => {});
+    await page.waitForSelector('#janis-msgs .janis-msg', { timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(3500);
   }, TOKEN);
 
 // ==== Act 3 — rescue → regression test =================================
