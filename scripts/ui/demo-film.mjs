@@ -8,9 +8,10 @@
 //   SNOW_TOKEN=<minted session> SHOP_PASS=… node scripts/ui/demo-film.mjs
 //   ONLY=seg2 node scripts/ui/demo-film.mjs        # single segment
 //
-// Output: /tmp/janis-film/seg-*.webm → concat + grade via ffmpeg.
+// Output: /tmp/janis-film/seg-*.webm + beats.json → demo-subs.mjs concats,
+// lays subtitles on the beat marks, and burns janis-demo.mp4 via ffmpeg.
 import { chromium } from 'playwright';
-import { mkdirSync, readdirSync, renameSync, statSync } from 'node:fs';
+import { mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SHOP = process.env.SHOP ?? 'https://snowboardsareus.myshopify.com';
@@ -24,7 +25,9 @@ mkdirSync(VID, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 
 // ---------------------------------------------------------------- cursor
-const CURSOR_INIT = () => {
+const LIGHT = process.env.LIGHT !== '0'; // this cut ships light-mode console
+const CURSOR_INIT = (light) => {
+  if (light) try { localStorage.setItem('janis_theme', 'light'); } catch {}
   if (window !== window.top) return; // iframes get no duplicate cursor
   const mount = () => {
     if (document.getElementById('__filmcur')) return;
@@ -37,16 +40,41 @@ const CURSOR_INIT = () => {
         background:rgba(24,26,32,.85);
         box-shadow:0 1px 5px rgba(0,0,0,.45),inset 0 0 0 2.5px rgba(255,255,255,.9);
         transition:scale .12s ease-out}
-      #__filmcur.__down .__d{scale:.72}`;
+      #__filmcur.__down .__d{scale:.72}
+      #__filmcap{position:fixed;left:50%;bottom:44px;transform:translateX(-50%);
+        max-width:1080px;z-index:2147483647;pointer-events:none;text-align:center;
+        font:600 27px/1.35 -apple-system,"Helvetica Neue",Arial,sans-serif;
+        color:#fff;background:rgba(10,12,16,.66);padding:12px 26px;
+        border-radius:12px;white-space:pre-line;opacity:0;
+        transition:opacity .25s ease;text-wrap:balance}`;
     document.documentElement.appendChild(s);
     const c = document.createElement('div');
     c.id = '__filmcur';
     c.innerHTML = '<div class="__d"></div>';
     document.documentElement.appendChild(c);
+    const cap = document.createElement('div');
+    cap.id = '__filmcap';
+    document.documentElement.appendChild(cap);
   };
   if (document.documentElement) mount();
   else document.addEventListener('DOMContentLoaded', mount);
 };
+
+/** Burn a caption into the frame — stays until the next beat or seg end.
+ *  pos: 'bc' bottom-center (default) | 'bl' bottom-left (storefront — the
+ *  expanded widget owns bottom-right) | 'up' raised center (conversation —
+ *  keeps the composer clear while a reply types). */
+async function caption(page, text, pos) {
+  await page.evaluate(([t, p]) => {
+    const c = document.getElementById('__filmcap');
+    if (!c) return;
+    if (p === 'bl') Object.assign(c.style, { left: '44px', right: 'auto', bottom: '44px', transform: 'none', textAlign: 'left', maxWidth: '820px' });
+    else if (p === 'up') Object.assign(c.style, { left: '50%', right: 'auto', bottom: '170px', transform: 'translateX(-50%)', textAlign: 'center', maxWidth: '1080px' });
+    else Object.assign(c.style, { left: '50%', right: 'auto', bottom: '44px', transform: 'translateX(-50%)', textAlign: 'center', maxWidth: '1080px' });
+    c.style.opacity = t ? '1' : '0';
+    if (t) c.textContent = t;
+  }, [text ?? '', pos ?? 'bc']);
+}
 
 class Cursor {
   constructor(page) {
@@ -101,12 +129,14 @@ async function humanType(page, loc, text) {
 }
 
 // ------------------------------------------------------------- segments
+// Beat marks → beats.json → demo-subs.mjs times captions off them.
+const BEATS = {};
 const seg = async (name, fn, cookie) => {
   const ctx = await browser.newContext({
     viewport: { width: 1600, height: 1000 },
     recordVideo: { dir: VID, size: { width: 1600, height: 1000 } },
   });
-  await ctx.addInitScript(CURSOR_INIT);
+  await ctx.addInitScript(CURSOR_INIT, LIGHT);
   if (cookie) {
     await ctx.addCookies([{
       name: 'janis_session', value: cookie, domain: 'app.janis.ai', path: '/',
@@ -115,8 +145,14 @@ const seg = async (name, fn, cookie) => {
   }
   const page = await ctx.newPage();
   const cur = new Cursor(page);
+  const t0 = Date.now();
+  const marks = (BEATS[name] = []);
+  const beat = (n, cap, pos) => {
+    marks.push({ n, t: Date.now() - t0 });
+    if (cap !== undefined) void caption(page, cap, pos);
+  };
   try {
-    await fn(page, cur);
+    await fn(page, cur, beat);
   } catch (e) {
     console.log(`${name} ERR:`, e.message);
   } finally {
@@ -174,7 +210,7 @@ const tidy = async (page) => {
 
 // ==== seg1: storefront — the customer side =============================
 if ((!ONLY || ONLY === 'seg1') && SHOP_PASS)
-  await seg('seg1-storefront', async (page, cur) => {
+  await seg('seg1-storefront', async (page, cur, beat) => {
     await page.goto(SHOP, { waitUntil: 'domcontentloaded' });
     if (page.url().includes('/password')) {
       await cur.click(page.locator('input[name="password"]'));
@@ -182,21 +218,53 @@ if ((!ONLY || ONLY === 'seg1') && SHOP_PASS)
       await cur.click(page.locator('button[type="submit"], input[type="submit"]'));
       await page.waitForLoadState('domcontentloaded');
     }
+    beat('open', 'Your customers are already talking to you.\nThe question is who’s answering.', 'bl');
     await page.waitForSelector('#janis-bubble', { timeout: 30000 });
     await page.waitForTimeout(2500);           // browse beat — let the store read
     await page.evaluate(() => window.scrollTo({ top: 600, behavior: 'smooth' }));
     await page.waitForTimeout(2200);
     await cur.click(page.locator('#janis-bubble'));
     await page.waitForSelector('#janis-input', { timeout: 10000 });
+    // expanded panel — the chat reads better at 680px than 340px
+    const expand = page.locator('#janis-expand');
+    if (await expand.count()) {
+      await cur.click(expand);
+      await page.waitForTimeout(800);
+    }
+    beat('chat-open', 'Janis answers from your actual catalog —\nproduct questions, sizing, orders — live, in the chat bubble.', 'bl');
     await page.waitForTimeout(2500);
 
     await say(page, cur, 'Show me the snowboards you have for sale');
+    // The agent may answer a browse ask with the collections picker ("What
+    // would you like to browse?") or the "find your board" form — not the
+    // product list Mike wants on camera. Tap the biggest collection row to
+    // get the carousel; fall back to a sharper ask if neither shows.
     if (!(await page.locator('.janis-wcards').count())) {
-      await say(page, cur, 'yes');
+      // collections picker rows ("Name — N products") — click the BIGGEST
+      // one so the carousel shows a real list, not a single card
+      const pick = await page.evaluate(() => {
+        const rows = [...document.querySelectorAll('.janis-wopts button, .janis-wlist > *, .janis-wopts > *')];
+        let best = null, bestN = -1;
+        rows.forEach((el, i) => {
+          const m = (el.textContent ?? '').match(/(\d+)\s*product/i);
+          if (m && +m[1] > bestN) { bestN = +m[1]; best = i; }
+        });
+        return best;
+      });
+      if (pick !== null) {
+        const rows = page.locator('.janis-wopts button, .janis-wlist > *, .janis-wopts > *');
+        await cur.click(rows.nth(pick));
+        await page.waitForSelector('.janis-wcards', { timeout: 90000 }).catch(() => {});
+        await settle(page);
+      }
+    }
+    if (!(await page.locator('.janis-wcards').count())) {
+      await say(page, cur, 'just show me all the boards you carry');
       await page.waitForSelector('.janis-wcards', { timeout: 90000 }).catch(() => {});
     }
     await scrollEnd(page);
-    await page.waitForTimeout(2000);
+    beat('cards', 'Real products, live prices — answered\nfrom the catalog itself.', 'bl');
+    await page.waitForTimeout(2500);
 
     await say(page, cur, "what size board should I get? I'm 5'10\", 170lb");
     await page.waitForTimeout(1500);
@@ -205,23 +273,29 @@ if ((!ONLY || ONLY === 'seg1') && SHOP_PASS)
     if (!(await page.locator('#janis-msgs a[href*="checkout"], #janis-msgs a[href*="cart"]').count())) {
       await say(page, cur, 'my email is mike@example.com');
     }
+    beat('checkout', 'It closes the loop — a checkout link,\nright in the conversation. No forms, no dead ends.', 'bl');
     await page.waitForTimeout(2000);
 
     await say(page, cur, 'Actually I need to return an order I already received');
-    await page.waitForTimeout(2500);
+    beat('return', 'Until something needs judgment. A refund, a promise,\nan upset customer — that’s not a job for a confidence score.', 'bl');
+    await page.waitForTimeout(6000);
+    await caption(page, '');
   });
 else if (!ONLY || ONLY === 'seg1')
   console.log('seg1 skipped — SHOP_PASS unset');
 
 // ==== seg2: console inbox — the human side =============================
 if (!ONLY || ONLY === 'seg2')
-  await seg('seg2-inbox', async (page, cur) => {
+  await seg('seg2-inbox', async (page, cur, beat) => {
     await page.goto(`${APP}/conversations`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('a.conv-row', { timeout: 20000 });
     await tidy(page);
     await page.waitForTimeout(2500);
     await cur.click(page.locator('a.conv-row').first());
-    await page.waitForSelector('textarea', { timeout: 20000 });
+    beat('thread', 'Same conversation, other side. A human sees it\nthe moment it matters — with everything the AI already learned.', 'up');
+    // composer only exists in human state — on an agent-owned conv the
+    // action row is the signal the page is ready, not a textarea
+    await page.waitForSelector('button:has-text("Take over"), textarea', { timeout: 20000 });
     await page.waitForTimeout(3000);
     await page.evaluate(() => {
       const sc = document.querySelector('.msgs, .conv-msgs, [class*="scroll"]');
@@ -231,6 +305,8 @@ if (!ONLY || ONLY === 'seg2')
 
     // the differentiator beat: AI → human, same thread
     await cur.click(page.locator('button:has-text("Take over")'));
+    beat('takeover', 'And just types. The customer never leaves the bubble,\nnever repeats themselves.', 'up');
+    await page.waitForSelector('.composer-inner textarea, textarea', { timeout: 20000 });
     await page.waitForTimeout(1800);
     const ta = page.locator('.composer-inner textarea, textarea').last();
     await cur.click(ta);
@@ -257,7 +333,7 @@ if (!ONLY || ONLY === 'seg2')
 
 // ==== seg3: rescue → learn =============================================
 if (!ONLY || ONLY === 'seg3')
-  await seg('seg3-learn', async (page, cur) => {
+  await seg('seg3-learn', async (page, cur, beat) => {
     await page.goto(`${APP}/agents/${AGENT}/tests`, { waitUntil: 'domcontentloaded' });
     await tidy(page);
     await page.waitForTimeout(3500);
@@ -267,8 +343,10 @@ if (!ONLY || ONLY === 'seg3')
       await page.waitForTimeout(1500);
       await cur.click(card.locator('summary'));
       await page.waitForTimeout(1500);
+      beat('rescues', 'Every human rescue becomes a lesson.');
       const sug = page.locator('button:has-text("Save as tests")').first();
       await cur.click(sug);
+      beat('saved', 'The gap is flagged, the fix becomes a test —\nthe next customer never waits on a human for that question.');
       await page.waitForTimeout(3000);
       await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
       await page.waitForTimeout(2500);
@@ -281,7 +359,7 @@ if (!ONLY || ONLY === 'seg3')
 
 // ==== seg4: how you'd build it — surface montage =======================
 if (!ONLY || ONLY === 'seg4')
-  await seg('seg4-build', async (page, cur) => {
+  await seg('seg4-build', async (page, cur, beat) => {
     const stops = [
       ['knowledge', `${APP}/agents/${AGENT}/knowledge`],
       ['behavior', `${APP}/agents/${AGENT}/behavior`],
@@ -291,6 +369,7 @@ if (!ONLY || ONLY === 'seg4')
     ];
     await page.goto(stops[0][1], { waitUntil: 'domcontentloaded' });
     await tidy(page);
+    beat('montage', 'Point it at what you know, tell it how to behave,\ntest it like a customer, deploy it where your customers are.');
     await page.waitForTimeout(3000);
     for (const [name] of stops.slice(1)) {
       // click the real nav item like an operator would
@@ -303,15 +382,18 @@ if (!ONLY || ONLY === 'seg4')
 
 // ==== seg5: where it lives + close =====================================
 if (!ONLY || ONLY === 'seg5')
-  await seg('seg5-close', async (page, cur) => {
+  await seg('seg5-close', async (page, cur, beat) => {
     await page.goto(`${APP}/agents/${AGENT}/channels`, { waitUntil: 'domcontentloaded' });
     await tidy(page);
+    beat('channels', 'Web chat, social, email, voice —\none agent, one inbox, one set of rules.');
     await page.waitForTimeout(4500);
     await page.evaluate(() => window.scrollTo({ top: 500, behavior: 'smooth' }));
     await page.waitForTimeout(3000);
     await page.goto('https://www.janis.ai', { waitUntil: 'domcontentloaded' });
+    beat('landing', 'AI when AI is best. Humans when humans are needed.\nJanis — janis.ai');
     await page.waitForTimeout(4000);
   }, TOKEN);
 
 await browser.close();
-console.log('segments in', VID);
+writeFileSync(join(VID, 'beats.json'), JSON.stringify(BEATS, null, 1));
+console.log('segments + beats.json in', VID);
