@@ -2144,6 +2144,13 @@ export function stripLookupPromises(text: string): string {
   return stripSentencesByLine(text, isLookupPromise).text;
 }
 
+/** Every silent-retry hint ends with this — the first-person mistake in the
+ *  hint otherwise leaks into the reply as an apology the customer never saw
+ *  cause for ("My apologies—I should have built those links…"). */
+const RETRY_NO_APOLOGY =
+  ' The customer never saw that draft — continue the reply without apologizing, acknowledging, or referencing the correction.';
+const regen = (hint: string) => '\n\n' + hint + RETRY_NO_APOLOGY;
+
 const CLAIM_GUARD_RETRY =
   'Your previous draft claimed to have completed a change (plan, account, refund, booking, "will take effect"…) but no tool ran. ' +
   'Rewrite it: describe what you can and cannot do in this chat — never claim an action that did not happen. ' +
@@ -2591,7 +2598,7 @@ export async function generateReply(
     [
       ...msgs,
       { role: 'assistant', content: draft },
-      { role: 'user', content: ctx?.identity?.operator ? LINK_GUARD_RETRY_OPERATOR : LINK_GUARD_RETRY },
+      { role: 'user', content: (ctx?.identity?.operator ? LINK_GUARD_RETRY_OPERATOR : LINK_GUARD_RETRY) + RETRY_NO_APOLOGY },
     ],
     tools,
     secrets,
@@ -5282,11 +5289,27 @@ async function replyAsHostedAgent(
           ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
           agent.workspaceId,
         );
+    // Never offer the model a ref that can't run for this shopper — an
+    // identity-gated binding is a guaranteed dead end for an unverified
+    // visitor, and putting it in the menu anyway teaches it to pick dead
+    // options and burn retries learning "you can't do that" (your-orders
+    // on browse asks, SnowboardsAreUs 2026-10-24). refSpecs stays whole —
+    // a ref emitted anyway still resolves and produces the informative
+    // identity-block reason.
+    const shopperVerified =
+      !!ctx?.identity?.operator ||
+      !!(ctx?.identity?.emails?.size || ctx?.identity?.ids?.size);
+    const promptWidgets = [...refSpecs.entries()].filter(([, def]) => {
+      const td = def.tool
+        ? agentToolDefs.find((t) => t.name === def.tool!.name)
+        : undefined;
+      return shopperVerified || !td?.identity;
+    });
     let prompt =
       systemPrompt(agent, docs, conv, {
         pendingOffer: openEsc.some((a) => a.type === 'handoff_offer'),
         offerMade: offeredBefore,
-        savedWidgets: [...refSpecs.entries()].map(([name, def]) => ({
+        savedWidgets: promptWidgets.map(([name, def]) => ({
           name,
           ...def,
           toolDef: def.tool
@@ -5498,7 +5521,7 @@ async function replyAsHostedAgent(
       // (the tap marker still carries the full label).
       if (attempt === 0 && buttonCapApplies && buttonLabelOverflow(buttons)) {
         console.warn(`[hosted] over-long button label conv=${convId} — regenerating`);
-        prompt += '\n\n' + BUTTON_LEN_GUARD_RETRY;
+        prompt += regen(BUTTON_LEN_GUARD_RETRY);
         continue;
       }
       // Unbacked action claim — "I've set your plan to Free" with zero tool
@@ -5510,7 +5533,7 @@ async function replyAsHostedAgent(
         !gen.toolCalls.some((t) => t.outcome !== 'failed')
       ) {
         console.warn(`[hosted] unbacked action claim conv=${convId} — regenerating`);
-        prompt += '\n\n' + CLAIM_GUARD_RETRY;
+        prompt += regen(CLAIM_GUARD_RETRY);
         continue;
       }
       // Component line that produced nothing (malformed WIDGET:, unknown
@@ -5537,8 +5560,8 @@ async function replyAsHostedAgent(
             (lostReasons.length ? ` (${lostReasons.join('; ')})` : ''),
         );
         prompt +=
-          '\n\n' +
-          WIDGET_PARSE_RETRY +
+          regen(
+            WIDGET_PARSE_RETRY +
           (lostReasons.length ? ` What failed: ${lostReasons.join('; ')}.` : '') +
           (identityBlocked
             ? orderishAsk
@@ -5548,7 +5571,8 @@ async function replyAsHostedAgent(
               ? ' Emit the SAME component ref again unchanged so the not-found component re-renders, and write the honest text around it.'
               : refFailed
                 ? ' If a saved-component ref failed on missing data, emit the SAME ref name again with its required args filled from the conversation — do not switch to a different component or tool.'
-                : '');
+                : ''),
+          );
         continue;
       }
       // Widget-truth mismatch — claiming components that didn't render this
@@ -5561,7 +5585,7 @@ async function replyAsHostedAgent(
           (rendered > 0 && deniesWidgetShown(reply)))
       ) {
         console.warn(`[hosted] widget-claim mismatch conv=${convId} — regenerating`);
-        prompt += '\n\n' + WIDGET_GUARD_RETRY;
+        prompt += regen(WIDGET_GUARD_RETRY);
         continue;
       }
       // Deferred-lookup narration — "let me grab my calendar — give me a
@@ -5574,7 +5598,7 @@ async function replyAsHostedAgent(
         !gen.toolCalls.some((t) => t.outcome !== 'failed')
       ) {
         console.warn(`[hosted] unbacked lookup narration conv=${convId} — regenerating`);
-        prompt += '\n\n' + LOOKUP_GUARD_RETRY;
+        prompt += regen(LOOKUP_GUARD_RETRY);
         continue;
       }
       // Ungrounded figure — a price/quote not present in the search results
@@ -5597,7 +5621,7 @@ async function replyAsHostedAgent(
         deniesLiveData(reply)
       ) {
         console.warn(`[hosted] live-data denial with web_search available conv=${convId} — regenerating`);
-        prompt += '\n\n' + LIVE_DATA_RETRY;
+        prompt += regen(LIVE_DATA_RETRY);
         continue;
       }
       if (attempt === 0 && reply && webSearched) {
@@ -5615,7 +5639,7 @@ async function replyAsHostedAgent(
           console.warn(
             `[hosted] ungrounded figure(s)/source(s) ${[...bad, ...badSrc].join(', ')} conv=${convId} — regenerating`,
           );
-          prompt += `\n\n${SEARCH_GROUND_RETRY}Offending: ${[...bad, ...badSrc].join(', ')}.`;
+          prompt += regen(`${SEARCH_GROUND_RETRY}Offending: ${[...bad, ...badSrc].join(', ')}.`);
           continue;
         }
       }
@@ -5635,7 +5659,7 @@ async function replyAsHostedAgent(
         (widgets.some((w) => w.type === 'cards') || PHANTOM_ASSERT.test(reply))
       ) {
         console.warn(`[hosted] photo product-ID without catalogue search conv=${convId} — regenerating`);
-        prompt += '\n\n' + PHOTO_GUARD_RETRY;
+        prompt += regen(PHOTO_GUARD_RETRY);
         continue;
       }
       // Phantom-product claim — the search returned zero rows for the named
@@ -5644,7 +5668,7 @@ async function replyAsHostedAgent(
       const phantomTerms = phantomTermsFor(gen.toolCalls, gen.toolTexts, agentToolDefs);
       if (attempt === 0 && reply && claimsPhantomProduct(reply, phantomTerms)) {
         console.warn(`[hosted] phantom-product claim conv=${convId} — regenerating`);
-        prompt += '\n\n' + PHANTOM_GUARD_RETRY;
+        prompt += regen(PHANTOM_GUARD_RETRY);
         continue;
       }
       // Catalogue-count lie — "we have 15 products" when productsCount is
@@ -5669,7 +5693,7 @@ async function replyAsHostedAgent(
       // event the storefront already accepted (and the customer watched).
       if (attempt === 0 && reply && confirmedAddTap && deniesConfirmedAdd(reply)) {
         console.warn(`[hosted] denied a confirmed add-to-cart conv=${convId} — regenerating`);
-        prompt += '\n\n' + ADD_GUARD_RETRY;
+        prompt += regen(ADD_GUARD_RETRY);
         continue;
       }
       // Dead-run catalogue dump — every tool call failed and the draft
@@ -5679,7 +5703,7 @@ async function replyAsHostedAgent(
         gen.toolCalls.length > 0 && gen.toolCalls.every((t) => t.outcome === 'failed');
       if (attempt === 0 && reply && allCallsFailed && listsPricedItems(reply)) {
         console.warn(`[hosted] priced list over dead tools conv=${convId} — regenerating`);
-        prompt += '\n\n' + FAILED_TOOLS_GUARD_RETRY;
+        prompt += regen(FAILED_TOOLS_GUARD_RETRY);
         continue;
       }
       // Full-catalogue overclaim — "all 13 products" over a carousel that
@@ -5692,7 +5716,7 @@ async function replyAsHostedAgent(
         .reduce((n, w) => Math.max(n, w.items.length), 0);
       if (attempt === 0 && reply && claimsFullCatalogue(reply, cardsShown, catalogueTotals)) {
         console.warn(`[hosted] full-catalogue overclaim conv=${convId} — regenerating`);
-        prompt += '\n\n' + FULL_GUARD_RETRY;
+        prompt += regen(FULL_GUARD_RETRY);
         continue;
       }
       // Memory catalogue — the agent owns a cards-producing search tool and
@@ -5791,7 +5815,7 @@ async function replyAsHostedAgent(
         console.warn(
           `[hosted] memory catalogue — cards=${pricedCards.length} ask=${catalogAsk} calls=0 conv=${convId} — regenerating`,
         );
-        prompt += '\n\n' + MEMORY_CATALOGUE_GUARD_RETRY;
+        prompt += regen(MEMORY_CATALOGUE_GUARD_RETRY);
         continue;
       }
       if (reply || widgets.length || toolWidgets.length || buttons.length || attempt === 2) break;
