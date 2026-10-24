@@ -26,6 +26,11 @@ CLOUDSQL_TXT=$(mktemp /tmp/janis-cloudsql.XXXXXX.txt)
 export ENV_YAML SECRETS_TXT CLOUDSQL_TXT
 trap 'rm -rf "$LOCK" "$ENV_YAML" "$SECRETS_TXT" "$CLOUDSQL_TXT"' EXIT
 
+# Stable log — `tail -f /tmp/janis-deploy.log` always watches the live run,
+# whoever launched it.
+exec > >(tee -a /tmp/janis-deploy.log) 2>&1
+echo "--- deploy started $(date -u +%Y-%m-%dT%H:%M:%SZ) ---"
+
 PROJECT=janis-prod-mn REGION=us-east1 SERVICE=janis-api
 PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumber)')
 export PROJECT PROJECT_NUMBER BASE
