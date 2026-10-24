@@ -390,6 +390,18 @@ export interface ToolWidgetConfig {
    *  ask should show THE match, not a page of neighbours. The result text
    *  still carries every row for narration; this only shapes the cards. */
   row_limit_arg?: string;
+  /** "On sale" asks — when `arg` is truthy, rows whose compare-at field
+   *  doesn't strictly exceed the price field drop from the cards. A
+   *  browse showing the whole catalogue as "our sales" is a lie; the
+   *  model still sees every row for narration. */
+  sale?: {
+    /** Tool arg activating the filter when truthy (e.g. "sale_only"). */
+    arg: string;
+    /** Row dot path to the original/compare-at price (number-able). */
+    compare_at_field: string;
+    /** Row dot path to the current price (number-able). */
+    price_field: string;
+  };
   /** Multi-variant rows need ONE node to price the card AND fill the Add
    *  button — picking variants[0] can pair a $9.95 min-price narrative with
    *  a $24.95 add. `by` picks the cheapest node where `require` isn't false
@@ -1071,6 +1083,18 @@ export function widgetFromToolResult(
       // the model narrates "everything is sold out" from the result.
       if (!list.length) return null;
     }
+  }
+  // Sale-only asks — a row is "on sale" iff its compare-at price strictly
+  // exceeds its current price. Rows with no compare-at set are full price.
+  if (cfg.sale && truthy(args[cfg.sale.arg])) {
+    const s = cfg.sale;
+    list = list.filter((r) => {
+      const ca = Number(digPath(r, s.compare_at_field));
+      const p = Number(digPath(r, s.price_field));
+      return Number.isFinite(ca) && Number.isFinite(p) && ca > p;
+    });
+    // Nothing marked down → no cards; the model narrates the empty sale.
+    if (!list.length) return null;
   }
   // Focused-ask cap — `limit` narrows rendered rows, never the model's data.
   const rowCap = cfg.row_limit_arg ? Number(args[cfg.row_limit_arg]) : NaN;

@@ -3577,6 +3577,14 @@ export async function complete(
             .trim();
           args.query = `${q} ${clause}`.trim();
         }
+        // Sale asks → inject the compare-at clause UPSTREAM so productsCount
+        // quotes the sale total, not the whole catalogue. The widget's sale
+        // filter drops unmarked rows as belt — the clause is the narrower.
+        if (['1', 'true', 'yes'].includes(String(args.sale_only ?? '').toLowerCase())) {
+          const q = String(args.query ?? '').trim();
+          if (!/compare_at_price\s*:/i.test(q))
+            args.query = `${q} compare_at_price:>0`.trim();
+        }
         const SORT_ALIASES: Record<string, { key: string; rev?: boolean }> = {
           // No popularity sort exists on Admin products() — ProductSortKeys
           // lacks BEST_SELLING — so "popular"/"bestselling" intentionally

@@ -147,6 +147,47 @@ describe('widgetFromToolResult', () => {
     expect(w.items[1].price).toBe('€699.95');
   });
 
+  it('sale arg keeps only rows marked down below a compare-at price', () => {
+    // "Show me your sales" rendered the whole catalogue — a row is on sale
+    // iff compareAtPrice strictly exceeds the current price.
+    const cfg = {
+      type: 'cards' as const,
+      items: 'data.products.nodes',
+      sale: { arg: 'sale_only', compare_at_field: '__v.compareAtPrice', price_field: '__v.price' },
+      map: { title: 'title', price: '{__v.price:money}', compare_at: '{__v.compareAtPrice:money}' },
+    };
+    const result = JSON.stringify({
+      data: {
+        products: {
+          nodes: [
+            { title: 'Marked Down Board', __v: { price: '600.00', compareAtPrice: '750.00' } },
+            { title: 'Full Price Board', __v: { price: '800.00', compareAtPrice: null } },
+            { title: 'Same Price Board', __v: { price: '500.00', compareAtPrice: '500.00' } },
+          ],
+        },
+      },
+    });
+    const w = widgetFromToolResult(cfg, result, {}, { sale_only: '1' });
+    expect(w?.type).toBe('cards');
+    if (w?.type !== 'cards') return;
+    expect(w.items.map((i) => i.title)).toEqual(['Marked Down Board']);
+    // Without the arg the whole browse renders — sale rows included.
+    const all = widgetFromToolResult(cfg, result);
+    expect(all?.type).toBe('cards');
+    if (all?.type !== 'cards') return;
+    expect(all.items).toHaveLength(3);
+    // A sale ask with nothing marked down renders no carousel at all.
+    const none = widgetFromToolResult(
+      cfg,
+      JSON.stringify({
+        data: { products: { nodes: [{ title: 'Full Price Board', __v: { price: '8', compareAtPrice: null } }] } },
+      }),
+      {},
+      { sale_only: '1' },
+    );
+    expect(none).toBeNull();
+  });
+
   it('"{path:stock}" flags only a real false — true/untracked stays silent', () => {
     const w = widgetFromToolResult(
       {
