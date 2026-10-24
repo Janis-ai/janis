@@ -539,10 +539,15 @@ export async function resolveWidgetRef(
         if (cap) cap.error = `identity check blocked the tool: ${denied}`;
         return null;
       } else {
-        const result =
+        let result =
           priorResult !== undefined && Object.keys(args).length === 0
             ? priorResult
             : await callTool(tool, args, secrets);
+        // A ref-rendered collections picker bypasses the tool loop's
+        // sellable-count rewrite — apply it here too or the badge counts
+        // archived/draft/unpublished rows the carousel never renders.
+        if (tool.name === 'shopify_list_collections')
+          result = await sellableCollectionCounts(result, secrets);
         if (cap) cap.result = result;
         if (result.startsWith('error')) {
           console.warn(`[widgets] bound tool ${tool.name} failed: ${result.slice(0, 160)}`);
