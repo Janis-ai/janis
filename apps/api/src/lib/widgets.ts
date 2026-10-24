@@ -995,6 +995,63 @@ export async function shopifyCollectionId(
   return p;
 }
 
+/** Shopify's Collection.productsCount counts EVERY product in the group —
+ *  archived, draft and unpublished included — while the browse/search
+ *  tools only ever render status:active + published rows. Left alone the
+ *  picker promises "8 products" and the carousel renders 6 (SnowboardsAreUs
+ *  prod loop 2026-10-24: archived + hidden snowboards inflated the badge).
+ *  Rewrite each node's count to the sellable total via one aliased
+ *  productsCount call; any failure returns the raw result unchanged. */
+export async function sellableCollectionCounts(
+  result: string,
+  secrets: Record<string, string>,
+): Promise<string> {
+  const shop = secrets.SHOPIFY_SHOP;
+  const token = secrets.SHOPIFY_TOKEN;
+  if (!shop || !token) return result;
+  let doc: unknown;
+  try {
+    doc = JSON.parse(result);
+  } catch {
+    return result;
+  }
+  const nodes = (doc as { data?: { collections?: { nodes?: unknown[] } } })?.data?.collections
+    ?.nodes;
+  if (!Array.isArray(nodes) || !nodes.length) return result;
+  const pairs = nodes
+    .map((node) => ({
+      node: node as { productsCount?: { count?: number } },
+      id: /\/(\d+)$/.exec(String((node as { id?: unknown })?.id ?? ''))?.[1],
+    }))
+    .filter((p): p is { node: { productsCount?: { count?: number } }; id: string } =>
+      Boolean(p.id),
+    );
+  if (!pairs.length) return result;
+  const clause = 'status:active published_status:published';
+  try {
+    const res = await fetch(`https://${shop}/admin/api/2026-10/graphql.json`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-shopify-access-token': token },
+      body: JSON.stringify({
+        query: `query{${pairs.map((p, i) => `c${i}:productsCount(query:"collection_id:${p.id} ${clause}"){count}`).join(' ')}}`,
+      }),
+      signal: AbortSignal.timeout(5_000),
+    });
+    const j = (await res.json()) as { data?: Record<string, { count?: number }> };
+    let touched = false;
+    pairs.forEach((p, i) => {
+      const count = j?.data?.[`c${i}`]?.count;
+      if (typeof count === 'number' && p.node.productsCount && count !== p.node.productsCount.count) {
+        p.node.productsCount.count = count;
+        touched = true;
+      }
+    });
+    return touched ? JSON.stringify(doc) : result;
+  } catch {
+    return result;
+  }
+}
+
 /** Correct rendered card items against the storefront's own availability.
  *  mode 'badge' (default browse): mark unsellable items Out of stock, keep
  *  them visible. mode 'drop' (explicit in-stock ask): remove them — they

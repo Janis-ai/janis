@@ -23,7 +23,7 @@ import { requestToolApproval } from './approvals.js';
 import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
 import { sendEmail } from './notify.js';
-import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, internalDataResult, interpolateSpec, itemsFromResult, namedProductsInReply, normTitle, normWidgetRef, propsFromResult, purchaseOptionsLine, reconcilePagedResult, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, titlesMatch, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, internalDataResult, interpolateSpec, itemsFromResult, namedProductsInReply, normTitle, normWidgetRef, propsFromResult, purchaseOptionsLine, reconcilePagedResult, sellableCollectionCounts, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, titlesMatch, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -3186,6 +3186,78 @@ function flattenToolHistory(msgs: ChatMsg[]): void {
 }
 
 /** Chat completion with an OpenAI-style tool-call loop (max 4 rounds). */
+/** Cards-widget sugar args the bodyTemplate can't express on its own:
+ *  `collection` resolves a handle to a numeric collection_id: clause;
+ *  `sale_only` injects the compare-at filter upstream; `sort` accepts
+ *  shopper spellings ("popular", "newest") mapped onto real ProductSortKeys
+ *  enums + direction; `reverse` coerces to a real boolean. Shared by the
+ *  live tool loop and the catalogue backstop, which builds args without
+ *  the model. */
+async function applyCardSugarArgs(
+  tool: ToolDef | undefined,
+  args: Record<string, unknown>,
+  secrets: Record<string, string>,
+): Promise<void> {
+  if (tool?.widget?.type !== 'cards') return;
+  // Shopify's products query only filters collections by NUMERIC id —
+  // a `collection:handle` clause silently matches everything. Resolve
+  // the handle first; an unresolvable one scopes to id 0 (matches
+  // nothing) rather than lying with the whole catalogue.
+  if (args.collection) {
+    const handle = String(args.collection).trim().toLowerCase();
+    const cid = await shopifyCollectionId(secrets, handle);
+    const clause = `collection_id:${cid ?? '0'}`;
+    // The resolved handle wins over any collection_id: clause the model
+    // wrote into the query itself — keeping both ANDs them (a wrong or
+    // stale id intersected the 8-item collection down to 2 cards).
+    const q = String(args.query ?? '')
+      .replace(/\bcollection_id\s*:\s*\S+/gi, ' ')
+      .trim();
+    args.query = `${q} ${clause}`.trim();
+  }
+  // Sale asks → inject the compare-at clause UPSTREAM so productsCount
+  // quotes the sale total, not the whole catalogue. The widget's sale
+  // filter drops unmarked rows as belt — the clause is the narrower.
+  if (['1', 'true', 'yes'].includes(String(args.sale_only ?? '').toLowerCase())) {
+    const q = String(args.query ?? '').trim();
+    if (!/compare_at_price\s*:/i.test(q))
+      args.query = `${q} compare_at_price:>0`.trim();
+  }
+  const SORT_ALIASES: Record<string, { key: string; rev?: boolean }> = {
+    // No popularity sort exists on Admin products() — ProductSortKeys
+    // lacks BEST_SELLING — so "popular"/"bestselling" intentionally
+    // fall through unmapped: Shopify errors descriptively and the
+    // stats tool is the honest path for sales ranking.
+    newest: { key: 'CREATED_AT', rev: true },
+    latest: { key: 'CREATED_AT', rev: true },
+    oldest: { key: 'CREATED_AT' },
+    name: { key: 'TITLE' },
+    title: { key: 'TITLE' },
+    a_z: { key: 'TITLE' },
+    z_a: { key: 'TITLE', rev: true },
+    vendor: { key: 'VENDOR' },
+    product_type: { key: 'PRODUCT_TYPE' },
+    type: { key: 'PRODUCT_TYPE' },
+    most_stock: { key: 'INVENTORY_TOTAL', rev: true },
+    least_stock: { key: 'INVENTORY_TOTAL' },
+    updated: { key: 'UPDATED_AT', rev: true },
+    created_at: { key: 'CREATED_AT' },
+    inventory_total: { key: 'INVENTORY_TOTAL' },
+    updated_at: { key: 'UPDATED_AT' },
+    published_at: { key: 'PUBLISHED_AT' },
+    relevance: { key: 'RELEVANCE' },
+  };
+  if (args.sort) {
+    const hit = SORT_ALIASES[String(args.sort).toLowerCase().trim().replace(/[\s-]+/g, '_')];
+    if (hit) {
+      args.sort = hit.key;
+      if (hit.rev !== undefined) args.reverse = hit.rev;
+    }
+  }
+  if (args.reverse !== undefined)
+    args.reverse = args.reverse === true || ['1', 'true', 'yes'].includes(String(args.reverse));
+}
+
 export async function complete(
   llm: LlmSettings,
   system: string,
@@ -3553,74 +3625,10 @@ export async function complete(
       // cursors are bound to the exact query that minted them; "*" vs "" is
       // the most common rephrase that silently resets pagination to page 1.
       if (tool?.widget && String(args.query ?? '').trim() === '*') args.query = '';
-      // Cards-widget sugar args the bodyTemplate can't express on its own:
-      // `collection` appends a collection:<handle> search clause; `sort`
-      // accepts shopper spellings ("popular", "newest") mapped onto real
-      // ProductSortKeys enums + direction; `reverse` coerces to a real
-      // boolean for the GraphQL variable. Pagination replay restores the
-      // already-merged args wholesale, so the includes() guard prevents a
-      // double-appended collection clause.
-      if (tool?.widget?.type === 'cards') {
-        // Shopify's products query only filters collections by NUMERIC id —
-        // a `collection:handle` clause silently matches everything. Resolve
-        // the handle first; an unresolvable one scopes to id 0 (matches
-        // nothing) rather than lying with the whole catalogue.
-        if (args.collection) {
-          const handle = String(args.collection).trim().toLowerCase();
-          const cid = await shopifyCollectionId(secrets, handle);
-          const clause = `collection_id:${cid ?? '0'}`;
-          // The resolved handle wins over any collection_id: clause the model
-          // wrote into the query itself — keeping both ANDs them (a wrong or
-          // stale id intersected the 8-item collection down to 2 cards).
-          const q = String(args.query ?? '')
-            .replace(/\bcollection_id\s*:\s*\S+/gi, ' ')
-            .trim();
-          args.query = `${q} ${clause}`.trim();
-        }
-        // Sale asks → inject the compare-at clause UPSTREAM so productsCount
-        // quotes the sale total, not the whole catalogue. The widget's sale
-        // filter drops unmarked rows as belt — the clause is the narrower.
-        if (['1', 'true', 'yes'].includes(String(args.sale_only ?? '').toLowerCase())) {
-          const q = String(args.query ?? '').trim();
-          if (!/compare_at_price\s*:/i.test(q))
-            args.query = `${q} compare_at_price:>0`.trim();
-        }
-        const SORT_ALIASES: Record<string, { key: string; rev?: boolean }> = {
-          // No popularity sort exists on Admin products() — ProductSortKeys
-          // lacks BEST_SELLING — so "popular"/"bestselling" intentionally
-          // fall through unmapped: Shopify errors descriptively and the
-          // stats tool is the honest path for sales ranking.
-          newest: { key: 'CREATED_AT', rev: true },
-          latest: { key: 'CREATED_AT', rev: true },
-          oldest: { key: 'CREATED_AT' },
-          name: { key: 'TITLE' },
-          title: { key: 'TITLE' },
-          a_z: { key: 'TITLE' },
-          z_a: { key: 'TITLE', rev: true },
-          vendor: { key: 'VENDOR' },
-          product_type: { key: 'PRODUCT_TYPE' },
-          type: { key: 'PRODUCT_TYPE' },
-          most_stock: { key: 'INVENTORY_TOTAL', rev: true },
-          least_stock: { key: 'INVENTORY_TOTAL' },
-          updated: { key: 'UPDATED_AT', rev: true },
-          created_at: { key: 'CREATED_AT' },
-          inventory_total: { key: 'INVENTORY_TOTAL' },
-          updated_at: { key: 'UPDATED_AT' },
-          published_at: { key: 'PUBLISHED_AT' },
-          relevance: { key: 'RELEVANCE' },
-        };
-        if (args.sort) {
-          const hit =
-            SORT_ALIASES[String(args.sort).toLowerCase().trim().replace(/[\s-]+/g, '_')];
-          if (hit) {
-            args.sort = hit.key;
-            if (hit.rev !== undefined) args.reverse = hit.rev;
-          }
-        }
-        if (args.reverse !== undefined)
-          args.reverse =
-            args.reverse === true || ['1', 'true', 'yes'].includes(String(args.reverse));
-      }
+      // Cards-widget sugar args (`collection`, `sale_only`, `sort`,
+      // `reverse`) live in applyCardSugarArgs — shared with the catalogue
+      // backstop, which builds args without the model.
+      await applyCardSugarArgs(tool, args, secrets);
       // Pagination tap — the customer tapped the load-more tile, so the
       // continuation is fully determined already: replay the page-producing
       // args verbatim with the authoritative cursor. The model's own args
@@ -3750,6 +3758,11 @@ export async function complete(
       // Sales-analytics payloads are merchant-internal — collapse them to a
       // ranked title list so units/revenue can never be quoted to a shopper.
       if (outcome === 'ran') result = internalDataResult(call.function.name, result) ?? result;
+      // A collection picker's "N products" badge counts archived/draft/
+      // unpublished rows the browse tools never render — rewrite it to the
+      // sellable total so the promised count matches the carousel.
+      if (outcome === 'ran' && call.function.name === 'shopify_list_collections')
+        result = await sellableCollectionCounts(result, secrets);
       // Memoize the final result — a repair/regeneration pass that re-issues
       // the identical call replays this instead of re-firing a side effect.
       if (!ctx?.testRun && ctx?.toolMemo) ctx.toolMemo.set(callKey, { result, outcome });
@@ -5504,6 +5517,15 @@ async function replyAsHostedAgent(
       const identityBlocked = lostReasons.some((r) => r.includes('identity check blocked'));
       const softNotFound = lostReasons.some((r) => r.includes('rendered its not-found state'));
       const refFailed = lostReasons.some((r) => !/is not a saved component$/.test(r));
+      // The verify-the-address pivot only makes sense when the shopper
+      // actually asked for something identity-bound (their orders,
+      // account, a receipt). On a catalogue ask a gated ref is just a
+      // wrong turn — sending a verification email for "sale items?"
+      // dead-ended the SnowboardsAreUs demo (2026-10-24).
+      const orderishAsk =
+        /\b(orders?|track(?:ing)?|packages?|parcels?|deliver(?:y|ed|ies)|shipments?|receipts?|purchases?|returns?|refunds?|account)\b/i.test(
+          lastInboundText ?? '',
+        );
       if (lostComponents > 0 && (attempt === 0 || (identityBlocked && attempt < 2))) {
         console.warn(
           `[hosted] dropped component line conv=${convId} — regenerating` +
@@ -5514,7 +5536,9 @@ async function replyAsHostedAgent(
           WIDGET_PARSE_RETRY +
           (lostReasons.length ? ` What failed: ${lostReasons.join('; ')}.` : '') +
           (identityBlocked
-            ? ' Do NOT emit that component ref again — the lookup will keep blocking while the address is unverified. Call send_verification_email with the address the customer claims, tell them a verification code is on its way, and end the turn there; the order component comes after they confirm the code.'
+            ? orderishAsk
+              ? ' Do NOT emit that component ref again — the lookup will keep blocking while the address is unverified. Call send_verification_email with the address the customer claims, tell them a verification code is on its way, and end the turn there; the order component comes after they confirm the code.'
+              : ' Do NOT emit that component ref again — it is gated on a verified identity this shopper does not have, and nothing they asked for needs it. Answer their actual question directly — for a catalogue ask, call the product search tool so the cards come from the store.'
             : softNotFound
               ? ' Emit the SAME component ref again unchanged so the not-found component re-renders, and write the honest text around it.'
               : refFailed
@@ -5692,15 +5716,68 @@ async function replyAsHostedAgent(
           /\b(tell me about|what about|details? (?:on|about|for)|info(?:rmation)? (?:on|about)|how much (?:is|does|are)|price of|do you (?:have|carry|sell))\b/i.test(
             lastInboundText,
           ));
-      if (
-        attempt < 2 &&
+      const memoryCatalogue =
         catalogCapable &&
         gen.toolCalls.length === 0 &&
         (pricedCards.length > 0 ||
           catalogAsk ||
           paginationTap ||
-          (reply !== null && listsPricedItems(reply)))
+          (reply !== null && listsPricedItems(reply)));
+      // Catalogue backstop — asking a third time is the same dice roll.
+      // When the FINAL attempt still never ran the search on a catalogue
+      // ask, fetch it ourselves so the surviving lead-in narrates real
+      // cards instead of a dangling colon (the "sale items?" run that
+      // shipped a bare lead-in when the model emitted a dead gated ref,
+      // SnowboardsAreUs 2026-10-24).
+      if (
+        attempt === 2 &&
+        memoryCatalogue &&
+        productSearch &&
+        !ctx?.testRun &&
+        // Only the dead-end case — a surviving picker/buttons means the
+        // model deliberately steered the turn elsewhere (e.g. "browse the
+        // shop" → collections picker), and injected cards would fight it.
+        !toolWidgets.length && !widgets.length && !buttons.length
       ) {
+        const saleAsk =
+          /\b(sales?|on sale|deals?|discounts?|clearance|specials?|promos?|markdowns?|marked down|reduced)\b/i.test(
+            lastInboundText ?? '',
+          );
+        const selfArgs: Record<string, unknown> =
+          paginationTap && ctx?.prevEndCursor
+            ? { ...(ctx.prevPageArgs ?? {}), after: ctx.prevEndCursor }
+            : { [searchQueryArg]: '' };
+        // sale_only only exists on catalogue tools that declare it —
+        // injecting a compare_at clause into a custom connector's query
+        // would leak Shopify syntax into a foreign API.
+        if (saleAsk && Object.keys(productSearch.params ?? {}).includes('sale_only'))
+          selfArgs.sale_only = '1';
+        await applyCardSugarArgs(productSearch, selfArgs, secrets);
+        try {
+          const t2 = Date.now();
+          const r2 = await callTool(productSearch, selfArgs, secrets);
+          const backstop = /^\s*(error|\{"error)/.test(r2)
+            ? null
+            : widgetFromToolResult(productSearch.widget!, r2, secrets, selfArgs);
+          if (backstop) {
+            console.warn(`[hosted] catalogue backstop fetched its own cards conv=${convId}`);
+            toolWidgets.push(backstop);
+            gen.toolCalls.push({
+              name: productSearch.name,
+              gated: false,
+              outcome: 'ran',
+              ms: Date.now() - t2,
+              args: inspectorArgs(selfArgs),
+            });
+            gen.toolTexts.push(r2);
+            reply = reply || 'Here is what we have:';
+            break;
+          }
+        } catch {
+          // fall through — the attempt's own output ships as before
+        }
+      }
+      if (attempt < 2 && memoryCatalogue) {
         console.warn(
           `[hosted] memory catalogue — cards=${pricedCards.length} ask=${catalogAsk} calls=0 conv=${convId} — regenerating`,
         );

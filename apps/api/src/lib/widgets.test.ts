@@ -1903,3 +1903,45 @@ describe('storefrontProduct market context', () => {
     }
   });
 });
+
+describe('sellableCollectionCounts', () => {
+  const SECRETS = { SHOPIFY_SHOP: 'shop.test', SHOPIFY_TOKEN: 'tok' };
+  const RESULT = JSON.stringify({
+    data: {
+      collections: {
+        nodes: [
+          { id: 'gid://shopify/Collection/361138290865', title: 'Automated', productsCount: { count: 8 } },
+          { id: 'gid://shopify/Collection/361138258097', title: 'Home page', productsCount: { count: 1 } },
+        ],
+      },
+    },
+  });
+
+  it('rewrites productsCount to the sellable total per collection', async () => {
+    const { sellableCollectionCounts } = await import('./widgets.js');
+    const fetchMock = vi.fn().mockImplementation((_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body ?? '{}')) as { query?: string };
+      expect(body.query).toContain('collection_id:361138290865');
+      expect(body.query).toContain('status:active published_status:published');
+      return Promise.resolve(
+        Response.json({ data: { c0: { count: 6 }, c1: { count: 1 } } }),
+      );
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const out = JSON.parse(await sellableCollectionCounts(RESULT, SECRETS)) as {
+      data: { collections: { nodes: { productsCount: { count: number } }[] } };
+    };
+    expect(out.data.collections.nodes.map((n) => n.productsCount.count)).toEqual([6, 1]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    vi.unstubAllGlobals();
+  });
+
+  it('fails open — bad result JSON, missing secrets, or a dead call return input', async () => {
+    const { sellableCollectionCounts } = await import('./widgets.js');
+    expect(await sellableCollectionCounts('not json', SECRETS)).toBe('not json');
+    expect(await sellableCollectionCounts(RESULT, {})).toBe(RESULT);
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('down')));
+    expect(await sellableCollectionCounts(RESULT, SECRETS)).toBe(RESULT);
+    vi.unstubAllGlobals();
+  });
+});

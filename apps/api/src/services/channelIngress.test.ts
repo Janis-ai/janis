@@ -1837,3 +1837,80 @@ describe('hosted delivery stall reclaim', () => {
     expect(d.attempts).toBe(0);
   });
 });
+
+describe('catalogue backstop', () => {
+  // Prod incident (SnowboardsAreUs 2026-10-24): "sale items?" got three
+  // model attempts that never called the catalogue search — regen hints
+  // spent, the run shipped a bare "Here are our sale items:" lead-in.
+  // The final attempt now fetches the catalogue itself so the lead-in
+  // narrates real cards.
+  it('runs the product search itself when the last attempt still made zero calls', async () => {
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'Shop',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: {
+          llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' },
+          tools: [
+            {
+              name: 'catalog_search',
+              description: 'search the product catalogue',
+              method: 'POST',
+              url: 'https://shop.test/search',
+              params: { query: 'q', sale_only: 'sale only when set' },
+              widget: {
+                type: 'cards',
+                items: 'data.products.nodes',
+                map: { title: 'title', price: '{price}' },
+              },
+            },
+          ],
+        },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-backstop-1' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'sale items?' });
+
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes('llm.test'))
+        return Promise.resolve(llmResponse('Here are our sale items:'));
+      if (url.includes('shop.test'))
+        return Promise.resolve(
+          Response.json({ data: { products: { nodes: [{ title: 'Sale Board', price: '9.99' }] } } }),
+        );
+      return Promise.resolve(new Response('{}', { status: 404 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await runHostedEvent(db, hosted, {
+      type: 'message.user',
+      conversation_id: 'ext-backstop-1',
+      janis_conversation_id: conv.id,
+      text: 'sale items?',
+    } as Parameters<typeof runHostedEvent>[2]);
+
+    // the self-run hit the catalogue exactly once
+    expect(fetchMock.mock.calls.filter((c) => String(c[0]).includes('shop.test'))).toHaveLength(1);
+    const outs = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.conversationId, conv.id), eq(messages.direction, 'out')));
+    const last = outs.at(-1)!;
+    expect(last.text).toBe('Here are our sale items:');
+    const widgets = (last.payload as { widgets?: { type: string; items: { title?: string }[] }[] })
+      .widgets;
+    expect(widgets?.[0]?.type).toBe('cards');
+    expect(widgets?.[0]?.items.map((i) => i.title)).toEqual(['Sale Board']);
+  });
+});
