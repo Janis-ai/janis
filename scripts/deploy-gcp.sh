@@ -149,6 +149,10 @@ PY
 SECRETS=$(cat "$SECRETS_TXT" 2>/dev/null || true)
 SECRETS_FLAG=()
 [ -n "$SECRETS" ] && SECRETS_FLAG=(--update-secrets "$SECRETS")
+# Capture the currently-serving revision BEFORE deploy — the post-deploy
+# probe rolls traffic back to it if the new one is broken.
+PREV_REV=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
+  --format='value(status.traffic[0].revisionName)' 2>/dev/null || true)
 if python3 -c "import yaml, os; exit(0 if 'PGLITE_DIR' in yaml.safe_load(open(os.environ['ENV_YAML'])) else 1)"; then
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
@@ -173,5 +177,22 @@ else
     --add-volume name=data,type=cloud-storage,bucket=janis-data-$PROJECT \
     --add-volume-mount volume=data,mount-path=/app/data \
     --env-vars-file "$ENV_YAML"
+fi
+# Cloud Run marks a revision Ready when the container answers — the app can
+# still be broken (01082 404'd / while /health stayed 200). Probe the real
+# surfaces and snap traffic back rather than leave a bad revision serving.
+sleep 5
+BAD=""
+for p in /health /; do
+  [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE$p")" = "200" ] || BAD="$BAD $p"
+done
+if [ -n "$BAD" ]; then
+  echo "POST-DEPLOY PROBE FAILED:$BAD on $BASE" >&2
+  if [ -n "$PREV_REV" ]; then
+    gcloud run services update-traffic "$SERVICE" --region "$REGION" --project "$PROJECT" \
+      --to-revisions "$PREV_REV=100"
+    echo "traffic restored to $PREV_REV" >&2
+  fi
+  exit 1
 fi
 echo "Deployed: $BASE"
