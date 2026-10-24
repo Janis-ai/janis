@@ -9,6 +9,15 @@ import './styles.css';
 applyTheme(currentTheme());
 installErrorReporter();
 
+// Registered here (not the plugin's injected registerSW.js) so a rejected
+// registration — crawlers expose navigator.serviceWorker but refuse
+// register() — is swallowed instead of surfacing as an error report.
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+  });
+}
+
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
 });

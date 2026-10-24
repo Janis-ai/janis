@@ -7,6 +7,11 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      // we register /sw.js ourselves in main.tsx — the generated
+      // registerSW.js has no .catch(), and crawler runtimes (Lighthouse's
+      // WrS exposes navigator.serviceWorker but rejects register()) filed
+      // an unhandledrejection error report per crawl.
+      injectRegister: null,
       strategies: 'injectManifest',
       srcDir: 'src',
       filename: 'sw.ts',

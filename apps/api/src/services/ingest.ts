@@ -412,6 +412,8 @@ export async function processEvents(
       })
       .where(eq(conversations.id, conv.id))
       .returning();
+    // Conv deleted between our read and this update — nothing to act on.
+    if (!updated) continue;
 
     // Transition side effects — the shared path the operator PATCH runs:
     // conversation event, state-change audit line, escalated/resolved hooks,

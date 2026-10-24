@@ -864,6 +864,9 @@ export function conversationRoutes(db: Db) {
       })
       .where(eq(conversations.id, owned.id))
       .returning();
+    // Vanished between the visibility check and the update — no row to run
+    // effects on. Reported 2026-10-20: undefined row → 'reading id' crash.
+    if (!row) return c.json({ error: 'not found' }, 404);
 
     // Side effects + operator audit trail — the same implementation /bulk
     // uses: transition line + hooks + CSAT on archive + Meta thread release

@@ -797,11 +797,7 @@ export function slackApiRoutes(db: Db) {
           .from(slackInstallations)
           .where(eq(slackInstallations.teamId, row.teamId))
           .limit(1);
-        if (inst) {
-          await db.delete(slackThreads).where(eq(slackThreads.installationId, inst.id));
-          await db.delete(slackMemberLinks).where(eq(slackMemberLinks.installationId, inst.id));
-          await db.delete(slackInstallations).where(eq(slackInstallations.id, inst.id));
-        }
+        if (inst) await removeInstallation(db, inst.id);
       }
       return c.json({ claimed: false, kept: true, return_path: row.returnPath });
     }
