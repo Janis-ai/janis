@@ -9,20 +9,21 @@
  */
 export function installTranslateGuard() {
   if (typeof Node !== 'function' || !Node.prototype) return;
-  const proto = Node.prototype as unknown as Record<string, unknown> & {
-    insertBefore: Node['insertBefore'];
-    removeChild: Node['removeChild'];
+  const proto = Node.prototype as unknown as {
+    __janisTranslateGuard?: boolean;
+    insertBefore: (newNode: Node, refNode: Node | null) => Node;
+    removeChild: (child: Node) => Node;
   };
   if (proto.__janisTranslateGuard) return;
   proto.__janisTranslateGuard = true;
   const insertBefore = proto.insertBefore;
-  proto.insertBefore = function <T extends Node>(newNode: T, refNode: Node | null): T {
-    if (refNode && refNode.parentNode !== this) return newNode;
+  const removeChild = proto.removeChild;
+  proto.insertBefore = function (this: Node, newNode: Node, refNode: Node | null): Node {
+    if (refNode && (refNode.parentNode as unknown) !== this) return newNode;
     return insertBefore.call(this, newNode, refNode);
   };
-  const removeChild = proto.removeChild;
-  proto.removeChild = function <T extends Node>(child: T): T {
-    if (child.parentNode !== this) return child;
+  proto.removeChild = function (this: Node, child: Node): Node {
+    if ((child.parentNode as unknown) !== this) return child;
     return removeChild.call(this, child);
   };
 }

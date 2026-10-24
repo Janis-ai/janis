@@ -13,7 +13,8 @@ COPY packages/agent-template/package.json packages/agent-template/
 RUN npm ci --no-audit --no-fund
 COPY . .
 RUN npm run build -w packages/shared && npm run build -w packages/sdk \
-    && (npm run build -w apps/api & npm run build -w apps/web; wait)
+    && (npm run build -w apps/api & API_PID=$!; \
+        npm run build -w apps/web && wait $API_PID)
 # Ship only production deps — dev deps (vite, drizzle-kit, playwright…)
 # were needed to compile dist/ but nothing in dist/ imports them.
 RUN npm prune --omit=dev
