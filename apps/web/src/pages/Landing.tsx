@@ -364,23 +364,19 @@ function DemoStrip() {
   return (
     <>
       <div className="demo-split" ref={ref}>
-        <div className="demo-col">
-          <div className="demo-label">What the customer sees</div>
-          <div className="demo-window">
-            <div className="demo-header">
-              <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
-            </div>
-            <div className="demo-body">{shown.map((b, i) => renderBeat(b, i, 'customer'))}</div>
+        <div className="demo-window">
+          <div className="demo-header">
+            <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
+            <span className="demo-title">What the customer sees</span>
           </div>
+          <div className="demo-body">{shown.map((b, i) => renderBeat(b, i, 'customer'))}</div>
         </div>
-        <div className="demo-col">
-          <div className="demo-label">What your team sees</div>
-          <div className="demo-window">
-            <div className="demo-header">
-              <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
-            </div>
-            <div className="demo-body">{shown.map((b, i) => renderBeat(b, i, 'operator'))}</div>
+        <div className="demo-window">
+          <div className="demo-header">
+            <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
+            <span className="demo-title">What your team sees</span>
           </div>
+          <div className="demo-body">{shown.map((b, i) => renderBeat(b, i, 'operator'))}</div>
         </div>
       </div>
       {done && (
@@ -468,29 +464,14 @@ export default function Landing() {
 
       <section className="landing-hero">
         <h1>Your AI agent has a help button.</h1>
-        <div className="landing-beats">
-          <div className="landing-beat">
-            <span className="landing-stepnum">1</span>
-            <div>
-              <strong>AI handles the conversation</strong>
-              <span className="muted">across every channel, around the clock.</span>
-            </div>
-          </div>
-          <div className="landing-beat">
-            <span className="landing-stepnum">2</span>
-            <div>
-              <strong>A human steps in</strong>
-              <span className="muted">when it needs help or approval, your team takes over.</span>
-            </div>
-          </div>
-          <div className="landing-beat">
-            <span className="landing-stepnum">3</span>
-            <div>
-              <strong>The agent picks back up</strong>
-              <span className="muted">right where it left off — no one repeats themselves.</span>
-            </div>
-          </div>
-        </div>
+        <p>
+          AI handles customer conversations across every channel. When it needs
+          help or approval, your team steps in. Then your agent picks up right
+          where it left off.
+        </p>
+        <p className="landing-sub">
+          Don&rsquo;t have an agent yet? Janis hosts one — trained on your docs, live in minutes.
+        </p>
         <div className="row" style={{ justifyContent: 'center', gap: 12 }}>
           <Link className="btn primary lg" to={cta.to} onClick={ctaClick('hero')}>
             {data ? 'Open console' : 'Get started free'}
@@ -505,14 +486,10 @@ export default function Landing() {
             Chat with our AI agent
           </button>
         </div>
-        <p className="landing-fine">
-          Don&rsquo;t have an agent yet? Janis hosts one — trained on your docs, live in minutes.<br />
-          Free plan available · No credit card required
-        </p>
+        <p className="landing-fine">Free plan available · No credit card required</p>
       </section>
 
       <section className="landing-steps landing-demo">
-        <p className="landing-kicker">Product demo</p>
         <h2>Watch the handoff happen</h2>
         <p className="landing-sub">
           See how Janis asks for help. You’re the human — approve or deny the

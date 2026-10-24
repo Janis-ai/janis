@@ -1588,30 +1588,12 @@ details summary:hover { color: var(--text); }
 .landing-hero { text-align: center; padding: 24px 16px 40px; }
 .landing-hero h1 { font-size: 52px; line-height: 1.08; letter-spacing: -1.5px; margin: 0 0 18px; }
 .landing-hero p { color: var(--muted); font-size: 18px; line-height: 1.6; max-width: 640px; margin: 0 auto 30px; }
-/* hero mechanism — three numbered beats, glanceable before the CTAs */
-.landing-beats {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px;
-  max-width: 920px; margin: 4px auto 34px; text-align: left;
-}
-.landing-beat { display: flex; gap: 12px; align-items: flex-start; }
-.landing-beat .landing-stepnum { flex: none; margin: 2px 0 0; }
-.landing-beat strong { display: block; font-size: 16.5px; letter-spacing: -0.2px; margin-bottom: 4px; }
-.landing-beat .muted { font-size: 13.5px; line-height: 1.5; }
-.landing-kicker {
-  font-size: 12.5px; font-weight: 700; letter-spacing: 1.8px;
-  text-transform: uppercase; color: var(--accent); margin: 0 0 12px;
-}
 .landing-fine { font-size: 13px; color: var(--muted); margin-top: 14px; }
 .landing-sub { color: var(--muted); text-align: center; max-width: 560px; margin: -8px auto 22px; line-height: 1.55; }
 .landing-demo { margin: 16px 0 56px; text-align: center; }
 .landing-demo h2 { margin-bottom: 12px; }
 .landing-demo .landing-sub { margin: 0 auto 32px; }
 .demo-split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 0 0 14px; }
-.demo-col { display: flex; flex-direction: column; }
-.demo-label {
-  font-size: 18px; font-weight: 700; letter-spacing: -0.3px;
-  text-align: center; margin-bottom: 10px;
-}
 .demo-window {
   margin: 0; border: 1px solid var(--border);
   border-radius: 14px; overflow: hidden; background: var(--panel-alt, #0e1119);
@@ -1622,6 +1604,7 @@ details summary:hover { color: var(--text); }
   border-bottom: 1px solid var(--border); background: rgba(255,255,255,.02);
 }
 .demo-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--border); }
+.demo-title { margin-left: 8px; font-size: 12px; color: var(--muted); }
 .demo-body { padding: 16px; display: flex; flex-direction: column; gap: 10px; min-height: 340px; }
 .demo-msg {
   max-width: 80%; padding: 9px 13px; border-radius: 14px; font-size: 14.5px; line-height: 1.45;
@@ -1737,7 +1720,6 @@ details summary:hover { color: var(--text); }
 
 @media (max-width: 720px) {
   .landing-hero h1 { font-size: 36px; }
-  .landing-beats { grid-template-columns: 1fr; max-width: 400px; gap: 14px; }
   .landing-grid, .landing-grid.four { grid-template-columns: 1fr; }
   .landing-nav-links { display: none; }
   .demo-split { grid-template-columns: 1fr; }
