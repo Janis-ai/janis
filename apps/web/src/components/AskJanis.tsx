@@ -592,7 +592,12 @@ export function AskJanis({
       el.scrollTop = pendingAdjust.current.prevTop + (el.scrollHeight - pendingAdjust.current.prevHeight);
       pendingAdjust.current = null;
     } else if (stick.current) {
-      el.scrollTo({ top: el.scrollHeight });
+      const last = el.lastElementChild;
+      if (last instanceof HTMLElement && last.offsetHeight > el.clientHeight) {
+        el.scrollTop += last.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      } else {
+        el.scrollTo({ top: el.scrollHeight });
+      }
     }
     // Every commit, not just message/typing changes: the verdict box and
     // reply-expansion controls grow the bubble a render after the text

@@ -943,7 +943,16 @@
   // new messages yank the view only while the visitor is pinned near the
   // bottom; if they've scrolled up to read, a "new messages" pill offers
   // the jump instead of ripping them out of their place.
-  function scrollBottom() { msgs.scrollTop = msgs.scrollHeight; }
+  function scrollBottom() {
+    // A message taller than the pane anchors at its top — snapping to the
+    // tail lands a long reply on its signature.
+    var last = msgs.lastElementChild;
+    if (last && last.offsetHeight > msgs.clientHeight) {
+      msgs.scrollTop += last.getBoundingClientRect().top - msgs.getBoundingClientRect().top;
+    } else {
+      msgs.scrollTop = msgs.scrollHeight;
+    }
+  }
   function nearBottom() { return msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60; }
   function showJump() {
     if (state.jumpEl || !state.open) return;
