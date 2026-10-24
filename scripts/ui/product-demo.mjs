@@ -169,15 +169,15 @@ await seg('seg1-storefront', async (page) => {
   }
   await page.waitForSelector('#janis-bubble', { timeout: 30000 });
   // cap() before goto lands on about:blank — set on the real document
-  await cap(page, 'Your customers are already talking to you. The question is who\u2019s answering.');
+  await cap(page, 'Live product, real storefront, real traffic \u2014 nothing staged.');
   await page.waitForTimeout(3500);
 
-  await cap(page, 'Meet Janis — an AI support agent that lives where your customers already are.');
+  await cap(page, 'Janis: AI agents that run customer conversations end‑to‑end — with humans in the loop.');
   await clickAt(page, page.locator('#janis-bubble'), 500);
   await page.waitForSelector('#janis-input', { timeout: 10000 });
   await page.waitForTimeout(2000);
 
-  await cap(page, 'It answers from your real catalog — collections, products, prices — right inside the chat.');
+  await cap(page, 'Answers come from the merchant\u2019s real catalog \u2014 products, prices, collections \u2014 inside the chat.');
   await say(page, 'Show me the snowboards you have for sale');
   if (!(await page.locator('.janis-wcards').count())) {
     await say(page, 'yes');
@@ -186,7 +186,7 @@ await seg('seg1-storefront', async (page) => {
   await page.waitForTimeout(2000);
 
   // drill into a collection so real product cards (image/price/buttons) show
-  await cap(page, 'Real product cards — tap to view or buy without leaving the conversation.');
+  await cap(page, 'Commerce happens in\u2011conversation: product cards, add\u2011to\u2011cart, checkout \u2014 no redirect.');
   const coll = page.locator('.janis-wcards a, .janis-wcards button, .janis-wcards [class*="card"]').first();
   if (await coll.count()) {
     await clickAt(page, coll, 500);
@@ -196,18 +196,18 @@ await seg('seg1-storefront', async (page) => {
     await say(page, 'the snowboard collection');
   }
 
-  await cap(page, 'Sizing question? It collects the details it needs — no forms page, no email tag.');
+  await cap(page, 'Structured intake built in \u2014 it collects what it needs without forms or email tag.');
   await say(page, "what size board should I get? I'm 5'10\", 170lb");
   await page.waitForTimeout(1500);
 
-  await cap(page, 'And it closes the loop — a checkout link right in the thread.');
+  await cap(page, 'It closes the sale in the thread \u2014 conversion, not deflection.');
   await say(page, "I'll take the first one you showed me");
   await page.waitForTimeout(1500);
 
   // S2 — the moment AI should stop
-  await cap(page, 'But some moments need a human. A return. A complaint. Judgment.');
+  await cap(page, 'The hard part isn\u2019t AI answering \u2014 it\u2019s knowing when to stop.');
   await say(page, 'Actually the board I got last month is cracked and I want a refund');
-  await cap(page, 'Janis doesn\u2019t freestyle a refund — it collects what your team needs and hands off.');
+  await cap(page, 'Escalation is a first\u2011class primitive: sentiment flags, structured intake, clean handoff.');
   await page.waitForTimeout(3500);
   await cap(page, '');
 });
@@ -218,7 +218,7 @@ await seg('seg2-inbox', async (page) => {
   await page.goto(`${APP}/conversations`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('a.conv-row, [class*="conv"]', { timeout: 20000 });
   await page.click('.push-banner-dismiss').catch(() => {});
-  await cap(page, 'Same conversation — the operator\u2019s side. Full context. Take over, type, done.');
+  await cap(page, 'Same thread, operator side \u2014 human takeover is native, not a bolt\u2011on.');
   await page.waitForTimeout(2000);
   // newest thread = the visitor conversation seg1 just created
   await clickAt(page, page.locator('a.conv-row').first(), 600);
@@ -235,7 +235,7 @@ await seg('seg2-inbox', async (page) => {
   // the composer by its placeholder, never .last().
   await typeIn(page, 'textarea[placeholder*="Reply as a human"]', "Hi! Maya here from SnowboardsAreUs — so sorry the board arrived cracked. I'm shipping a replacement today and emailing you a prepaid return label. You don't need to do anything else.");
   await page.waitForTimeout(600);
-  await cap(page, 'The customer never leaves the bubble — the human reply lands in the same thread.');
+  await cap(page, 'One conversation, one thread \u2014 the handoff is invisible to the customer.');
   await clickAt(page, page.getByRole('button', { name: 'Send', exact: true }), 400);
   await page.waitForTimeout(3000);
   await cap(page, '');
@@ -247,7 +247,7 @@ await seg('seg3-teach', async (page) => {
   await page.goto(`${APP}/conversations`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('a.conv-row', { timeout: 20000 });
   await page.click('.push-banner-dismiss').catch(() => {});
-  await cap(page, 'And every rescue becomes a lesson — the thread becomes a test the agent is checked against.');
+  await cap(page, 'That\u2019s the moat \u2014 every human rescue becomes a regression test the agent is checked against.');
   await clickAt(page, page.locator('a.conv-row').first(), 600);
   await page.waitForLoadState('networkidle');
   await page.waitForTimeout(2000);
@@ -285,7 +285,7 @@ if (!process.env.ONLY || process.env.ONLY === 'seg4')
 await seg('seg4-builder', async (page) => {
   await page.goto(`${APP}/agents/new`, { waitUntil: 'domcontentloaded' });
   await page.click('.push-banner-dismiss').catch(() => {});
-  await cap(page, 'Setup isn\u2019t a config file — describe the job and Janis drafts the agent.');
+  await cap(page, 'Time\u2011to\u2011value is one sentence \u2014 describe the job, the LLM drafts the agent.');
   await page.waitForTimeout(2500);
   // chooser first: "Build an agent with Janis" enters the staged builder
   const build = page.locator('text=Build an agent with Janis').first();
@@ -303,7 +303,7 @@ await seg('seg4-builder', async (page) => {
   }
   // names must be unique workspace-wide — retry list in case a prior
   // take left one reserved (soft-deleted agents still hold the name)
-  const NAMES = ['Ridgeline Gear Co', 'Summit Trail Outfitters', 'Cascade Ridge Supply'];
+  const NAMES = ['Alpine Provisions Co', 'Basecamp Gear Supply', 'Glacier Peak Outfitters', 'Timberline Trading'];
   const createBtn = page.locator('button', { hasText: 'Create agent' }).first();
   if (await createBtn.count()) {
     let created = false;
@@ -322,7 +322,7 @@ await seg('seg4-builder', async (page) => {
       await page.waitForTimeout(25000);
     }
   }
-  await cap(page, 'Teach it what you know. Guide how it behaves. Give it abilities. Test it like a customer.');
+  await cap(page, 'Six guided stages \u2014 Create, Teach, Guide, Abilities, Try, Deploy. Fully self\u2011serve.');
   // click through the stage rail for the montage
   for (const label of ['Teach it', 'Guide it', 'Abilities', 'Try it', 'Deploy']) {
     const t = page.locator('.builder-step', { hasText: label }).first();
@@ -338,9 +338,11 @@ await seg('seg4-builder', async (page) => {
 if (!process.env.ONLY || process.env.ONLY === 'seg5')
 await seg('seg5-deploy-landing', async (page) => {
   await page.goto(`${APP}/agents/51a81b16-f6a1-4dfa-ac83-15e116690269`, { waitUntil: 'domcontentloaded' });
-  await cap(page, 'One agent — website, Shopify, Meta, email, Slack, SMS, voice. One inbox.');
+  await cap(page, '94% of conversations resolve without a human \u2014 real usage, real leverage.');
   await page.waitForTimeout(3000);
   await page.click('.push-banner-dismiss').catch(() => {});
+  await cap(page, 'One agent, every channel \u2014 web, Shopify, Meta, email, Slack, SMS, voice. One inbox.');
+  await page.waitForTimeout(3000);
   // landing close — caption lives in the DOM, so set it AFTER the nav
   await page.goto(`${APP}/`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1500);
