@@ -1059,7 +1059,7 @@ export function AskJanis({
             Testing as a customer — handoffs and escalations work like a real visitor's.
           </div>
         )}
-        {loaded && (cfg?.greeting || cfg?.greeting_widgets?.length) && !msgs.length && (
+        {loaded && !!(cfg?.greeting || cfg?.greeting_widgets?.length) && !msgs.length && (
           <div className="ask-msg them">
             {cfg.agent_name && (
               <div className="ask-author">
