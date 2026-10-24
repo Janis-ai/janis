@@ -36,6 +36,21 @@
   // widget may read the shopper's real cart via the same-origin Ajax API
   // (/cart/add.js on card taps, /cart.js as send-time context).
   var SHOPIFY = script.getAttribute('data-janis-cart') === '1';
+  // In-place navigation for links back into the same storefront — a "View
+  // product" tap is the shopper browsing the site they're already on, so a
+  // new tab just orphans the chat. Same-origin always counts; for Shopify
+  // carts the shop domain (myshopify or the storefront's custom domain —
+  // the link template emits the myshopify host) counts too. Everything
+  // else stays _blank.
+  function sameShopLink(url) {
+    try {
+      var h = new URL(url).host.toLowerCase();
+      if (h === location.host.toLowerCase()) return true;
+      return SHOPIFY && /(^|\.)myshopify\.com$/.test(h);
+    } catch (e) {
+      return false;
+    }
+  }
   // Set by Janis.destroy() — the host SPA tore the widget down; stray timers
   // and document listeners must become inert instead of re-adding DOM.
   var destroyed = false;
@@ -172,8 +187,10 @@
       } else {
         var a = document.createElement('a');
         a.href = parts[0];
-        a.target = '_blank';
-        a.rel = 'noopener noreferrer';
+        if (!sameShopLink(parts[0])) {
+          a.target = '_blank';
+          a.rel = 'noopener noreferrer';
+        }
         a.textContent = m[1] || parts[0];
         span.appendChild(a);
         if (parts[1]) span.appendChild(document.createTextNode(parts[1]));
@@ -1238,7 +1255,15 @@
           btns.appendChild(optBtn);
         }
         if (item.link) {
-          var a = el('a', {}, { class: 'janis-wbtn', href: item.link, target: '_blank', rel: 'noopener noreferrer' });
+          // Same-storefront links navigate in place — a "View product" tap
+          // inside the shop's own chat is site navigation, not an external
+          // jump; off-site links still get a new tab.
+          var linkAttrs = { class: 'janis-wbtn', href: item.link };
+          if (!sameShopLink(item.link)) {
+            linkAttrs.target = '_blank';
+            linkAttrs.rel = 'noopener noreferrer';
+          }
+          var a = el('a', {}, linkAttrs);
           a.onclick = function (e) { e.stopPropagation(); };
           // A PDP link labelled "Add to cart" next to a REAL add button is a
           // fake — the link only navigates. Coerce the label to what it does.
