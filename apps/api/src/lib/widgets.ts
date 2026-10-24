@@ -70,7 +70,17 @@ export const WidgetComponent = z.discriminatedUnion('type', [
     type: z.literal('options'),
     title: s(120).optional(),
     items: z
-      .array(z.object({ label: s(60), description: s(200).optional() }))
+      .array(
+        z.object({
+          label: s(60),
+          description: s(200).optional(),
+          // The message delivered on tap — defaults to the label. Set it
+          // when the label alone isn't a self-sufficient instruction (a
+          // category or collection name), so the pick reads as an ask the
+          // agent can act on, not a word to re-interpret.
+          send: s(120).optional(),
+        }),
+      )
       .min(1)
       .max(12),
   }),

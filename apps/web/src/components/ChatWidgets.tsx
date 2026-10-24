@@ -26,6 +26,8 @@ export interface WidgetCardItem {
 export interface WidgetOption {
   label: string;
   description?: string;
+  /** The message delivered on tap — defaults to label. */
+  send?: string;
 }
 export interface WidgetField {
   name: string;
@@ -268,7 +270,7 @@ function Options({ w, onSend }: { w: Extract<ChatWidget, { type: 'options' }>; o
             onClick={() => {
               if (picked !== null) return;
               setPicked(i);
-              onSend(item.label, { of: w.title });
+              onSend(item.send ?? item.label, { of: w.title });
             }}
           >
             {item.label}

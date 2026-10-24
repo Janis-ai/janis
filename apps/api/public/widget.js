@@ -1659,7 +1659,7 @@
       b.onclick = function () {
         list.classList.add('janis-wdone');
         b.classList.add('janis-wsel');
-        sendText(item.label, { of: w.title });
+        sendText(item.send || item.label, { of: w.title });
       };
       list.appendChild(b);
     });

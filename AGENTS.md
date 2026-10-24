@@ -67,6 +67,10 @@ as a push notification, and on the workspace Slack alert channel).
   rails and widgets render to real users. Internal annotations (systemNote,
   payload.internal) belong in the console only; anything on a visitor surface
   must exist for the visitor's benefit.
+- Found a bug while working on something else? FIX IT — don't just flag it
+  and move on. If it's genuinely too big for this turn, land the smallest
+  correct fix and file the rest under "Open work" below, but "noticed and
+  noted" is not an acceptable end state for a product bug.
 
 ## Gotchas
 - NEVER test against a client's real Slack workspace without Mike's explicit
