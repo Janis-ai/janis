@@ -118,7 +118,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_customer_orders',
         label: 'Customer orders',
         description:
-          'List the most recent Shopify orders for the verified customer — pass no args for a signed-in shopper (their Shopify customer id binds automatically and covers orders under ANY email, including POS orders with no address); pass `email` only to scope to a specific verified address. Use this — not order lookup — whenever the customer asks about "my order" without giving a number, so they can pick the right one.',
+          'List the most recent Shopify orders for the verified customer — pass no args for a signed-in shopper (their Shopify customer id binds automatically and covers orders under ANY email, including POS orders with no address); pass `email` only to scope to a specific verified address. Use this — not order lookup — whenever the customer asks about "my order"/"my purchases" without giving a number, so they can pick the right one. "sales"/"deals"/"what\'s on sale" means discounted PRODUCTS for browsing — that is shopify_search_products with sale_only, never this tool.',
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },

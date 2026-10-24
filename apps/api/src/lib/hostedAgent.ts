@@ -5358,7 +5358,10 @@ async function replyAsHostedAgent(
     const photoInTurn =
       Array.isArray(lastInbound?.content) &&
       (lastInbound.content as ContentPart[]).some((p) => p.type === 'image_url');
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // Three rounds, not two: a repair `continue` on the second attempt used
+    // to be a silent exit — an identity-blocked ref or a provider blip on
+    // attempt 1 meant an empty reply and a spurious handoff.
+    for (let attempt = 0; attempt < 3; attempt++) {
       gen = await generateReply(
         llm,
         prompt,
@@ -5393,8 +5396,23 @@ async function replyAsHostedAgent(
         if (owner) {
           w.splice(i, 1);
           lostComponents++;
+          // If the owning ref's bound tool is identity-gated and this
+          // conversation has no verified anchor, "emit the ref instead" is
+          // doomed advice — the ref blocks identically, the next attempt
+          // dead-ends, and an empty final attempt escalates to a handoff.
+          // Class it identity-blocked now so the repair pass jumps straight
+          // to the verify-the-address path.
+          const ownerTool = agentToolDefs.find(
+            (t) => t.name === refSpecs.get(owner)?.tool?.name,
+          );
+          const gatedIdentity =
+            !!ownerTool?.identity &&
+            !ctx?.identity?.operator &&
+            !(ctx?.identity?.emails?.size || ctx?.identity?.ids?.size);
           lostReasons.push(
-            `a hand-written ${w.length ? 'WIDGET:' : 'widget'} was dropped — emit "WIDGET_REF: ${owner}" instead so it binds live data`,
+            gatedIdentity
+              ? `${owner}: identity check blocked — the shopper has no verified email or id for the bound lookup`
+              : `a hand-written ${w.length ? 'WIDGET:' : 'widget'} was dropped — emit "WIDGET_REF: ${owner}" instead so it binds live data`,
           );
         }
       }
@@ -5466,22 +5484,18 @@ async function replyAsHostedAgent(
       }
       // Component line that produced nothing (malformed WIDGET:, unknown
       // WIDGET_REF) — silent content loss; the customer sees a dangling
-      // lead-in. Regenerate once with explicit feedback.
-      if (attempt === 0 && lostComponents > 0) {
+      // lead-in. Regenerate once with explicit feedback — and once more when
+      // an identity gate is the reason, since that path needs an extra turn
+      // to pivot to verification (a guest who asked about "sales" dead-ended
+      // into a handoff when the blocked ref ate the second attempt).
+      const identityBlocked = lostReasons.some((r) => r.includes('identity check blocked'));
+      const softNotFound = lostReasons.some((r) => r.includes('rendered its not-found state'));
+      const refFailed = lostReasons.some((r) => !/is not a saved component$/.test(r));
+      if (lostComponents > 0 && (attempt === 0 || (identityBlocked && attempt < 2))) {
         console.warn(
           `[hosted] dropped component line conv=${convId} — regenerating` +
             (lostReasons.length ? ` (${lostReasons.join('; ')})` : ''),
         );
-        const refFailed = lostReasons.some(
-          (r) => !/is not a saved component$/.test(r),
-        );
-        // Failure-class-specific guidance: an identity-blocked ref must NOT be
-        // re-emitted (it will block again — verify the claimed address first);
-        // a soft-failed not-found ref MUST be re-emitted so the component
-        // re-renders, with honest text around it; a missing-args ref wants the
-        // same ref with args filled.
-        const identityBlocked = lostReasons.some((r) => r.includes('identity check blocked'));
-        const softNotFound = lostReasons.some((r) => r.includes('rendered its not-found state'));
         prompt +=
           '\n\n' +
           WIDGET_PARSE_RETRY +
@@ -5680,8 +5694,8 @@ async function replyAsHostedAgent(
         prompt += '\n\n' + MEMORY_CATALOGUE_GUARD_RETRY;
         continue;
       }
-      if (reply || widgets.length || toolWidgets.length || buttons.length || attempt === 1) break;
-      console.warn(`[hosted] empty completion conv=${convId} — retrying once`);
+      if (reply || widgets.length || toolWidgets.length || buttons.length || attempt === 2) break;
+      console.warn(`[hosted] empty completion conv=${convId} attempt=${attempt} — retrying`);
       prompt += '\n\n[your previous reply came back empty — reply to the user now in plain text]';
     }
     // Belt-and-braces: a claim that survived the regen gets its claiming

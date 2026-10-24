@@ -1157,6 +1157,108 @@ describe('hosted handoff offers', () => {
       (widgetMsg?.payload as { widgets?: unknown[] }).widgets[0],
     ).toMatchObject(plansSpec);
   });
+
+  it('a hand-written widget owned by an identity-gated ref pivots to verification, not a dead-end handoff', async () => {
+    // Prod incident (SnowboardsAreUs 2026-10-24): a guest asked "show me
+    // your sales" — the model hand-wrote an orders-ish widget, the drop
+    // note told it to emit WIDGET_REF: your-orders, the bound
+    // customer-orders tool is identity-gated so the ref blocked, the last
+    // attempt came back empty and the run escalated "no LLM configured or
+    // empty reply" to a human. The drop note must say "verify the address"
+    // up front when the owning ref's tool can't run for a guest.
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          llmResponse(
+            'WIDGET: {"type":"receipt","title":"Your orders","rows":[{"label":"#1","value":"$9.00"}],"total":{"label":"Total","value":"$9.00"}}',
+          ),
+        ),
+      )
+      .mockImplementation(() =>
+        Promise.resolve(
+          llmResponse(
+            "To pull up your orders I'll need to verify the email on the order — what's the address you used?",
+          ),
+        ),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { hash, preview } = generateApiKey();
+    const [hosted] = await db
+      .insert(agents)
+      .values({
+        workspaceId: agent.workspaceId,
+        name: 'OrderBot',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        hosted: true,
+        config: {
+          llm: { api_key: 'k', base_url: 'https://llm.test', model: 'm' },
+          tools: [
+            {
+              name: 'shopify_customer_orders',
+              description: 'list orders for the verified customer',
+              method: 'POST',
+              url: 'https://shop.example/orders',
+            },
+          ],
+        },
+      })
+      .returning();
+    // The saved component owns the receipt type and binds the gated tool —
+    // a hand-written receipt drops with the owner-ref note.
+    await db.insert(agentWidgets).values({
+      agentId: hosted.id,
+      name: 'your-orders',
+      description: 'show the customer their recent orders',
+      spec: {
+        type: 'receipt',
+        title: 'Your orders',
+        rows: [{ label: '{order}', value: '{total}' }],
+        total: { label: 'Total', value: '{grand}' },
+      },
+      tool: { name: 'shopify_customer_orders' },
+    });
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: hosted.id, externalId: 'ext-orders-gate' })
+      .returning();
+    await db
+      .insert(messages)
+      .values({ conversationId: conv.id, direction: 'in', text: 'show me my orders' });
+
+    await runHostedEvent(db, hosted, {
+      type: 'message.user',
+      conversation_id: 'ext-orders-gate',
+      janis_conversation_id: conv.id,
+      text: 'show me my orders',
+    } as Parameters<typeof runHostedEvent>[2]);
+
+    // The regen prompt must carry the identity-blocked class up front —
+    // "do NOT emit that ref, verify the address" — not "emit the ref".
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const regenBody = JSON.parse(fetchMock.mock.calls[1][1].body as string);
+    const sysPrompt = regenBody.messages[0].content as string;
+    expect(sysPrompt).toContain('identity check blocked');
+    expect(sysPrompt).not.toContain('emit "WIDGET_REF: your-orders" instead');
+
+    // …and the run answered instead of escalating an empty reply.
+    const out = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id))
+      .then((rows) => rows.filter((m) => m.direction === 'out'));
+    const visible = out.filter(
+      (m) => (m.payload as { via?: string } | null)?.via === 'hosted',
+    );
+    expect(visible.some((m) => (m.text ?? '').includes('verify the email'))).toBe(true);
+    const [after] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(after.state).not.toBe('needs_human');
+  });
 });
 
 describe('cross-channel externalId collisions', () => {
