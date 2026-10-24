@@ -6124,6 +6124,32 @@ async function replyAsHostedAgent(
     const buttonFlag = keptButtons.length ? { quick_replies: keptButtons } : {};
     // Re-read the profile — a same-turn save_user_profile (or a concurrent
     // ingress write) landed after `conv` was loaded and is invisible to it.
+    // A model-authored form that substantially overlaps a configured collect
+    // form becomes that form — the authored spec drops the email field, the
+    // collect: binding (structured submit → contact enrich + destinations),
+    // and the configured labels. Swap in the canonical spec before prefill.
+    const normField = (s?: string) => s?.trim().toLowerCase().replace(/[\s-]+/g, '_');
+    const collectForms =
+      (agent.config as { collect_forms?: CollectForm[] } | undefined)?.collect_forms ?? [];
+    for (const w of widgets) {
+      const wr = w as Record<string, unknown>;
+      if (wr.type !== 'form' || wr.collect || !Array.isArray(wr.fields)) continue;
+      const wf = new Set(
+        (wr.fields as { name?: string; label?: string }[]).flatMap((f) =>
+          [normField(f.name), normField(f.label)].filter((x): x is string => !!x),
+        ),
+      );
+      const cf = collectForms.find(
+        (f) =>
+          (f.fields ?? []).filter((x) => wf.has(normField(x.name)!) || wf.has(normField(x.label)!))
+            .length >= 2,
+      );
+      if (!cf?.name) continue;
+      wr.title = cf.title ?? cf.name;
+      wr.submit_label = cf.submit_label;
+      wr.fields = cf.fields;
+      wr.collect = cf.name;
+    }
     const [freshProfile] = await db
       .select({ userProfile: conversations.userProfile })
       .from(conversations)
