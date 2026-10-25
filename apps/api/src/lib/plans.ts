@@ -1,6 +1,6 @@
 import { and, eq, gte, lt, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, conversations, messages, workspaces } from '../db/schema.js';
+import { agents, conversations, messages, shopifyShops, workspaces } from '../db/schema.js';
 import { currentPeriod } from './billing.js';
 import { planForPrice, stripe } from './stripe.js';
 
@@ -107,6 +107,15 @@ export interface CapStatus {
   plan: Plan;
   used: number;
   capped: boolean; // hard-capped plan over its included amount
+  /** 0..1 fraction of the binding allowance consumed — messages/included for
+   *  hard-cap plans, billedCents/usageCap on the Shopify usage rail. */
+  fill: number;
+  /** Which ceiling binds: 'messages' (free-tier allowance) or 'shopify-usage'
+   *  (merchant-approved usage cap). Only set when a real cap applies. */
+  capKind?: 'messages' | 'shopify-usage';
+  /** Nudge-dedupe key for the current billing window — the calendar month for
+   *  message caps, the Shopify cycle's periodEnd for usage caps. */
+  period: string;
 }
 
 /**
@@ -157,6 +166,7 @@ export async function messageCap(db: Db, workspaceId: string): Promise<CapStatus
       parentWorkspaceId: workspaces.parentWorkspaceId,
       stripeSubscriptionId: workspaces.stripeSubscriptionId,
       connectSubscriptionId: workspaces.connectSubscriptionId,
+      billingProvider: workspaces.billingProvider,
     })
     .from(workspaces)
     .where(eq(workspaces.id, workspaceId))
@@ -184,7 +194,34 @@ export async function messageCap(db: Db, workspaceId: string): Promise<CapStatus
       capped = plan.overagePer1kCents === null && used >= plan.includedMessages;
     }
   }
-  const status = { plan, used, capped };
+  let fill = plan.includedMessages > 0 ? used / plan.includedMessages : 0;
+  let capKind: CapStatus['capKind'] = plan.overagePer1kCents === null ? 'messages' : undefined;
+  let period = currentPeriod();
+  // Shopify rail: the merchant-approved usage cap is the real ceiling — once
+  // appUsageRecordCreate rejects, the latch holds for the rest of the cycle
+  // and the agent stops answering (unbilled free service would never end).
+  if (ws?.billingProvider === 'shopify' && !capped) {
+    const [shop] = await db
+      .select({ billing: shopifyShops.billing })
+      .from(shopifyShops)
+      .where(eq(shopifyShops.workspaceId, workspaceId))
+      .limit(1);
+    const b = (shop?.billing ?? {}) as {
+      usageBilledCents?: number;
+      usageCapHit?: string;
+      usagePeriodEnd?: string;
+    };
+    const capCents = plan.usageCapCents ?? 0;
+    if (capCents > 0) fill = Math.max(fill, (b.usageBilledCents ?? 0) / capCents);
+    // usageCapHit holds the cycle's periodEnd that rejected a record; it stops
+    // binding once that period has passed (fresh cap budget each cycle).
+    if (b.usageCapHit && b.usagePeriodEnd && new Date(b.usagePeriodEnd) > new Date()) {
+      capped = true;
+      capKind = 'shopify-usage';
+      period = b.usagePeriodEnd;
+    }
+  }
+  const status: CapStatus = { plan, used, capped, fill, capKind, period };
   capCache.set(workspaceId, { status, exp: Date.now() + CAP_CACHE_TTL_MS });
   return status;
 }

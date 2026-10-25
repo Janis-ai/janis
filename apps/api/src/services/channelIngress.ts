@@ -15,6 +15,7 @@ import {
   slackThreads,
   suggestions,
   usageEvents,
+  workspaces,
 } from '../db/schema.js';
 import type { ChannelCredentials, InboundMessage } from '../lib/channels.js';
 import { resolveGreeting } from '../lib/greeting.js';
@@ -23,7 +24,8 @@ import { deliverToChannel, fetchPlatformProfile, sendChannelTyping } from '../li
 import { rehostAttachments } from '../lib/uploads.js';
 import { toMessage } from '../lib/serializers.js';
 import { bus } from '../lib/bus.js';
-import { openAlertOnce } from '../lib/alerts.js';
+import { dispatchAlert, openAlertOnce } from '../lib/alerts.js';
+import type { CapStatus } from '../lib/plans.js';
 import { captureCsat } from '../lib/csat.js';
 import { queueCrmActivity } from '../lib/crm.js';
 import { pickAutoAssignee } from '../lib/rules.js';
@@ -449,6 +451,11 @@ export async function handleChannelMessage(
   // get a conversation shell so the alert has a home; one open 'custom'
   // alert per conversation keeps a flooded page from spamming alerts.
   const cap = await messageCap(db, agent.workspaceId);
+  // Approaching-cap nudge (once per billing window): the merchant hears about
+  // it while the agent still answers, not after it goes quiet.
+  if (!cap.capped && cap.capKind && cap.fill >= 0.8) {
+    void capNudge(db, agent, conv, cap, 'warn').catch(() => {});
+  }
   if (cap.capped) {
     if (!conv) {
       // A parallel delivery (webhook + legacy fallback, Meta retry) can win
@@ -481,8 +488,8 @@ export async function handleChannelMessage(
       });
       if (contactId) await linkConversationContact(db, conv.id, contactId);
     }
-    const [open] = await db
-      .select({ id: alerts.id })
+    const [openAlert] = await db
+      .select()
       .from(alerts)
       .where(
         and(
@@ -492,12 +499,23 @@ export async function handleChannelMessage(
         ),
       )
       .limit(1);
-    if (!open) {
-      await openAlertOnce(db, {
+    if (!openAlert) {
+      const { created, alert } = await openAlertOnce(db, {
         conversationId: conv.id,
         type: 'custom',
-        detail: `Message cap reached on ${cap.plan.name} plan (${cap.used}/${cap.plan.includedMessages} this period) — inbound messages are dropped until the plan is upgraded.`,
+        detail: capHitDetail(cap),
       });
+      // The first cap-hit per billing window dispatches; further alerts still
+      // open per conversation (the inbox ledger) without re-pinging.
+      if (created && alert && (await capNotice(db, agent.workspaceId, 'hit', cap.period))) {
+        void dispatchAlert(db, agent, conv, alert).catch(() => {});
+      }
+    }
+    // While traffic keeps arriving over the cap, re-dispatch the open alert
+    // once a day — the cap keeps dropping messages until the merchant acts.
+    const reminder = openAlert ?? null;
+    if (reminder && (await capNotice(db, agent.workspaceId, 'remind', cap.period))) {
+      void dispatchAlert(db, agent, conv, reminder).catch(() => {});
     }
     // Webchat visitors shouldn't type into a void — store one canned offline
     // reply per conversation so the transcript poll renders an answer. The
@@ -815,4 +833,77 @@ export async function handleChannelMessage(
         : {}),
     });
   }
+}
+
+function capHitDetail(cap: CapStatus): string {
+  return cap.capKind === 'shopify-usage'
+    ? `Shopify usage cap reached on the ${cap.plan.name} plan — the merchant-approved billing ceiling rejected further usage records, so the agent stops answering until the cap is raised (Shopify admin → the Janis subscription) or the cycle rolls.`
+    : `Message cap reached on ${cap.plan.name} plan (${cap.used}/${cap.plan.includedMessages} this period) — inbound messages are dropped until the plan is upgraded.`;
+}
+
+/** Cap-notice ledger on workspaces.config.cap_notices: 'warn'/'hit' fire once
+ *  per billing window (keyed by cap.period), 'remind' throttles to once per
+ *  day while the cap holds. Returns true when this notice should fire — the
+ *  mark writes on the same read so the check is one update. */
+async function capNotice(
+  db: Db,
+  workspaceId: string,
+  kind: 'warn' | 'hit' | 'remind',
+  period: string,
+): Promise<boolean> {
+  const [ws] = await db
+    .select({ config: workspaces.config })
+    .from(workspaces)
+    .where(eq(workspaces.id, workspaceId))
+    .limit(1);
+  if (!ws) return false;
+  const config = { ...((ws.config ?? {}) as Record<string, unknown>) };
+  const notices = { ...((config.cap_notices ?? {}) as Record<string, string>) };
+  if (kind === 'remind') {
+    const last = notices.remind ? new Date(notices.remind).getTime() : 0;
+    if (Date.now() - last < 24 * 3600_000) return false;
+    notices.remind = new Date().toISOString();
+  } else {
+    if (notices[kind] === period) return false;
+    notices[kind] = period;
+  }
+  config.cap_notices = notices;
+  await db
+    .update(workspaces)
+    .set({ config })
+    .where(eq(workspaces.id, workspaceId));
+  return true;
+}
+
+/** Warn/hit dispatch — attaches to the inbound conversation when there is
+ *  one, else the agent's newest thread (an alert needs a home). */
+async function capNudge(
+  db: Db,
+  agent: typeof agents.$inferSelect,
+  conv: typeof conversations.$inferSelect | null,
+  cap: CapStatus,
+  kind: 'warn',
+): Promise<void> {
+  if (!(await capNotice(db, agent.workspaceId, kind, cap.period))) return;
+  let target = conv;
+  if (!target) {
+    [target] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.agentId, agent.id))
+      .orderBy(sql`${conversations.createdAt} desc`)
+      .limit(1);
+  }
+  if (!target) return; // no thread to pin the alert on — nothing to drop anyway
+  const pct = Math.round(cap.fill * 100);
+  const detail =
+    cap.capKind === 'shopify-usage'
+      ? `Approaching the Shopify usage cap on the ${cap.plan.name} plan — ${pct}% of the merchant-approved billing ceiling used this cycle. Raise the cap in Shopify admin before the agent stops answering.`
+      : `Approaching the ${cap.plan.name} plan's message cap — ${cap.used}/${cap.plan.includedMessages} messages used this period (${pct}%). Upgrade before the agent stops answering.`;
+  const { created, alert } = await openAlertOnce(db, {
+    conversationId: target.id,
+    type: 'custom',
+    detail,
+  });
+  if (created && alert) await dispatchAlert(db, agent, target, alert).catch(() => {});
 }
