@@ -87,9 +87,9 @@ export async function dispatchAlert(
   agent: AgentRow,
   conv: ConvRow,
   alert: AlertRow,
-  opts: { userIds?: string[]; event?: NotifyEvent; notify?: 'workspace' | string[] } = {},
+  opts: { userIds?: string[]; event?: NotifyEvent; notify?: 'workspace' | string[]; url?: string } = {},
 ): Promise<void> {
-  const n = await alertNotification(db, alert, conv, agent);
+  const n = await alertNotification(db, alert, conv, agent, undefined, { url: opts.url });
   bus.publish(agent.workspaceId, {
     type: 'alert',
     data: { ...toAlert(alert), notification: n },

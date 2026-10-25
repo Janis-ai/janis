@@ -12,6 +12,7 @@ import {
   convTombstones,
   conversations,
   messages,
+  shopifyShops,
   slackThreads,
   suggestions,
   usageEvents,
@@ -508,14 +509,18 @@ export async function handleChannelMessage(
       // The first cap-hit per billing window dispatches; further alerts still
       // open per conversation (the inbox ledger) without re-pinging.
       if (created && alert && (await capNotice(db, agent.workspaceId, 'hit', cap.period))) {
-        void dispatchAlert(db, agent, conv, alert).catch(() => {});
+        void dispatchAlert(db, agent, conv, alert, {
+          url: await capActionUrl(db, agent.workspaceId, cap),
+        }).catch(() => {});
       }
     }
     // While traffic keeps arriving over the cap, re-dispatch the open alert
     // once a day — the cap keeps dropping messages until the merchant acts.
     const reminder = openAlert ?? null;
     if (reminder && (await capNotice(db, agent.workspaceId, 'remind', cap.period))) {
-      void dispatchAlert(db, agent, conv, reminder).catch(() => {});
+      void dispatchAlert(db, agent, conv, reminder, {
+        url: await capActionUrl(db, agent.workspaceId, cap),
+      }).catch(() => {});
     }
     // Webchat visitors shouldn't type into a void — store one canned offline
     // reply per conversation so the transcript poll renders an answer. The
@@ -905,5 +910,28 @@ async function capNudge(
     type: 'custom',
     detail,
   });
-  if (created && alert) await dispatchAlert(db, agent, target, alert).catch(() => {});
+  if (created && alert) {
+    await dispatchAlert(db, agent, target, alert, {
+      url: await capActionUrl(db, agent.workspaceId, cap),
+    }).catch(() => {});
+  }
+}
+
+/** Where the nudge email/push lands the operator: the billing page for
+ *  message caps, the merchant's own Shopify admin for usage caps (that's
+ *  where the cappedAmount gets raised — our console can't do it for them). */
+async function capActionUrl(
+  db: Db,
+  workspaceId: string,
+  cap: CapStatus,
+): Promise<string | undefined> {
+  if (cap.capKind !== 'shopify-usage') return '/billing';
+  const [shop] = await db
+    .select({ shop: shopifyShops.shop })
+    .from(shopifyShops)
+    .where(eq(shopifyShops.workspaceId, workspaceId))
+    .limit(1);
+  return shop
+    ? `https://${shop.shop}/admin/apps/${env.shopifyAppApiKey}`
+    : '/billing';
 }

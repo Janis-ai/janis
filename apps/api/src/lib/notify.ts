@@ -133,6 +133,7 @@ export async function alertNotification(
   },
   agent: { name: string },
   body?: string | null,
+  opts?: { url?: string },
 ): Promise<{ title: string; body: string; url: string }> {
   const profile = (conv.userProfile ?? {}) as { name?: string; email?: string };
   const customer = profile.name ?? friendlyName(conv.externalId);
@@ -166,7 +167,7 @@ export async function alertNotification(
       // Slack can't typeset $…$ math, so detex like the channel egress does.
       mathToUnicode(body ?? alert.detail ?? 'needs attention')
     }\n${ctx.join(' · ')}`,
-    url: `/conversations/${conv.id}`,
+    url: opts?.url ?? `/conversations/${conv.id}`,
   };
 }
 
@@ -203,7 +204,9 @@ export async function sendEmail(
       from: env.emailFrom,
       to,
       subject: title,
-      text: url ? `${body}\n\n${env.webOrigin}${url}` : body,
+      text: url
+        ? `${body}\n\n${url.startsWith('http') ? url : `${env.webOrigin}${url}`}`
+        : body,
       ...(opts?.attachments?.length ? { attachments: opts.attachments } : {}),
       // marks our own sends — a notification landing in a connected mailbox
       // (operator hooked their Gmail/Outlook in as a channel) must not come
