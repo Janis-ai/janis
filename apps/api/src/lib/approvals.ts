@@ -243,7 +243,9 @@ export async function decidePendingAction(
       // Catalog is source of truth, same as toolsFor.
       if (!tool.url || !tool.bodyTemplate) {
         const { TOOL_TEMPLATES } = await import('./toolTemplates.js');
-        const cat = TOOL_TEMPLATES.flatMap((t) => t.tools).find((x) => x.name === tool.name);
+        const cat = TOOL_TEMPLATES.flatMap((t) => t.tools).find(
+          (x) => x.name === (tool.name ?? action.toolName),
+        );
         if (cat) Object.assign(tool, cat);
       }
       result = await callTool(
