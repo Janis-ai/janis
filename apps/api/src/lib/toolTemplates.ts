@@ -381,7 +381,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
-          '{"query":"mutation($input:ReturnRequestInput!){returnRequest(input:$input){returnRequest{id status} userErrors{field message}}}","variables":{"input":${return_request}}}',
+          '{"query":"mutation($input:ReturnRequestInput!){returnRequest(input:$input){return{id status} userErrors{field message}}}","variables":{"input":${return_request}}}',
         params: {
           return_request:
             'JSON ReturnRequestInput — {"orderId":"gid://shopify/Order/…","returnLineItems":[{"fulfillmentLineItemId":"gid://shopify/FulfillmentLineItem/…","quantity":1,"customerNote":"…"}]} — ids come from shopify_lookup_order (order.id + fulfillments[].fulfillmentLineItems[].id)',
