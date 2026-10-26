@@ -65,10 +65,12 @@ export function toolsFor(agent: AgentRow): ToolDef[] {
         const w = TEMPLATE_WIDGETS.get(t.name);
         if (w) out.widget = w;
       }
-      if (!out.bodyTemplate) {
-        const b = TEMPLATE_BODY_TEMPLATES.get(t.name);
-        if (b) out.bodyTemplate = b;
-      }
+      // Catalog tools always take the catalog template — a stored def
+      // snapshots whatever template existed at install, so fixes (like the
+      // returnRequest selector) would never reach already-installed agents.
+      const b = TEMPLATE_BODY_TEMPLATES.get(t.name);
+      if (b && CATALOG_TOOL_NAMES.has(t.name)) out.bodyTemplate = b;
+      else if (!out.bodyTemplate && b) out.bodyTemplate = b;
       return out;
     });
 }
