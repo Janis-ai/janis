@@ -3691,7 +3691,9 @@ export async function complete(
             : `simulated: ${call.function.name} returned successfully (test run — no real request was made)`;
         } else if (denied ?? fabricated) {
           outcome = 'failed';
-          result = `error: ${denied ?? fabricated}`;
+          result =
+            `error: ${denied ?? fabricated} — the action was NOT performed; ` +
+            'say so plainly and offer a human teammate — never claim a return, refund, label, or any other action went through';
         } else {
           // Server-side customer-facing builtins — dispatched on name
           // before the workspace-builtin / HTTP-tool fallthrough.
@@ -6149,7 +6151,14 @@ async function replyAsHostedAgent(
     // model-emitted tappable choices ride payload.quick_replies → native
     // buttons on Messenger/WhatsApp, chips on webchat. Chips that just restate
     // a card's own button are dropped; offers the card can't answer stay.
-    const keptButtons = cardsTap ? [] : filterChipsAgainstCards(buttons, widgets);
+    const keptButtons = (cardsTap ? [] : filterChipsAgainstCards(buttons, widgets))
+      // A turn that just emailed a verification code expects the CODE back —
+      // an ASK:email quick-reply would render an email field for the digits.
+      .filter(
+        (b) =>
+          typeof b === 'string' ||
+          !(gen.toolCalls ?? []).some((c) => c.name === SEND_VERIFY_TOOL),
+      );
     const buttonFlag = keptButtons.length ? { quick_replies: keptButtons } : {};
     // Re-read the profile — a same-turn save_user_profile (or a concurrent
     // ingress write) landed after `conv` was loaded and is invisible to it.

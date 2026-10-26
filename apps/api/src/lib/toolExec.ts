@@ -121,7 +121,18 @@ export function identityBlockReason(
   producedIds: ReadonlySet<string>,
   verifiedIds?: ReadonlySet<string>,
 ): string | null {
-  const vals = Object.values(args).filter((v): v is string => typeof v === 'string');
+  // Collect strings at ANY depth — action tools pack their payload into a
+  // nested JSON arg (return_request.orderId, fulfilment ids), and the
+  // produced-order gid inside it is exactly the anchor that proves identity.
+  const vals: string[] = [];
+  const collect = (v: unknown): void => {
+    if (typeof v === 'string') vals.push(v);
+    else if (Array.isArray(v)) v.forEach(collect);
+    else if (v && typeof v === 'object') {
+      for (const child of Object.values(v as Record<string, unknown>)) collect(child);
+    }
+  };
+  Object.values(args).forEach(collect);
   let anchored = false;
   // customer_id-keyed args hard-block unless produced or claim-verified —
   // in an OR-composed query a stray one widens scope to another customer.
