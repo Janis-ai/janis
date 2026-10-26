@@ -1192,7 +1192,7 @@ export default function ConversationPage() {
               ) : null}
               {(() => {
                 const act = m.payload.action as
-                  | { id: string; tool: string; args: Record<string, unknown>; status: string; decided_by?: string; result?: string }
+                  | { id: string; tool: string; args: Record<string, unknown>; status: string; decided_by?: string; result?: string; reason?: string }
                   | undefined;
                 if (!act) return null;
                 return (
@@ -1200,6 +1200,11 @@ export default function ConversationPage() {
                     <div className="mono" style={{ fontSize: 12 }}>
                       {act.tool}
                     </div>
+                    {act.reason ? (
+                      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                        {act.reason}
+                      </div>
+                    ) : null}
                     <ArgsRows args={act.args} />
                     {act.status === 'pending' ? (
                       <div className="row" style={{ marginTop: 6 }}>

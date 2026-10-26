@@ -41,6 +41,25 @@ export function isConciergeAction(actionWorkspaceId: string, userProfile: unknow
  * Returns the tool-result string the model sees; the transcript card and
  * Slack approval buttons let a teammate decide.
  */
+/** Pull the human-readable "why" out of nested tool args — the model drops
+ *  the customer's reason into customerNote/reason/note fields at whatever
+ *  depth the API shape demands; the approver shouldn't have to parse JSON. */
+function approvalReason(args: unknown): string | null {
+  if (!args || typeof args !== 'object') return null;
+  for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
+    if (/customerNote|reason|note|justification|why/i.test(k) && typeof v === 'string' && v.trim()) {
+      return v.trim();
+    }
+  }
+  for (const v of Object.values(args as Record<string, unknown>)) {
+    const found = Array.isArray(v)
+      ? v.map(approvalReason).find(Boolean)
+      : approvalReason(v);
+    if (found) return found;
+  }
+  return null;
+}
+
 export async function requestToolApproval(
   db: Db,
   agent: AgentRow,
@@ -85,7 +104,13 @@ export async function requestToolApproval(
       payload: {
         internal: true,
         event: 'approval requested',
-        action: { id: action.id, tool: tool.name, args, status: 'pending' },
+        action: {
+          id: action.id,
+          tool: tool.name,
+          args,
+          status: 'pending',
+          reason: approvalReason(args),
+        },
       },
     })
     .returning();
