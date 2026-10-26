@@ -237,8 +237,17 @@ export async function decidePendingAction(
         ...(await loadSecretsMap(db, agent.id)),
         ...(await connectionSecrets(db, agent.id)),
       };
+      const tool = action.tool as ToolDef;
+      // Hand-seeded or older pending actions may carry a partial snapshot
+      // (no url/method/headers/bodyTemplate) — callTool dies on undefined.
+      // Catalog is source of truth, same as toolsFor.
+      if (!tool.url || !tool.bodyTemplate) {
+        const { TOOL_TEMPLATES } = await import('./toolTemplates.js');
+        const cat = TOOL_TEMPLATES.flatMap((t) => t.tools).find((x) => x.name === tool.name);
+        if (cat) Object.assign(tool, cat);
+      }
       result = await callTool(
-        action.tool as ToolDef,
+        tool,
         action.args as Record<string, unknown>,
         secrets,
       ).catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`);
