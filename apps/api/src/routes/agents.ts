@@ -2841,7 +2841,18 @@ export function agentRoutes(db: Db) {
       .values({
         workspaceId: c.get('workspaceId'),
         agentId,
-        name: (b.name ?? b.prompt ?? trigger ?? 'test').slice(0, 120),
+        // Title = the exchange's subject (first substantive customer ask),
+        // not the trigger — "928828" means nothing; "i need to return a
+        // board i just bought" is the scenario's actual topic.
+        name: (
+          b.name ??
+          b.prompt ??
+          (turns as { role?: string; text?: string }[])
+            .find((t) => t.role === 'customer' && (t.text ?? '').trim().length > 12)
+            ?.text ??
+          trigger ??
+          'test'
+        ).slice(0, 120),
         expectation: b.expectation,
         turns: turns as never,
         sourceConversationId,
