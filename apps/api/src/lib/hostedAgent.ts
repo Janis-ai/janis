@@ -6286,15 +6286,29 @@ async function replyAsHostedAgent(
     for (const w of widgets) {
       const wr = w as Record<string, unknown>;
       if (wr.type !== 'form' || wr.collect || !Array.isArray(wr.fields)) continue;
+      // Generic contact fields (email/name/phone/notes…) match every form on
+      // earth — only distinctive field names may count toward the overlap or
+      // a return ask swaps to the board-finder spec.
+      const GENERIC = new Set([
+        'email', 'name', 'first_name', 'last_name', 'phone', 'message',
+        'notes', 'comments', 'details', 'subject', 'anything_else',
+        'anything_else_we_should_know', 'how_can_we_help',
+      ]);
       const wf = new Set(
-        (wr.fields as { name?: string; label?: string }[]).flatMap((f) =>
-          [normField(f.name), normField(f.label)].filter((x): x is string => !!x),
-        ),
+        (wr.fields as { name?: string; label?: string }[])
+          .flatMap((f) =>
+            [normField(f.name), normField(f.label)].filter((x): x is string => !!x),
+          )
+          .filter((x) => !GENERIC.has(x)),
       );
       const cf = collectForms.find(
         (f) =>
-          (f.fields ?? []).filter((x) => wf.has(normField(x.name)!) || wf.has(normField(x.label)!))
-            .length >= 2,
+          (f.fields ?? []).filter(
+            (x) =>
+              (wf.has(normField(x.name)!) || wf.has(normField(x.label)!)) &&
+              !GENERIC.has(normField(x.name)!) &&
+              !GENERIC.has(normField(x.label)!),
+          ).length >= 2,
       );
       if (!cf?.name) continue;
       // Authored values ride onto the canonical fields — the model knew the
