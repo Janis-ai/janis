@@ -6386,15 +6386,21 @@ async function replyAsHostedAgent(
     );
     for (const f of unsetSelects.slice(0, 4)) {
       try {
-        const pick = await matchPromptsSemantically(
+        const res = await complete(
           llm,
-          [lastInboundText ?? ''],
-          f.options!,
+          'You map a customer message to the best-matching option in a support form. Reply with ONLY the option number, or 0 if none fits.',
+          [
+            {
+              role: 'user',
+              content: `MESSAGE: ${lastInboundText ?? ''}\nOPTIONS:\n${f.options!.map((o, i) => `${i + 1}. ${o}`).join('\n')}`,
+            },
+          ],
         );
-        const j = pick[0];
-        if (j != null) f.value = f.options![j];
-      } catch {
-        /* LLM unavailable — leave the select for the customer */
+        const n = Number(res.text?.match(/\d+/)?.[0] ?? 0);
+        if (n >= 1 && n <= f.options!.length) f.value = f.options![n - 1];
+        else console.warn(`[hosted] select prefill no-pick conv=${convId} opts=${f.options!.length}`);
+      } catch (e) {
+        console.warn(`[hosted] select prefill failed conv=${convId} err=${String(e).slice(0, 120)}`);
       }
     }
     // interactive components render inside the widget on webchat
