@@ -76,6 +76,13 @@ export function toolsFor(agent: AgentRow): ToolDef[] {
         out.bodyTemplate = b;
         if (cat?.params) out.params = cat.params;
         if (cat?.description) out.description = cat.description;
+        // Approval flags are catalog truth too — request_return moved to a
+        // file-then-decide flow, so a stale stored approval flag would keep
+        // gating the file call itself.
+        if (cat) {
+          if (cat.approval) out.approval = true;
+          else delete out.approval;
+        }
       } else if (!out.bodyTemplate && b) {
         out.bodyTemplate = b;
       }

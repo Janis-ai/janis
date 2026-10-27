@@ -202,19 +202,65 @@ export function mdSpans(text: string, keyBase = 0) {
  *  Label over value — the approval card lives in the chat rail where a
  *  side-by-side column wraps values mid-word. Non-scalar values
  *  stringify inline so structure stays visible. */
+/** gid://shopify/Order/6790076760241 → "Order 6790076760241" — the resource
+ *  kind matters, the gid prefix doesn't. */
+function shortId(v: unknown): string {
+  const s = typeof v === 'string' ? v : JSON.stringify(v);
+  return s.replace(/gid:\/\/shopify\/([A-Za-z]+)\/(\d+)/g, '$1 $2');
+}
+
+/** Flatten nested tool args into readable key → value rows — approvers
+ *  decide on a refund/return from "what for, how much, why", not a JSON
+ *  blob. Single-level objects flatten into parent.key; arrays of objects
+ *  list their meaningful fields inline. */
+function flattenArgs(obj: Record<string, unknown>, prefix = ''): [string, unknown][] {
+  const out: [string, unknown][] = [];
+  for (const [k, v] of Object.entries(obj)) {
+    const key = prefix ? `${prefix}.${k}` : k;
+    if (Array.isArray(v) && v.length && typeof v[0] === 'object' && v[0] !== null) {
+      (v as Record<string, unknown>[]).forEach((item, i) =>
+        out.push(...flattenArgs(item, `${key}[${i}]`)),
+      );
+    } else if (v && typeof v === 'object' && !Array.isArray(v)) {
+      out.push(...flattenArgs(v as Record<string, unknown>, key));
+    } else {
+      out.push([key, v]);
+    }
+  }
+  return out;
+}
+
+const NOISE_KEYS = /^(id|return_request$|gid|fulfillmentLineItemId|lineItemId|orderId)$/i;
+const LABEL_KEY = /customerNote|reason|note|quantity|returnReason|restockType|notify|title|code|name|email|order/i;
+
 export function ArgsRows({ args }: { args: Record<string, unknown> }) {
-  const entries = Object.entries(args);
-  if (!entries.length) return null;
+  const flat = flattenArgs(args).filter(([k]) => {
+    const leaf = k.split(/[.\[]/).pop() ?? k;
+    return !NOISE_KEYS.test(leaf) || LABEL_KEY.test(leaf);
+  });
+  if (!flat.length) return null;
   return (
     <div style={{ margin: '4px 0 2px', fontSize: 12.5 }}>
-      {entries.map(([k, v]) => (
-        <div key={k} style={{ padding: '2px 0' }}>
-          <div className="muted">{k.replace(/_/g, ' ')}</div>
-          <div className="mono" style={{ overflowWrap: 'anywhere', whiteSpace: 'pre-wrap' }}>
-            {typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)}
+      {flat.map(([k, v]) => {
+        const leaf = (k.split(/[.\[]/).pop() ?? k).replace(/_/g, ' ');
+        const shown = shortId(v);
+        const isNote = /customerNote|reason|note/i.test(leaf);
+        return (
+          <div key={k} style={{ padding: '2px 0', display: 'flex', gap: 8 }}>
+            <span className="muted" style={{ minWidth: 90, flexShrink: 0 }}>
+              {leaf}
+            </span>
+            <span
+              style={{
+                overflowWrap: 'anywhere',
+                fontWeight: isNote ? 600 : 400,
+              }}
+            >
+              {shown}
+            </span>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

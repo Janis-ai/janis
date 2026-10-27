@@ -387,6 +387,23 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         },
       },
       {
+        name: 'shopify_refund',
+        label: 'Issue a refund',
+        description:
+          'Issue a REFUND on a Shopify order — money out the door; a teammate approves before it executes. Use after the order is verified (shopify_lookup_order gives lineItem ids + totals). For returns with physical goods coming back, file shopify_request_return instead and refund on inspection. Tell the customer a refund is pending approval, never that it\'s already processed.',
+        approval: true,
+        identity: true,
+        method: 'POST',
+        url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
+        headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
+        bodyTemplate:
+          '{"query":"mutation($input:RefundInput!){refundCreate(input:$input){refund{id totalRefundedSet{shopMoney{amount currencyCode}}} userErrors{field message}}}","variables":{"input":${refund}}}',
+        params: {
+          refund:
+            'JSON RefundInput — {"orderId":"gid://shopify/Order/…","refundLineItems":[{"lineItemId":"gid://shopify/LineItem/…","quantity":1,"restockType":"RETURN"}],"note":"…","notify":true} — ids come from shopify_lookup_order (order.id + lineItems[].id). restockType: RETURN | NO_RESTOCK | LEGACY_RESTOCK | CANCEL. Set notify:false to skip the customer email.',
+        },
+      },
+      {
         name: 'shopify_create_discount',
         label: 'Create discount code',
         description:
