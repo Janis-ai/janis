@@ -118,9 +118,11 @@ describe('shopify self-service tools', () => {
     expect(Object.keys(t.params!)).toContain('customer');
   });
 
-  it('returnRequest is approval-gated (humans rule) and takes fulfillment line items', () => {
+  it('returnRequest files immediately — the parked decision card is the human gate', () => {
     const t = tool('shopify_request_return');
-    expect(t.approval).toBe(true);
+    // Not approval-gated itself: a successful file parks a shopify_return_decision
+    // card, and THAT approve/decline is the teammate's call.
+    expect(t.approval).toBeUndefined();
     expect(t.bodyTemplate).toContain('returnRequest');
     expect(t.bodyTemplate).toContain('ReturnRequestInput');
     expect(t.params?.return_request).toContain('fulfillmentLineItemId');
