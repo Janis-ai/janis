@@ -1,7 +1,7 @@
 import type { Db } from '../db/client.js';
 import type { agents } from '../db/schema.js';
 import { interpolateSecrets } from './secrets.js';
-import { CATALOG_TOOL_NAMES, IDENTITY_TOOL_NAMES, TEMPLATE_BODY_TEMPLATES, TEMPLATE_WIDGETS } from './toolTemplates.js';
+import { CATALOG_TOOL_NAMES, IDENTITY_TOOL_NAMES, TEMPLATE_BODY_TEMPLATES, TEMPLATE_WIDGETS, TOOL_TEMPLATES } from './toolTemplates.js';
 import type { ToolWidgetConfig } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
@@ -65,12 +65,20 @@ export function toolsFor(agent: AgentRow): ToolDef[] {
         const w = TEMPLATE_WIDGETS.get(t.name);
         if (w) out.widget = w;
       }
-      // Catalog tools always take the catalog template — a stored def
-      // snapshots whatever template existed at install, so fixes (like the
-      // returnRequest selector) would never reach already-installed agents.
+      // Catalog tools take catalog truth for body+params+description — a
+      // stored def snapshots whatever existed at install, so template/param
+      // fixes (returnRequest selector, returnReason requirement) would never
+      // reach already-installed agents. url/headers/secrets keep the stored
+      // copy — those carry the tenant's own credentials.
       const b = TEMPLATE_BODY_TEMPLATES.get(t.name);
-      if (b && CATALOG_TOOL_NAMES.has(t.name)) out.bodyTemplate = b;
-      else if (!out.bodyTemplate && b) out.bodyTemplate = b;
+      if (b && CATALOG_TOOL_NAMES.has(t.name)) {
+        const cat = TOOL_TEMPLATES.flatMap((x) => x.tools).find((x) => x.name === t.name);
+        out.bodyTemplate = b;
+        if (cat?.params) out.params = cat.params;
+        if (cat?.description) out.description = cat.description;
+      } else if (!out.bodyTemplate && b) {
+        out.bodyTemplate = b;
+      }
       return out;
     });
 }
