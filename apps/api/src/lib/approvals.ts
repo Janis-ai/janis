@@ -330,7 +330,7 @@ export async function decidePendingAction(
   })();
   const cardResult = summary ?? friendly ?? preview;
   const resultText = approve
-    ? `teammate approved and ran ${action.toolName}${preview ? ` — result: ${preview}` : ''}`
+    ? `teammate approved and ran ${action.toolName}${cardResult ? ` — ${cardResult}` : ''}`
     : `teammate declined the action ${action.toolName} — do not retry it; tell the customer it could not be done`;
 
   // Resolve the request card in place so console renders the outcome.
