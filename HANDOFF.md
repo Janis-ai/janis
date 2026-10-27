@@ -134,20 +134,31 @@ AGENTS.md §"Open work — competitive gap tracker" is the canonical list.
 External gates (www.janis.ai cutover, Meta/IG app review, Twilio A2P,
 Azure app reg, WorkOS, Stripe yearly prices) are Mike's manual track.
 
-## Test-replay context hydration (planned, not built)
+## Test-replay context hydration (built 2026-10-27)
 
-Scenarios saved from live conversations replay text-only turns — the model
-behaves worse than live because session state is missing. Findings:
-- ctx.convId = sourceConversationId already loads the real userProfile
-  (form-collected metadata) — done, free.
-- testRun already stubs EVERY tool call (simulated/proposed) — replays
-  are side-effect safe by design; hydration must stay in-memory, never
-  write to the real conversation.
-- GAP: tool RESULTS are not persisted (inspector keeps args/outcome/error
-  only), so replay can't recover "order #1005 = these items/this state".
-  Build: at test save time (agents.ts POST /tests), snapshot the source
-  conv's triggering-turn tool results + verified emails + profile into a
-  new agentTests.replay_context jsonb column; at run time (agentTests.ts),
-  seed ctx.toolMemo (callKey → stored result) so identical calls replay
-  real data, and pass verified emails so identity-gated tools behave as
-  live. Migration needed for the column.
+Scenarios saved from live conversations used to replay bare text turns —
+the model saw no session state and behaved worse than live. Now:
+- The inspector records each tool call's `key` (name::raw args) + capped
+  `result` on the stored reply message — so the console inspector finally
+  shows what a call RETURNED, and save time can snapshot real data.
+- POST /tests on a conversation snapshots `agent_tests.replay_context`
+  (migration 0116): the triggering reply's calls (key → result/outcome),
+  verifiedIdentityFor output, userProfile/externalId/agentSummary. Helpers:
+  replayContextFor / replayContextFrom in lib/agentTests.ts.
+- runAgentTest hydrates: ctx.toolMemo serves stored results for calls the
+  live turn made (memo hits now allowed under testRun), ctx.identity from
+  the snapshot makes identity-gated tools behave as live, and the conv
+  (snapshot, else live row) feeds systemPrompt + knowledgeQueryFor — the
+  replay now sees channel/customer context it never had.
+- Uncaptured calls still simulate; bare tests (no snapshot) keep the old
+  behavior — identity gate + fabricated-id check only apply when a
+  snapshot exists. Fetch-capable post-processing (reconcilePagedResult
+  fetcher, storefrontTruth, sellableCollectionCounts, page-retry,
+  collection-handle resolve) is gated off under testRun — a hydrated
+  'ran' result must never fire a real request.
+- Results cap at 3000 chars head+tail on the inspector; truncated JSON
+  still feeds the model but may not rebuild a cards widget in replay.
+- UI: scenario rows with a snapshot show "replays with live session
+  context" under the source-conversation link.
+- Identity is save-time state: emails verified AFTER the checkpoint save
+  are included — no per-turn versioning exists. Acceptable drift.

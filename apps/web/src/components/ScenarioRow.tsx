@@ -34,6 +34,9 @@ export interface ScenarioTest {
   original_reply?: string | null;
   source_conversation_id?: string | null;
   source_message_id?: string | null;
+  /** Saved from a real conversation with its session state snapshotted —
+   *  runs replay real tool results + verified identity, not bare text. */
+  has_replay_context?: boolean;
   last_run?: ScenarioRun | null;
   human_result?: 'pass' | 'fail' | 'unreviewed' | 'fixed_recheck' | null;
   fail_cause?: string | null;
@@ -507,6 +510,15 @@ export function ScenarioRow({
           >
             view source conversation →
           </Link>
+          {test.has_replay_context && (
+            <div
+              className="muted"
+              style={{ fontSize: 11, marginTop: 2 }}
+              title="Saved with the live session's tool results and verified identity — replays see the data the agent saw, not a simulated stand-in"
+            >
+              replays with live session context
+            </div>
+          )}
         </div>
       )}
 

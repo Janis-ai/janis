@@ -1074,6 +1074,11 @@ export const agentTests = pgTable(
     /** The turn right after the trigger in the source transcript — the agent's
      *  real answer or a marker like "(passed to a human teammate)". */
     originalReply: text('original_reply'),
+    /** Session state captured at save time so the replay runs under live
+     *  conditions instead of a bare text transcript: the triggering reply's
+     *  tool calls (key → stored result), the verified identity, and the
+     *  conversation profile/channel/summary. See replayContextFor. */
+    replayContext: jsonb('replay_context'),
     /** Expectation was written by the LLM at save time and hasn't been
      *  reviewed/edited — the "AI draft" badge. Cleared on manual edit. */
     expectationDraft: boolean('expectation_draft').notNull().default(false),

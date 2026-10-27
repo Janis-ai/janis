@@ -36,7 +36,7 @@ import { encryptSecret, loadSecretsMap } from '../lib/secrets.js';
 import { legacyBotDoc } from '../lib/legacyMongo.js';
 import { resolveLegacyBotCreds } from '../lib/legacyDfCreds.js';
 import { connectionSecrets } from '../lib/connections.js';
-import { llmFor, MAX_KNOWLEDGE_CHARS, MAX_NOTES_CHARS, resolveWidgetRef } from '../lib/hostedAgent.js';
+import { llmFor, MAX_KNOWLEDGE_CHARS, MAX_NOTES_CHARS, resolveWidgetRef, verifiedIdentityFor } from '../lib/hostedAgent.js';
 import {
   contextOf,
   contextScore,
@@ -46,7 +46,7 @@ import {
   triggerOf,
   type MatchTurn,
 } from '../lib/promptMatch.js';
-import { checkpointIndices, draftExpectation, generateScenarioDrafts, judgeExpectation, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
+import { checkpointIndices, draftExpectation, generateScenarioDrafts, judgeExpectation, replayContextFrom, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { configVersion } from '../lib/configVersion.js';
 import { agentNameTaken, groupNameTaken } from '../lib/names.js';
@@ -2546,6 +2546,10 @@ export function agentRoutes(db: Db) {
     source_conversation_id: t.sourceConversationId,
     source_message_id: t.sourceMessageId,
     original_reply: t.originalReply,
+    // The test replays hydrated with its saved session state — the UI
+    // marks it so "replays live context" reads differently from a bare
+    // text replay.
+    has_replay_context: !!t.replayContext,
     last_run: t.lastRun,
     category: t.category,
     source: t.source,
@@ -2703,14 +2707,16 @@ export function agentRoutes(db: Db) {
     const b = c.req.valid('json');
     let turns = b.turns ?? [];
     let sourceConversationId: string | null = null;
+    let sourceConv: typeof conversations.$inferSelect | null = null;
     if (b.conversation_id) {
       const [conv] = await db
-        .select({ id: conversations.id })
+        .select()
         .from(conversations)
         .where(and(eq(conversations.id, b.conversation_id), eq(conversations.agentId, agentId)))
         .limit(1);
       if (!conv) return c.json({ error: 'conversation not found' }, 404);
       sourceConversationId = conv.id;
+      sourceConv = conv;
       if (!turns.length) {
         // A transcript with human rescues is several tests: one per customer
         // message that led to intervention — each replayed with the context
@@ -2756,6 +2762,25 @@ export function agentRoutes(db: Db) {
           }
         }
 
+        // Replay context — each checkpoint's test hydrates with what the
+        // live turn had: the triggering reply's tool calls (key → stored
+        // result), the verified identity, and the conversation's profile/
+        // channel/summary. One identity resolution + one message read for
+        // the whole batch.
+        const replyMids = [
+          ...new Set(
+            ends.map((e) => full[e + 1]?.mid).filter((m): m is string => !!m),
+          ),
+        ];
+        const replyMsgs = replyMids.length
+          ? await db
+              .select({ id: messages.id, payload: messages.payload })
+              .from(messages)
+              .where(inArray(messages.id, replyMids))
+          : [];
+        const payloadByMid = new Map(replyMsgs.map((m) => [m.id, m.payload]));
+        const replayIdentity = await verifiedIdentityFor(db, conv, c.get('workspaceId'));
+
         const rows = await db
           .insert(agentTests)
           .values(
@@ -2771,6 +2796,11 @@ export function agentRoutes(db: Db) {
               // what followed the trigger in the real transcript — usually the
               // agent's actual reply, or a marker like "(passed to a human…)"
               originalReply: full[end + 1]?.text ?? null,
+              replayContext: replayContextFrom(
+                conv,
+                replayIdentity,
+                payloadByMid.get(full[end + 1]?.mid ?? ''),
+              ) as never,
             })),
           )
           .returning();
@@ -2836,6 +2866,16 @@ export function agentRoutes(db: Db) {
         return c.json({ test: toTest(hit, version), deduped: true }, 200);
       }
     }
+    // Turns were supplied so there's no identifiable reply message to pull
+    // tool calls from — the snapshot still carries the identity + profile
+    // the replayed prompt should see.
+    const replayCtx = sourceConv
+      ? replayContextFrom(
+          sourceConv,
+          await verifiedIdentityFor(db, sourceConv, c.get('workspaceId')),
+          undefined,
+        )
+      : null;
     const [row] = await db
       .insert(agentTests)
       .values({
@@ -2857,6 +2897,7 @@ export function agentRoutes(db: Db) {
         turns: turns as never,
         sourceConversationId,
         originalReply: b.original_reply ?? null,
+        ...(replayCtx ? { replayContext: replayCtx as never } : {}),
         ...(b.category ? { category: b.category } : {}),
         ...(b.source ? { source: b.source } : {}),
       })

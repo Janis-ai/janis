@@ -3101,7 +3101,18 @@ export interface InspectorToolCall {
   args?: Record<string, unknown>;
   /** First 300 chars of the result when the call failed. */
   error?: string;
+  /** The dedupe key (`name::raw arguments`) — lets a saved test look the
+   *  call up verbatim when it snapshots results for replay. */
+  key?: string;
+  /** The tool result as the model saw it (head+tail capped). Persisted so a
+   *  test saved from this conversation can replay real data — and so the
+   *  inspector shows what the call returned, not just that it ran. */
+  result?: string;
 }
+
+/** Cap for tool results persisted on the inspector — bounds the message
+ *  row while keeping enough data for a saved-test replay to quote. */
+const TOOL_RESULT_STORE_CAP = 3000;
 
 /** Args go into the inspector verbatim but capped — a prompt blob in a
  *  param would balloon the row. */
@@ -3211,13 +3222,15 @@ async function applyCardSugarArgs(
   tool: ToolDef | undefined,
   args: Record<string, unknown>,
   secrets: Record<string, string>,
+  /** False in a test run — collection-handle resolution hits the live API. */
+  live = true,
 ): Promise<void> {
   if (tool?.widget?.type !== 'cards') return;
   // Shopify's products query only filters collections by NUMERIC id —
   // a `collection:handle` clause silently matches everything. Resolve
   // the handle first; an unresolvable one scopes to id 0 (matches
   // nothing) rather than lying with the whole catalogue.
-  if (args.collection) {
+  if (args.collection && live) {
     const handle = String(args.collection).trim().toLowerCase();
     const cid = await shopifyCollectionId(secrets, handle);
     const clause = `collection_id:${cid ?? '0'}`;
@@ -3642,7 +3655,7 @@ export async function complete(
       // Cards-widget sugar args (`collection`, `sale_only`, `sort`,
       // `reverse`) live in applyCardSugarArgs — shared with the catalogue
       // backstop, which builds args without the model.
-      await applyCardSugarArgs(tool, args, secrets);
+      await applyCardSugarArgs(tool, args, secrets, !ctx?.testRun);
       // Pagination tap — the customer tapped the load-more tile, so the
       // continuation is fully determined already: replay the page-producing
       // args verbatim with the authoritative cursor. The model's own args
@@ -3658,11 +3671,15 @@ export async function complete(
         // unverifiable call can't even reach the approval queue. Verified
         // anchors (signed-claim customer id, single verified email) fill
         // first — the model can't know them and the filled value anchors.
-        if (tool?.identity && !ctx?.testRun && !ctx?.identity?.operator) {
+        // A hydrated test run also gates: the snapshot's identity decides,
+        // the way it did live. Bare test runs (no replay context) keep the
+        // old simulate-everything behavior.
+        const replayOrLive = !ctx?.testRun || !!ctx?.identity;
+        if (tool?.identity && replayOrLive && !ctx?.identity?.operator) {
           applyVerifiedAnchors(tool, args, ctx?.identity);
         }
         const denied =
-          tool?.identity && !ctx?.testRun && !ctx?.identity?.operator
+          tool?.identity && replayOrLive && !ctx?.identity?.operator
             ? identityBlockReason(
                 args,
                 ctx?.identity?.emails ?? new Set(),
@@ -3674,8 +3691,11 @@ export async function complete(
         // provider with a 400 the model narrates as an outage — block
         // pre-flight so the error teaches it to list/search or answer
         // from saved components instead.
-        const fabricated = ctx?.testRun ? null : fabricatedIdReason(args, producedIds, seenIds);
-        const memoHit = ctx?.testRun ? undefined : ctx?.toolMemo?.get(callKey);
+        const fabricated = replayOrLive ? fabricatedIdReason(args, producedIds, seenIds) : null;
+        // A hydrated test run also memo-hits: the snapshot's stored result
+        // IS the data the live turn saw — replaying it beats a simulated
+        // success the model then has to invent facts for.
+        const memoHit = ctx?.toolMemo?.get(callKey);
         if (memoHit) {
           // Regeneration replay — the same call already ran this run; serve
           // the stored result so side effects (emailed codes, approvals,
@@ -3686,16 +3706,16 @@ export async function complete(
           outcome = 'failed';
           result =
             'error: this exact call already failed this turn — do not retry it; reply to the visitor in plain text instead';
-        } else if (ctx?.testRun) {
-          outcome = gated ? 'proposed' : 'simulated';
-          result = gated
-            ? 'approval_required: this action needs a human teammate to approve it before it runs — it is now queued for review; tell the customer it is pending approval rather than calling the tool again'
-            : `simulated: ${call.function.name} returned successfully (test run — no real request was made)`;
         } else if (denied ?? fabricated) {
           outcome = 'failed';
           result =
             `error: ${denied ?? fabricated} — the action was NOT performed; ` +
             'say so plainly and offer a human teammate — never claim a return, refund, label, or any other action went through';
+        } else if (ctx?.testRun) {
+          outcome = gated ? 'proposed' : 'simulated';
+          result = gated
+            ? 'approval_required: this action needs a human teammate to approve it before it runs — it is now queued for review; tell the customer it is pending approval rather than calling the tool again'
+            : `simulated: ${call.function.name} returned successfully (test run — no real request was made)`;
         } else {
           // Server-side customer-facing builtins — dispatched on name
           // before the workspace-builtin / HTTP-tool fallthrough.
@@ -3871,7 +3891,7 @@ export async function complete(
           tool.widget,
           args,
           result,
-          gated
+          gated || ctx?.testRun
             ? undefined
             : async (after) => {
                 try {
@@ -3890,7 +3910,7 @@ export async function complete(
       // A collection picker's "N products" badge counts archived/draft/
       // unpublished rows the browse tools never render — rewrite it to the
       // sellable total so the promised count matches the carousel.
-      if (outcome === 'ran' && call.function.name === 'shopify_list_collections')
+      if (outcome === 'ran' && call.function.name === 'shopify_list_collections' && !ctx?.testRun)
         result = await sellableCollectionCounts(result, secrets);
       // Memoize the final result — a repair/regeneration pass that re-issues
       // the identical call replays this instead of re-firing a side effect.
@@ -3902,14 +3922,15 @@ export async function complete(
       toolTexts.push(result);
       if (outcome === 'ran') lastToolResult.set(call.function.name, result);
       extractIds(result, contextIds);
-      toolCalls.push({
+      const inspEntry: InspectorToolCall = {
         name: call.function.name,
         gated,
         outcome,
         ms: Date.now() - tCall,
         args: inspectorArgs(args),
         ...(outcome === 'failed' ? { error: result.slice(0, 300) } : {}),
-      });
+      };
+      toolCalls.push(inspEntry);
       // Live data binding — a widget-bound tool's JSON result renders as a
       // component on the reply, no model transcription needed. Tell the
       // model it rendered — otherwise it dutifully re-emits the same data
@@ -3964,7 +3985,7 @@ export async function complete(
             ) {
               try {
                 const retryArgs = { ...args, after: retryCursor };
-                let r2 = await callTool(tool, retryArgs, secrets);
+                let r2 = ctx?.testRun ? 'error: test run' : await callTool(tool, retryArgs, secrets);
                 let retryOk = !r2.startsWith('error') && !r2.startsWith('{"error"');
                 if (retryOk && r2.startsWith('{')) {
                   try {
@@ -4039,7 +4060,9 @@ export async function complete(
           const inStockAsk =
             !!inStockArg &&
             ['1', 'true', 'yes'].includes(String(args[inStockArg] ?? '').toLowerCase());
-          const flips = await storefrontTruth(w, secrets, inStockAsk ? 'drop' : 'badge', ctx?.shopperMarket);
+          const flips = ctx?.testRun
+            ? 0
+            : await storefrontTruth(w, secrets, inStockAsk ? 'drop' : 'badge', ctx?.shopperMarket);
           if (flips > 0) {
             if (w.items.length === 0) w = null;
             result += inStockAsk
@@ -4117,6 +4140,14 @@ export async function complete(
           result += `\n[0 rows matched — the named item is NOT sold on this storefront. Do not claim it exists, has a price, or can be ordered; say it isn't available and offer the closest thing that did come back in earlier results.]`;
         }
       }
+      // Persist the final result (post-annotations) on the inspector entry —
+      // capped head+tail so the JSON spine AND the appended notes survive.
+      // A test saved from this conversation replays these verbatim.
+      inspEntry.key = callKey;
+      inspEntry.result =
+        result.length > TOOL_RESULT_STORE_CAP
+          ? `${result.slice(0, 2300)}\n[…${result.length - 2900} chars omitted…]${result.slice(-600)}`
+          : result;
       msgs.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: result });
     }
 

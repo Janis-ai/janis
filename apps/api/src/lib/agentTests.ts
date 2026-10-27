@@ -1,6 +1,12 @@
 import { and, desc, eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agentTests, agents, knowledgeFiles, messages } from '../db/schema.js';
+import {
+  agentTests,
+  agents,
+  conversations,
+  knowledgeFiles,
+  messages,
+} from '../db/schema.js';
 import { enabledBuiltins } from './builtinTools.js';
 import { connectionSecrets } from './connections.js';
 import {
@@ -15,6 +21,7 @@ import {
   loadKnowledgeDocs,
   notesReserved,
   systemPrompt,
+  verifiedIdentityFor,
   withWorkspaceDefaults,
   type AgentRunContext,
   type InspectorToolCall,
@@ -27,6 +34,74 @@ import { recordLlmUsage } from './usage.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type AgentTestRow = typeof agentTests.$inferSelect;
+type ConvRow = typeof conversations.$inferSelect;
+
+/** Session state snapshotted when a test is saved from a real conversation —
+ *  replayContextFor writes it, runAgentTest hydrates the run with it so the
+ *  replay sees what the live turn saw instead of bare text turns. */
+export interface ReplayContext {
+  v: 1;
+  captured_at: string;
+  /** userProfile at save — rebuilt into the prompt's conversationContext. */
+  profile: Record<string, unknown> | null;
+  /** conv.externalId — the prefix carries the channel for prompt parity. */
+  external_id: string | null;
+  agent_summary: string | null;
+  /** verifiedIdentityFor at save — identity-gated tools then behave as live. */
+  identity: { emails: string[]; ids: string[]; operator: boolean };
+  /** The triggering reply's calls — inspector key → stored result/outcome. */
+  calls: { key: string; result: string; outcome: InspectorToolCall['outcome'] }[];
+}
+
+/** Assemble the snapshot from already-loaded parts — the route batches the
+ *  identity resolution and reply-message reads across a transcript's
+ *  checkpoints, then calls this once per saved test. */
+export function replayContextFrom(
+  conv: ConvRow,
+  identity: { emails: Set<string>; ids: Set<string>; operator: boolean },
+  replyPayload: unknown,
+): ReplayContext {
+  const calls: ReplayContext['calls'] = [];
+  const tools =
+    ((replyPayload as { inspector?: { tools?: InspectorToolCall[] } } | undefined)?.inspector
+      ?.tools ?? []) as InspectorToolCall[];
+  for (const t of tools) {
+    if (t.key && t.result != null) calls.push({ key: t.key, result: t.result, outcome: t.outcome });
+  }
+  return {
+    v: 1,
+    captured_at: new Date().toISOString(),
+    profile: (conv.userProfile as Record<string, unknown> | null) ?? null,
+    external_id: conv.externalId ?? null,
+    agent_summary: conv.agentSummary ?? null,
+    identity: { emails: [...identity.emails], ids: [...identity.ids], operator: identity.operator },
+    calls,
+  };
+}
+
+/** Snapshot what a saved test needs to replay faithfully: the tool calls the
+ *  reply message ran (key → result, recorded on the inspector since 0116),
+ *  the customer's verified identity at save time, and the profile/channel/
+ *  summary the prompt builder saw. replyMessageId is the message right after
+ *  the trigger — its inspector carries the turn's tool calls. */
+export async function replayContextFor(
+  db: Db,
+  conv: ConvRow,
+  workspaceId: string,
+  replyMessageId?: string | null,
+): Promise<ReplayContext> {
+  let payload: unknown;
+  if (replyMessageId) {
+    const [msg] = await db
+      .select({ payload: messages.payload })
+      .from(messages)
+      .where(eq(messages.id, replyMessageId))
+      .limit(1);
+    payload = msg?.payload;
+  }
+  const id = await verifiedIdentityFor(db, conv, workspaceId);
+  return replayContextFrom(conv, id, payload);
+}
 
 /** One transcript turn as the model sees it — customer → user, agent and
  *  operator markers → assistant. Mirrors transcriptFor's mapping. */
@@ -255,9 +330,30 @@ export async function runAgentTest(
     role: t.role === 'customer' ? 'user' : 'assistant',
     content: t.text,
   }));
+  // The snapshot rebuilds the conversation the prompt saw at save time —
+  // channel decides formatting/widget rules, the profile carries the
+  // verified-vs-self-reported labels identity-bound tools answer to, and
+  // the summary feeds retrieval. Older tests lack it: fall back to the
+  // live row, which still beats the bare-transcript prompt.
+  const replay = test.replayContext as ReplayContext | null;
+  let convForPrompt: ConvRow | undefined;
+  if (replay && (replay.profile || replay.external_id || replay.agent_summary)) {
+    convForPrompt = {
+      userProfile: replay.profile ?? {},
+      externalId: replay.external_id ?? '',
+      agentSummary: replay.agent_summary ?? null,
+    } as ConvRow;
+  } else if (test.sourceConversationId) {
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, test.sourceConversationId))
+      .limit(1);
+    convForPrompt = conv;
+  }
   // Retrieve against the test's customer turns — evals should see the same
   // knowledge slice a live conversation would.
-  const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history), {
+  const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history, convForPrompt), {
     reservedChars: notesReserved(agent),
   });
   // same grounding summary the "why this reply" inspector stamps
@@ -279,8 +375,28 @@ export async function runAgentTest(
     agent,
     testRun: true,
     suggesting: true,
+    // Hydrated identity — customer-record tools gate on the snapshot's
+    // verified anchors, exactly as the live turn did.
+    ...(replay?.identity
+      ? {
+          identity: {
+            emails: new Set(replay.identity.emails),
+            ids: new Set(replay.identity.ids),
+            operator: replay.identity.operator,
+          },
+        }
+      : {}),
+    // Hydrated tool results — a call the live turn made replays its stored
+    // result instead of a simulated success.
+    ...(replay?.calls?.length
+      ? {
+          toolMemo: new Map(
+            replay.calls.map((cl) => [cl.key, { result: cl.result, outcome: cl.outcome }]),
+          ),
+        }
+      : {}),
   };
-  const prompt = systemPrompt(agent, docs);
+  const prompt = systemPrompt(agent, docs, convForPrompt);
   const cfg = (agent.config ?? {}) as { builtin_tools?: string[] };
   const gen = await generateReply(
     llm,
