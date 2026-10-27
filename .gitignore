@@ -33,3 +33,6 @@ apps/api/scripts/tmp/
 
 # stray editor/terminal artifacts
 Terminal Saved Output.txt
+
+# pitch-film render output (video + frame grabs)
+docs/marketing/janis-demo/
