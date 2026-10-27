@@ -33,6 +33,7 @@ export type { LlmSettings } from './llm.js';
 export { llmFor } from './llm.js';
 import type { LlmSettings } from './llm.js';
 import { llmFor, meteredSettingsFor, OPENROUTER_BASE_URL } from './llm.js';
+import { matchPromptsSemantically } from './promptMatch.js';
 import { catalogModel, vendorForBaseUrl, OR_VENDOR_SLUG, effortFor } from '@janis/shared';
 import { runLegacyReply } from './legacyAgent.js';
 import { env } from '../env.js';
@@ -6372,6 +6373,30 @@ async function replyAsHostedAgent(
       (freshProfile?.userProfile ?? conv.userProfile ?? {}) as UserProfile,
       lastInboundText ?? '',
     );
+    // Selects still blank after the word-overlap pass get ONE semantic
+    // pick — "arrived cracked" → "damaged or wrong item" has zero word
+    // overlap, so only the model can map it.
+    const unsetSelects = widgets.flatMap((w) =>
+      (w as { type?: string; fields?: { value?: string; options?: string[] }[] }).type ===
+        'form'
+        ? ((w as { fields?: { value?: string; options?: string[] }[] }).fields ?? []).filter(
+            (f) => !f.value && Array.isArray(f.options) && f.options.length > 0,
+          )
+        : [],
+    );
+    for (const f of unsetSelects.slice(0, 4)) {
+      try {
+        const pick = await matchPromptsSemantically(
+          llm,
+          [lastInboundText ?? ''],
+          f.options!,
+        );
+        const j = pick[0];
+        if (j != null) f.value = f.options![j];
+      } catch {
+        /* LLM unavailable — leave the select for the customer */
+      }
+    }
     // interactive components render inside the widget on webchat
     const widgetFlag = widgets.length ? { widgets } : {};
     // "Why did it say that?" — model/token/tool trace stamped on the stored
