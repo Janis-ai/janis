@@ -5,7 +5,7 @@ import type { AgentConfig, OutboundWebhook, QuickReply, UserProfile } from '@jan
 
 type CollectForm = NonNullable<AgentConfig['collect_forms']>[number];
 import type { Db } from '../db/client.js';
-import { agents, agentWidgets, alerts, channelBindings, channels, contactIdentities, contacts, conversations, helpArticles, knowledgeFiles, memberships, messages, users, workspaces } from '../db/schema.js';
+import { agents, agentWidgets, alerts, channelBindings, channels, contactIdentities, contacts, conversations, helpArticles, knowledgeFiles, memberships, messages, pendingActions, users, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
 import { fireErrorAlert } from './ruleAlerts.js';
 import { storeSuggestion } from '../services/suggestions.js';
@@ -15,6 +15,7 @@ import { freshShopifyToken } from './shopifyToken.js';
 import { connectionSecrets } from './connections.js';
 import { copilotBuiltins, enabledBuiltins, type BuiltinTool } from './builtinTools.js';
 import { bus } from './bus.js';
+import { toMessage } from './serializers.js';
 import { PLANS, planFor } from './plans.js';
 import type { AttachmentRef } from './channels.js';
 import { getUpload } from './uploads.js';
@@ -3748,12 +3749,77 @@ export async function complete(
       // returnDeclineRequest.
       if (outcome === 'ran' && call.function.name === 'shopify_request_return' && ctx?.agent && !ctx.testRun) {
         try {
-          const rid = (
-            JSON.parse(result) as {
-              data?: { returnRequest?: { return?: { id?: string } } };
+          const parsed = JSON.parse(result) as {
+            data?: {
+              returnRequest?: {
+                return?: { id?: string };
+                userErrors?: { field?: unknown; message?: string }[];
+              };
+            };
+          };
+          const rid = parsed.data?.returnRequest?.return?.id;
+          if (!rid) {
+            // Shopify accepted the HTTP call but refused the request
+            // (duplicate return on the line item, item not returnable…)
+            // — narrate the real reason, never claim it filed.
+            const errs =
+              parsed.data?.returnRequest?.userErrors
+                ?.map((e) => e.message ?? '')
+                .filter(Boolean)
+                .join('; ') ?? 'unknown';
+            outcome = 'failed';
+            result = `error: return request was not filed — ${errs}`;
+            failedCalls.add(callKey);
+            // The likely cause is a return already REQUESTED on this order —
+            // and we may already hold its decision card from an earlier
+            // thread. Resurface it here instead of narrating a dead end.
+            const orderId = (args?.return_request as { orderId?: string } | undefined)?.orderId;
+            if (orderId && ctx?.agent) {
+              const prior = await ctx.db
+                .select()
+                .from(pendingActions)
+                .where(
+                  and(
+                    eq(pendingActions.agentId, ctx.agent.id),
+                    eq(pendingActions.toolName, 'shopify_return_decision'),
+                    eq(pendingActions.status, 'pending'),
+                  ),
+                )
+                .limit(10);
+              const match = prior.find(
+                (p) =>
+                  (p.args as { orderId?: string } | null)?.orderId === orderId,
+              );
+              if (match) {
+                const [row] = await ctx.db
+                  .insert(messages)
+                  .values({
+                    conversationId: ctx.convId,
+                    direction: 'human',
+                    text: 'approval requested — shopify_return_decision',
+                    flags: { action_request: true },
+                    payload: {
+                      internal: true,
+                      event: 'approval requested',
+                      action: {
+                        id: match.id,
+                        tool: 'shopify_return_decision',
+                        args: match.args,
+                        status: 'pending',
+                        reason:
+                          (match.args as { reason?: string } | null)?.reason ??
+                          null,
+                      },
+                    },
+                  })
+                  .returning();
+                bus.publish(ctx.agent.workspaceId, { type: 'message', data: toMessage(row) });
+                result =
+                  `error: a return request for this order already exists and is awaiting a teammate's decision — ` +
+                  'the open approval card is back in this thread; tell the customer their request is still under review';
+              }
             }
-          ).data?.returnRequest?.return?.id;
-          if (rid) {
+          } else {
             const decideTool = {
               name: 'shopify_return_decision',
               label: 'Decide return request',
@@ -3771,9 +3837,13 @@ export async function complete(
             const rr = args?.return_request as
               | { returnLineItems?: { customerNote?: string }[] }
               | undefined;
+            const rrArgs = args?.return_request as
+              | { orderId?: string; returnLineItems?: { customerNote?: string }[] }
+              | undefined;
             await requestToolApproval(ctx.db, ctx.agent, ctx.convId, decideTool, {
               id: rid,
-              reason: rr?.returnLineItems?.[0]?.customerNote ?? 'return request',
+              orderId: rrArgs?.orderId,
+              reason: rrArgs?.returnLineItems?.[0]?.customerNote ?? 'return request',
             } as Record<string, unknown>);
           }
         } catch {
@@ -6222,9 +6292,24 @@ async function replyAsHostedAgent(
             .length >= 2,
       );
       if (!cf?.name) continue;
+      // Authored values ride onto the canonical fields — the model knew the
+      // order number/topic and swapping to cf.fields would drop them.
+      const authoredVal = new Map(
+        (wr.fields as { name?: string; label?: string; value?: unknown }[]).flatMap((f) =>
+          f.value != null && String(f.value).trim()
+            ? [
+                [normField(f.name) ?? '', String(f.value)],
+                [normField(f.label) ?? '', String(f.value)],
+              ]
+            : [],
+        ),
+      );
       wr.title = cf.title ?? cf.name;
       wr.submit_label = cf.submit_label;
-      wr.fields = cf.fields;
+      wr.fields = (cf.fields ?? []).map((f) => {
+        const v = authoredVal.get(normField(f.name) ?? '') ?? authoredVal.get(normField(f.label) ?? '');
+        return v != null ? { ...f, value: v } : f;
+      });
       wr.collect = cf.name;
     }
     const [freshProfile] = await db
