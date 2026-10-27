@@ -76,7 +76,7 @@ card → "Migrated from the classic setup — 5 agents" panel with engine
 badges + Manage links.
 
 > "And here's the part you can't buy: seventeen thousand businesses
-> signed up for the classic Janis inside Slack. Migrating is one click —
+> signed up for the classic Janis. Migrating is one click —
 > agents, channels, credentials come with them. Distribution is a rail,
 > not an ad spend."
 

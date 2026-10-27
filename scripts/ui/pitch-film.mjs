@@ -4,7 +4,7 @@
 // read-along copy burns them via .ass so both cuts share the same takes.
 //   SNOW_TOKEN=<snow ws> SNOW_TOKEN2=<main ws> SHOP_PASS=newtsu node scripts/ui/pitch-film.mjs
 import { chromium } from 'playwright';
-import { mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SHOP = process.env.SHOP ?? 'https://snowboardsareus.myshopify.com';
@@ -85,8 +85,9 @@ async function humanType(page, loc, text) {
 const BEATS = {};
 const GAPS = {};
 let segT0 = 0;
-const seg = async (name, fn, cookie) => {
+const seg = async (name, fn, cookie, stateFile) => {
   const ctx = await browser.newContext({
+    ...(stateFile && existsSync(stateFile) ? { storageState: stateFile } : {}),
     viewport: { width: 1600, height: 1000 },
     recordVideo: { dir: VID, size: { width: 1600, height: 1000 } },
   });
@@ -105,7 +106,7 @@ const seg = async (name, fn, cookie) => {
   const gaps = (GAPS[name] = []);
   page.__gaps = gaps;
   const beat = (n, cap) => marks.push({ n, t: Date.now() - t0, cap });
-  try { await fn(page, cur, beat); }
+  try { await fn(page, cur, beat, ctx); }
   catch (e) { console.log(`${name} ERR:`, e.message); }
   finally {
     await ctx.close();
@@ -157,16 +158,18 @@ const ONLY = process.env.ONLY;
 if (!ONLY || ONLY === 'act0')
   await seg('act0-queue', async (page, cur, beat) => {
     beat('open', 'This is Janis.');
+    beat('cut_from');
     await page.goto(`${APP}/conversations`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('a.conv-row', { timeout: 20000 });
     await tidy(page);
+    beat('cut_to');
     beat('queue', "This is every customer conversation a business has — web chat,\nWhatsApp, email, SMS, voice, Slack — one queue. Most lines are\nthe AI working; the flagged ones are asking for a human.");
     await page.waitForTimeout(12000);
   }, TOKEN);
 
 // ==== Act 1 — the storefront, live =====================================
 if ((!ONLY || ONLY === 'act1') && SHOP_PASS)
-  await seg('act1-storefront', async (page, cur, beat) => {
+  await seg('act1-storefront', async (page, cur, beat, ctx) => {
     await page.goto(SHOP, { waitUntil: 'domcontentloaded' });
     if (page.url().includes('/password')) {
       await cur.click(page.locator('input[name="password"]'));
@@ -178,7 +181,9 @@ if ((!ONLY || ONLY === 'act1') && SHOP_PASS)
     beat('store', "This is Janis inside a real Shopify storefront —\nlive catalog, live pricing, inside the chat bubble.");
     await page.waitForSelector('#janis-bubble', { timeout: 30000 });
     // the teaser blurb invites the click — let it live on camera
+    beat('cut_from');
     await page.waitForSelector('#janis-teaser', { timeout: 30000 }).catch(() => {});
+    beat('cut_to');
     await page.waitForTimeout(4000);
     beat('teaser', 'The widget introduces itself — proactive, branded,\ninviting the shopper in before they even click.');
     await page.waitForTimeout(2500);
@@ -194,8 +199,10 @@ if ((!ONLY || ONLY === 'act1') && SHOP_PASS)
     await page.waitForTimeout(1200);
 
     await say(page, cur, 'Show me the snowboards you have for sale');
+    beat('cut_from');
     if (!(await page.locator('.janis-wcards').count()))
       await page.waitForSelector('.janis-wcards', { timeout: 20000 }).catch(() => {});
+    beat('cut_to');
     if (!(await page.locator('.janis-wcards').count()))
       await say(page, cur, 'just show me all the boards you carry');
     await scrollEnd(page);
@@ -215,16 +222,22 @@ if ((!ONLY || ONLY === 'act1') && SHOP_PASS)
     await page.waitForTimeout(2500);
 
     await say(page, cur, 'Actually — can I talk to a person about a return?');
+    beat('cut_from');
+    await page.waitForTimeout(5000);
+    beat('cut_to');
     beat('handoff', "A request AI shouldn't guess on — it doesn't fake it.\nIt raises a human alert instead. Watch what happens next.");
-    await page.waitForTimeout(7000);
+    await page.waitForTimeout(3000);
+    await ctx.storageState({ path: '/tmp/janis-pitch/state-store.json' });
   });
 else if (!ONLY || ONLY === 'act1') console.log('act1 skipped — SHOP_PASS unset');
 
 // ==== Act 2 — one thread, console side =================================
 if (!ONLY || ONLY === 'act2')
-  await seg('act2-thread', async (page, cur, beat) => {
+  await seg('act2-thread', async (page, cur, beat, ctx) => {
+    beat('cut_from');
     await page.goto(`${APP}/agents/${AGENT}/inbox`, { waitUntil: 'domcontentloaded' });
     await tidy(page);
+    beat('cut_to');
     await page.waitForTimeout(2500);
     const firstRow = page.locator('a[href*="/inbox/"]').first();
     if (await firstRow.count()) await cur.click(firstRow);
@@ -255,6 +268,7 @@ if (!ONLY || ONLY === 'act2')
       await page.waitForTimeout(2500);
     }
     // back to the storefront — the human's reply lands in the visitor's bubble
+    beat('cut_from');
     await page.goto(SHOP, { waitUntil: 'domcontentloaded' });
     if (page.url().includes('/password')) {
       await cur.click(page.locator('input[name="password"]'));
@@ -263,18 +277,21 @@ if (!ONLY || ONLY === 'act2')
       await page.waitForLoadState('domcontentloaded');
     }
     await page.waitForSelector('#janis-bubble', { timeout: 30000 }).catch(() => {});
+    beat('cut_to');
     beat('backtostore', 'And back on the store — the human\'s answer\nlands in the same bubble. Seamless, both sides.');
     await page.waitForTimeout(2500);
     await cur.click(page.locator('#janis-bubble')).catch(() => {});
     await page.waitForSelector('#janis-msgs .janis-msg', { timeout: 15000 }).catch(() => {});
     await page.waitForTimeout(3500);
-  }, TOKEN);
+  }, TOKEN, '/tmp/janis-pitch/state-store.json');
 
 // ==== Act 3 — rescue → regression test =================================
 if (!ONLY || ONLY === 'act3')
   await seg('act3-learn', async (page, cur, beat) => {
+    beat('cut_from');
     await page.goto(`${APP}/agents/${AGENT}/tests`, { waitUntil: 'domcontentloaded' });
     await tidy(page);
+    beat('cut_to');
     await page.waitForTimeout(3500);
     const card = page.locator('details.card:has-text("rescued conversation")');
     if (await card.count()) {
@@ -287,7 +304,8 @@ if (!ONLY || ONLY === 'act3')
       await page.evaluate(() => window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' }));
       await page.waitForTimeout(2500);
     } else {
-      await page.goto(`${APP}/agents/${AGENT}/knowledge?sub=gaps`, { waitUntil: 'domcontentloaded' });
+      beat('cut_from');
+    await page.goto(`${APP}/agents/${AGENT}/knowledge?sub=gaps`, { waitUntil: 'domcontentloaded' });
       beat('gaps', 'And every gap becomes a knowledge draft —\nthe product gets better because it was used.');
       await page.waitForTimeout(5000);
     }
@@ -306,6 +324,7 @@ if (!ONLY || ONLY === 'act4')
     ];
     await page.goto(stops[0][1], { waitUntil: 'domcontentloaded' });
     await tidy(page);
+    beat('cut_to');
     beat(stops[0][0], stops[0][2]);
     await page.waitForTimeout(7000);
     for (const [name, url, cap] of stops.slice(1)) {
@@ -328,8 +347,10 @@ if (!ONLY || ONLY === 'act4')
 // ==== Act 5 — distribution ==============================================
 if (!ONLY || ONLY === 'act5')
   await seg('act5-distribution', async (page, cur, beat) => {
+    beat('cut_from');
     await page.goto(`${APP}/settings?section=escalation`, { waitUntil: 'domcontentloaded' });
     await tidy(page);
+    beat('cut_to');
     await page.waitForSelector('text=janistest', { timeout: 20000 });
     await page.evaluate(() => {
       const el = [...document.querySelectorAll('*')].find((e) => e.textContent?.trim() === 'janistest3');
