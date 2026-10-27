@@ -305,7 +305,30 @@ export async function decidePendingAction(
       return null;
     }
   })();
-  const cardResult = summary ?? preview;
+  // Webhook results are raw provider JSON — the card shows a one-line
+  // summary instead of dumping the blob: provider userErrors, the returned
+  // status when present, else a plain "ran".
+  const friendly = (() => {
+    if (!result) return null;
+    try {
+      const j = JSON.parse(result) as Record<string, unknown>;
+      const data = (j.data ?? {}) as Record<string, Record<string, unknown>>;
+      for (const key of Object.keys(data)) {
+        const ue = data[key]?.userErrors;
+        if (Array.isArray(ue) && ue.length) {
+          return `provider declined: ${(ue as { message?: string }[]).map((e) => e.message ?? '').join('; ')}`;
+        }
+        for (const inner of Object.values(data[key] ?? {})) {
+          const st = (inner as { status?: string })?.status;
+          if (typeof st === 'string') return `status: ${st}`;
+        }
+      }
+      return 'ran';
+    } catch {
+      return null;
+    }
+  })();
+  const cardResult = summary ?? friendly ?? preview;
   const resultText = approve
     ? `teammate approved and ran ${action.toolName}${preview ? ` — result: ${preview}` : ''}`
     : `teammate declined the action ${action.toolName} — do not retry it; tell the customer it could not be done`;
