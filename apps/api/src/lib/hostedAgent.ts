@@ -4302,8 +4302,12 @@ function attachmentNote(payload: unknown): string {
  * (contact profile, or an earlier-collected metadata value). The input stays
  * editable; this saves re-typing, it doesn't answer for them. */
 export function prefillFormFields(
-  widgets: { type: string; fields?: { name: string; value?: string }[] }[],
+  widgets: {
+    type: string;
+    fields?: { name: string; value?: string; options?: string[] }[];
+  }[],
   profile: UserProfile & { metadata?: Record<string, unknown> },
+  contextText = '',
 ): void {
   const meta = (k: string): string => {
     const bag = profile.metadata ?? {};
@@ -4334,10 +4338,32 @@ export function prefillFormFields(
   };
   for (const w of widgets) {
     if (w.type !== 'form' || !Array.isArray(w.fields)) continue;
+    const ctx = contextText.toLowerCase();
     for (const f of w.fields) {
       if (f.value) continue;
       const v = guess(f.name);
-      if (v) f.value = v;
+      if (v) {
+        f.value = v;
+        continue;
+      }
+      // Select fields can't guess from the profile — pick the option whose
+      // words the customer literally used ("can i get a refund" → the refund
+      // option). Every word in the option must appear so multi-word labels
+      // ("Return or exchange") don't match on a stray "or".
+      if (Array.isArray(f.options) && f.options.length && ctx) {
+        let best: string | null = null;
+        let bestScore = 0;
+        for (const opt of f.options) {
+          const words = String(opt).toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 2);
+          if (!words.length) continue;
+          const hits = words.filter((w) => ctx.includes(w)).length;
+          if (hits === words.length && hits > bestScore) {
+            best = opt;
+            bestScore = hits;
+          }
+        }
+        if (best) f.value = best;
+      }
     }
   }
 }
@@ -6339,6 +6365,7 @@ async function replyAsHostedAgent(
     prefillFormFields(
       widgets,
       (freshProfile?.userProfile ?? conv.userProfile ?? {}) as UserProfile,
+      lastInboundText ?? '',
     );
     // interactive components render inside the widget on webchat
     const widgetFlag = widgets.length ? { widgets } : {};
