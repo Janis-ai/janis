@@ -52,6 +52,7 @@ export function CorrectThisCard({
   onSaved,
   onFixed,
   onGoStep,
+  onDeleted,
 }: {
   agentId: string;
   cfg: AgentConfig;
@@ -67,6 +68,10 @@ export function CorrectThisCard({
   /** Navigate to a builder step (Teach it / Abilities) — the fix card for
    *  ability suggests connecting a tool rather than fixing in place. */
   onGoStep?: (step: 'teach' | 'abilities') => void;
+  /** The scenario was deleted through the card — parents holding local
+   *  copies (injected deep-link rows) drop it, query invalidation alone
+   *  can't reach those. */
+  onDeleted?: (scenarioId: string) => void;
 }) {
   const qc = useQueryClient();
   const scenario = target.scenario;
@@ -259,6 +264,7 @@ export function CorrectThisCard({
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
       void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
+      onDeleted?.(scenario!.id);
       onClose();
     },
     onError: (e) => setError(e.message),

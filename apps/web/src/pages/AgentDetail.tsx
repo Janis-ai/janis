@@ -4185,6 +4185,35 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
 
   const invalidate = () => void qc.invalidateQueries({ queryKey: ['agent-tests', agentId] });
 
+  // A delete must drop the row from EVERY cached view at once — injected
+  // deep-link mounts live outside the paged query and would otherwise keep
+  // rendering a scenario that no longer exists — then invalidate for the
+  // server's truth.
+  const dropTests = (gone: (t: AgentTest) => boolean) => {
+    setInjected((prev) => {
+      const next = Object.fromEntries(Object.entries(prev).filter(([, t]) => !gone(t)));
+      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
+    });
+    qc.setQueriesData(
+      { queryKey: ['agent-tests', agentId] },
+      (
+        old: { pages?: { tests: AgentTest[] }[]; tests?: AgentTest[] } | undefined,
+      ) =>
+        old?.pages
+          ? {
+              ...old,
+              pages: old.pages.map((p) => ({
+                ...p,
+                tests: p.tests.filter((t) => !gone(t)),
+              })),
+            }
+          : old?.tests
+            ? { ...old, tests: old.tests.filter((t) => !gone(t)) }
+            : old,
+    );
+    invalidate();
+  };
+
   // Human verdicts on rows — same PATCH the Try-step and test-chat thumbs
   // write; a fail also opens the diagnose card on the stored reply.
   const markTest = useMutation({
@@ -4332,13 +4361,13 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   const del = useMutation({
     mutationFn: (testId: string) =>
       api(`/api/agents/${agentId}/tests/${testId}`, { method: 'DELETE' }),
-    onSuccess: invalidate,
+    onSuccess: (_r, testId) => dropTests((t) => t.id === testId),
     onError: (e) => setErr(e.message),
   });
   const delGroup = useMutation({
     mutationFn: (sourceConvId: string) =>
       api(`/api/agents/${agentId}/tests?source=${sourceConvId}`, { method: 'DELETE' }),
-    onSuccess: invalidate,
+    onSuccess: (_r, sourceConvId) => dropTests((t) => t.source_conversation_id === sourceConvId),
     onError: (e) => setErr(e.message),
   });
   const saveExp = useMutation({
@@ -5157,6 +5186,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                 setRunning(scenarioId);
                 runOne.mutate(scenarioId);
               }}
+              onDeleted={(scenarioId) => dropTests((t) => t.id === scenarioId)}
               onGoStep={(s) => navigate(`/agents/new/${agentId}?step=${s}`)}
             />
           </div>
