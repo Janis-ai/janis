@@ -319,8 +319,10 @@ export async function decidePendingAction(
           return `provider declined: ${(ue as { message?: string }[]).map((e) => e.message ?? '').join('; ')}`;
         }
         for (const inner of Object.values(data[key] ?? {})) {
-          const st = (inner as { status?: string })?.status;
-          if (typeof st === 'string') return `status: ${st}`;
+          const ret = inner as { status?: string; name?: string };
+          if (typeof ret?.status === 'string') {
+            return ret.name ? `${ret.name} — status: ${ret.status}` : `status: ${ret.status}`;
+          }
         }
       }
       return 'ran';

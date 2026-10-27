@@ -380,7 +380,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
         headers: { 'X-Shopify-Access-Token': '{{secrets.SHOPIFY_TOKEN}}' },
         bodyTemplate:
-          '{"query":"mutation($input:ReturnRequestInput!){returnRequest(input:$input){return{id status} userErrors{field message}}}","variables":{"input":${return_request}}}',
+          '{"query":"mutation($input:ReturnRequestInput!){returnRequest(input:$input){return{id name status} userErrors{field message}}}","variables":{"input":${return_request}}}',
         params: {
           return_request:
             'JSON ReturnRequestInput — {"orderId":"gid://shopify/Order/…","returnLineItems":[{"fulfillmentLineItemId":"gid://shopify/FulfillmentLineItem/…","quantity":1,"returnReason":"DEFECTIVE","customerNote":"…"}]} — ids come from shopify_lookup_order (order.id + fulfillments[].fulfillmentLineItems[].id). returnReason is REQUIRED per line item — pick the closest of DEFECTIVE, WRONG_ITEM, NOT_AS_DESCRIBED, WRONG_SIZE (SIZE_TOO_LARGE/SIZE_TOO_SMALL), UNWANTED, STYLE, COLOR, OTHER and put the customer\'s own words in customerNote.',

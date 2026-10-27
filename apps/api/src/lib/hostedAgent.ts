@@ -3835,7 +3835,7 @@ export async function complete(
               url: tool!.url,
               headers: tool!.headers,
               bodyTemplate:
-                '{"query":"mutation($id:ID!){returnApproveRequest(input:{id:$id}){return{id status} userErrors{field message}}}","variables":{"id":${id}}}',
+                '{"query":"mutation($id:ID!){returnApproveRequest(input:{id:$id}){return{id name status} userErrors{field message}}}","variables":{"id":${id}}}',
               denyTemplate:
                 '{"query":"mutation($id:ID!){returnDeclineRequest(input:{id:$id,declineReason:OTHER}){userErrors{field message}}}","variables":{"id":${id}}}',
             } as unknown as ToolDef;
