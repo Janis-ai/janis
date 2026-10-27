@@ -47,6 +47,7 @@ import {
   type MatchTurn,
 } from '../lib/promptMatch.js';
 import { checkpointIndices, draftExpectation, generateScenarioDrafts, judgeExpectation, replayContextFrom, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
+import { deleteAgentsCascade } from '../lib/agentCleanup.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { configVersion } from '../lib/configVersion.js';
 import { agentNameTaken, groupNameTaken } from '../lib/names.js';
@@ -2178,47 +2179,11 @@ export function agentRoutes(db: Db) {
   app.delete('/:id', agentAdmin, async (c) => {
     const agentId = c.req.param('id');
     const workspaceId = c.get('workspaceId');
-    // No ON DELETE CASCADE in the schema — remove dependent rows leaf-first.
-    const convIds = (
-      await db
-        .select({ id: conversations.id })
-        .from(conversations)
-        .where(eq(conversations.agentId, agentId))
-    ).map((r) => r.id);
-    const chanIds = (
-      await db.select({ id: channels.id }).from(channels).where(eq(channels.agentId, agentId))
-    ).map((r) => r.id);
+    // No ON DELETE CASCADE in the schema — deleteAgentsCascade walks every
+    // agent-keyed table leaf-first (shared with the workspace delete so the
+    // two paths can't drift — a shopify_shops row used to block this).
     const [row] = await db.transaction(async (tx) => {
-      // Rows keyed by agent that also hold conv/message refs go first.
-      await tx.delete(pendingActions).where(eq(pendingActions.agentId, agentId));
-      await tx.delete(usageEvents).where(eq(usageEvents.agentId, agentId));
-      if (convIds.length) {
-        await tx.delete(alerts).where(inArray(alerts.conversationId, convIds));
-        await tx.delete(suggestions).where(inArray(suggestions.conversationId, convIds));
-        await tx.delete(slackThreads).where(inArray(slackThreads.conversationId, convIds));
-        await tx.delete(channelBindings).where(inArray(channelBindings.conversationId, convIds));
-        await tx.delete(messages).where(inArray(messages.conversationId, convIds));
-        await tx.delete(conversations).where(inArray(conversations.id, convIds));
-      }
-      if (chanIds.length) {
-        await tx.delete(channelBindings).where(inArray(channelBindings.channelId, chanIds));
-        // Channel-keyed dependents without cascade — campaign sends before
-        // campaigns (send rows reference their campaign).
-        await tx.delete(campaignSends).where(inArray(campaignSends.channelId, chanIds));
-        await tx.delete(campaigns).where(inArray(campaigns.channelId, chanIds));
-        await tx.delete(contactIdentities).where(inArray(contactIdentities.channelId, chanIds));
-        await tx.delete(channels).where(inArray(channels.id, chanIds));
-      }
-      await tx.delete(helpSearchLog).where(eq(helpSearchLog.agentId, agentId));
-      await tx.delete(helpArticles).where(eq(helpArticles.agentId, agentId));
-      await tx.delete(agentTests).where(eq(agentTests.agentId, agentId));
-      await tx.delete(knowledgeFiles).where(eq(knowledgeFiles.agentId, agentId));
-      await tx.delete(savedReplies).where(eq(savedReplies.agentId, agentId));
-      await tx.delete(alertRules).where(eq(alertRules.agentId, agentId));
-      await tx.delete(agentSecrets).where(eq(agentSecrets.agentId, agentId));
-      await tx.delete(agentConnections).where(eq(agentConnections.agentId, agentId));
-      await tx.delete(agentMembers).where(eq(agentMembers.agentId, agentId));
-      await tx.delete(webhookDeliveries).where(eq(webhookDeliveries.agentId, agentId));
+      await deleteAgentsCascade(tx, [agentId]);
       return tx
         .delete(agents)
         .where(and(eq(agents.id, agentId), eq(agents.workspaceId, workspaceId)))

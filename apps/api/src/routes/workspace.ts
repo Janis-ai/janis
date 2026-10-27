@@ -11,30 +11,33 @@ import { effectivePlanKey } from '../lib/plans.js';
 import { scrubLlmBlock } from '../lib/serializers.js';
 import {
   agents,
-  alertRules,
-  alerts,
+  agentTestRuns,
+  analyticsEvents,
   campaigns,
   campaignSends,
-  channelBindings,
-  channels,
-  contactIdentities,
+  contactLists,
   contacts,
+  conversionEvents,
   conversations,
+  crmActivityQueue,
+  crmConnections,
   digests,
-  knowledgeFiles,
-  agentSecrets,
+  errorReports,
+  evalSuggestions,
+  formSubmissions,
+  memberGroups,
   memberships,
-  messages,
   metaConnections,
+  pendingActions,
   savedReplies,
+  savedViews,
   sessions,
   slackInstallations,
-  slackThreads,
-  suggestions,
+  suppressions,
   usageEvents,
-  webhookDeliveries,
   workspaces,
 } from '../db/schema.js';
+import { deleteAgentsCascade } from '../lib/agentCleanup.js';
 import { stripe } from '../lib/stripe.js';
 import {
   listConnections,
@@ -519,50 +522,32 @@ export function workspaceRoutes(db: Db) {
     const agentIds = (
       await db.select({ id: agents.id }).from(agents).where(eq(agents.workspaceId, workspaceId))
     ).map((r) => r.id);
-    const convIds = agentIds.length
-      ? (
-          await db
-            .select({ id: conversations.id })
-            .from(conversations)
-            .where(inArray(conversations.agentId, agentIds))
-        ).map((r) => r.id)
-      : [];
-    // (users are workspace-independent now — memberships, not user rows, go)
-
-    if (convIds.length) {
-      await db.delete(messages).where(inArray(messages.conversationId, convIds));
-      await db.delete(alerts).where(inArray(alerts.conversationId, convIds));
-      await db.delete(suggestions).where(inArray(suggestions.conversationId, convIds));
-      await db.delete(slackThreads).where(inArray(slackThreads.conversationId, convIds));
-      await db.delete(channelBindings).where(inArray(channelBindings.conversationId, convIds));
-    }
-    // usage_events reference agents + conversations — gone before them
+    // Every agent-keyed dependent — the shared cascade (conversations,
+    // channels, tests, widgets, shopify bindings, …) walked leaf-first.
+    // Missing tables here used to 500 the delete on FK violations.
+    await deleteAgentsCascade(db, agentIds);
+    // Workspace-scoped rows the agent cascade doesn't cover — including
+    // ws-keyed rows whose agent link is null (workspace saved replies,
+    // concierge pending actions) and tables with no agent column at all.
     await db.delete(usageEvents).where(eq(usageEvents.workspaceId, workspaceId));
-    if (convIds.length) {
-      await db.delete(conversations).where(inArray(conversations.id, convIds));
-    }
-    if (agentIds.length) {
-      await db.delete(alertRules).where(inArray(alertRules.agentId, agentIds));
-      await db.delete(knowledgeFiles).where(inArray(knowledgeFiles.agentId, agentIds));
-      await db.delete(agentSecrets).where(inArray(agentSecrets.agentId, agentIds));
-      await db.delete(webhookDeliveries).where(inArray(webhookDeliveries.agentId, agentIds));
-    }
-    // Channel-scoped dependents — contact_identities, campaigns + their send
-    // rows, bindings — all reference channels without cascade. Contacts and
-    // campaigns are workspace-scoped too and must go before the workspace row.
-    const channelIds = (
-      await db.select({ id: channels.id }).from(channels).where(eq(channels.workspaceId, workspaceId))
-    ).map((r) => r.id);
+    await db.delete(pendingActions).where(eq(pendingActions.workspaceId, workspaceId));
+    await db.delete(evalSuggestions).where(eq(evalSuggestions.workspaceId, workspaceId));
+    await db.delete(formSubmissions).where(eq(formSubmissions.workspaceId, workspaceId));
+    await db.delete(agentTestRuns).where(eq(agentTestRuns.workspaceId, workspaceId));
     await db.delete(campaignSends).where(eq(campaignSends.workspaceId, workspaceId));
     await db.delete(campaigns).where(eq(campaigns.workspaceId, workspaceId));
-    if (channelIds.length) {
-      await db.delete(contactIdentities).where(inArray(contactIdentities.channelId, channelIds));
-    }
+    // contacts before contact_lists — members cascade on either parent.
     await db.delete(contacts).where(eq(contacts.workspaceId, workspaceId));
-    await db.delete(channels).where(eq(channels.workspaceId, workspaceId));
-    if (agentIds.length) {
-      await db.delete(agents).where(inArray(agents.id, agentIds));
-    }
+    await db.delete(contactLists).where(eq(contactLists.workspaceId, workspaceId));
+    await db.delete(memberGroups).where(eq(memberGroups.workspaceId, workspaceId));
+    await db.delete(conversionEvents).where(eq(conversionEvents.workspaceId, workspaceId));
+    await db.delete(crmActivityQueue).where(eq(crmActivityQueue.workspaceId, workspaceId));
+    await db.delete(crmConnections).where(eq(crmConnections.workspaceId, workspaceId));
+    await db.delete(analyticsEvents).where(eq(analyticsEvents.workspaceId, workspaceId));
+    await db.delete(errorReports).where(eq(errorReports.workspaceId, workspaceId));
+    await db.delete(savedViews).where(eq(savedViews.workspaceId, workspaceId));
+    await db.delete(suppressions).where(eq(suppressions.workspaceId, workspaceId));
+    await db.delete(agents).where(inArray(agents.id, agentIds));
     // slack_installations.installer_user_id references users — before them
     await db.delete(slackInstallations).where(eq(slackInstallations.workspaceId, workspaceId));
     await db.delete(metaConnections).where(eq(metaConnections.workspaceId, workspaceId));
@@ -572,6 +557,11 @@ export function workspaceRoutes(db: Db) {
     // workspace's memberships and the sessions pointed at it go.
     await db.delete(memberships).where(eq(memberships.workspaceId, workspaceId));
     await db.delete(sessions).where(eq(sessions.workspaceId, workspaceId));
+    // Agency children lose the parent link — the FK restricts otherwise.
+    await db
+      .update(workspaces)
+      .set({ parentWorkspaceId: null })
+      .where(eq(workspaces.parentWorkspaceId, workspaceId));
     await db.delete(workspaces).where(eq(workspaces.id, workspaceId));
 
     return c.json({ ok: true });
