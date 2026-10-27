@@ -5886,6 +5886,11 @@ async function replyAsHostedAgent(
           // agent the same way "show me your products" is.
           /\b(tell me about|what about|details? (?:on|about|for)|info(?:rmation)? (?:on|about)|how much (?:is|does|are)|price of|do you (?:have|carry|sell))\b/i.test(
             lastInboundText,
+          ) ||
+          // Sale intent is a catalogue ask — "any snowboards on sale?"
+          // carried no catalogue noun and shipped a zero-call deflection.
+          /\b(on sale|sale items?|discounts?|clearance|deals?|specials?|promos?|markdowns?|reduced|cheapest|on offer)\b/i.test(
+            lastInboundText,
           ));
       const memoryCatalogue =
         catalogCapable &&
