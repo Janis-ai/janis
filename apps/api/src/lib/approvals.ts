@@ -254,6 +254,29 @@ export async function decidePendingAction(
         secrets,
       ).catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`);
     }
+  } else {
+    // Denial can itself be a provider mutation — a card carrying denyTemplate
+    // (e.g. Shopify returnDeclineRequest) runs it so the provider mirrors
+    // the decision, not just the approval.
+    const denyTpl = (action.tool as { denyTemplate?: string }).denyTemplate;
+    if (denyTpl) {
+      await freshShopifyToken(db, agent.id);
+      const secrets = {
+        ...(await loadSecretsMap(db, agent.id)),
+        ...(await connectionSecrets(db, agent.id)),
+      };
+      const tool = { ...(action.tool as ToolDef), bodyTemplate: denyTpl };
+      if (!tool.url) {
+        const { TOOL_TEMPLATES } = await import('./toolTemplates.js');
+        const cat = TOOL_TEMPLATES.flatMap((t) => t.tools).find((x) => x.name === tool.name);
+        if (cat) Object.assign(tool, cat);
+      }
+      result = await callTool(
+        tool,
+        action.args as Record<string, unknown>,
+        secrets,
+      ).catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`);
+    }
   }
 
   const [updated] = await db

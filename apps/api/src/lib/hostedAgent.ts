@@ -3741,6 +3741,44 @@ export async function complete(
         result = `error: ${err instanceof Error ? err.message : 'tool failed'}`;
       }
       if (outcome === 'failed') failedCalls.add(callKey);
+      // Return requests file into Shopify immediately (state: REQUESTED) —
+      // the teammate's approve/deny is then a Shopify state transition, not
+      // the file itself. On success, park a decision card bound to the
+      // created return gid; approve → returnApproveRequest, deny →
+      // returnDeclineRequest.
+      if (outcome === 'ran' && call.function.name === 'shopify_request_return' && ctx?.agent && !ctx.testRun) {
+        try {
+          const rid = (
+            JSON.parse(result) as {
+              data?: { returnRequest?: { return?: { id?: string } } };
+            }
+          ).data?.returnRequest?.return?.id;
+          if (rid) {
+            const decideTool = {
+              name: 'shopify_return_decision',
+              label: 'Decide return request',
+              description:
+                'Approve or decline the Shopify return request already on file',
+              approval: true,
+              method: 'POST',
+              url: tool!.url,
+              headers: tool!.headers,
+              bodyTemplate:
+                '{"query":"mutation($id:ID!){returnApproveRequest(input:{id:$id}){return{id status} userErrors{field message}}}","variables":{"id":"${id}"}}',
+              denyTemplate:
+                '{"query":"mutation($id:ID!){returnDeclineRequest(input:{id:$id,declineReason:OTHER}){userErrors{field message}}}","variables":{"id":"${id}"}}',
+            } as unknown as ToolDef;
+            await requestToolApproval(ctx.db, ctx.agent, ctx.convId, decideTool, {
+              id: rid,
+              reason: args?.return_request
+                ? JSON.stringify(args.return_request).slice(0, 300)
+                : undefined,
+            } as Record<string, unknown>);
+          }
+        } catch {
+          // card failure shouldn't fail the filed request
+        }
+      }
       // Ids in a real result become the anchor for later identity-scoped
       // calls this run (find_customer → its cus_… feeds charges/subs).
       // Fuzzy-search tools pad results with off-query filler — drop rows

@@ -374,8 +374,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'shopify_request_return',
         label: 'Request a return',
         description:
-          'File a return request on a fulfilled Shopify order — the store-side equivalent of the customer returns portal. Flow: shopify_lookup_order → pick the fulfillmentLineItems to return → call this with orderId + returnLineItems. A teammate approves before it\'s filed; tell the customer their request is submitted for review, not confirmed. For an EXCHANGE ("swap for a different size"), file this for the item going back, then offer to create a draft order for the replacement — that pair is the exchange.',
-        approval: true,
+          'File a return REQUEST on a fulfilled Shopify order — the store-side equivalent of the customer returns portal; it lands in Shopify admin as REQUESTED and a teammate approves or declines it there. Flow: shopify_lookup_order → pick the fulfillmentLineItems to return → call this with orderId + returnLineItems. Tell the customer their request is submitted for review, not confirmed. For an EXCHANGE ("swap for a different size"), file this for the item going back, then offer to create a draft order for the replacement — that pair is the exchange.',
         identity: true,
         method: 'POST',
         url: 'https://{{secrets.SHOPIFY_SHOP}}/admin/api/2026-10/graphql.json',
