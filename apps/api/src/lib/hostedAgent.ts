@@ -3768,11 +3768,12 @@ export async function complete(
               denyTemplate:
                 '{"query":"mutation($id:ID!){returnDeclineRequest(input:{id:$id,declineReason:OTHER}){userErrors{field message}}}","variables":{"id":"${id}"}}',
             } as unknown as ToolDef;
+            const rr = args?.return_request as
+              | { returnLineItems?: { customerNote?: string }[] }
+              | undefined;
             await requestToolApproval(ctx.db, ctx.agent, ctx.convId, decideTool, {
               id: rid,
-              reason: args?.return_request
-                ? JSON.stringify(args.return_request).slice(0, 300)
-                : undefined,
+              reason: rr?.returnLineItems?.[0]?.customerNote ?? 'return request',
             } as Record<string, unknown>);
           }
         } catch {
