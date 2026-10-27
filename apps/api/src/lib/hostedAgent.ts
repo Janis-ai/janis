@@ -3786,10 +3786,15 @@ export async function complete(
                   ),
                 )
                 .limit(10);
-              const match = prior.find(
-                (p) =>
-                  (p.args as { orderId?: string } | null)?.orderId === orderId,
-              );
+              // Match by orderId; legacy cards predate that arg — fall back
+              // to the newest pending decision on the agent (a line item
+              // can't carry two open returns anyway).
+              const match =
+                prior.find(
+                  (p) =>
+                    (p.args as { orderId?: string } | null)?.orderId ===
+                    orderId,
+                ) ?? prior[0];
               if (match) {
                 const [row] = await ctx.db
                   .insert(messages)
