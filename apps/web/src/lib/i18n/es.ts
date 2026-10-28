@@ -1,0 +1,21 @@
+/** Spanish — authored 2026-10-28. */
+export const es: Record<string, string> = {
+  'nav.inbox': 'Bandeja',
+  'nav.agents': 'Agentes',
+  'nav.contacts': 'Contactos',
+  'nav.campaigns': 'Campañas',
+  'nav.reports': 'Informes',
+  'nav.errors': 'Errores',
+  'nav.billing': 'Facturación',
+  'nav.settings': 'Ajustes',
+  'nav.copilot': 'Copiloto',
+  'nav.overview': 'Resumen',
+  'nav.knowledge': 'Conocimientos',
+  'nav.behavior': 'Comportamiento',
+  'nav.actions': 'Acciones',
+  'nav.test': 'Prueba',
+  'nav.channels': 'Canales',
+  'nav.deploy': 'Desplegar',
+  'nav.agentSettings': 'Ajustes del agente',
+  'nav.operatorGuide': 'Guía del operador',
+};

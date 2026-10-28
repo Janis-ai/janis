@@ -22,6 +22,7 @@ import { freshTestVisitor, readTestVisitor, storeTestVisitor } from '../lib/test
 import { freshCopilotThread, readCopilotThread, storeCopilotThread } from '../lib/copilotThread';
 import { railBus, type RailRequest } from '../lib/railBus';
 import { DockContext, type DockTab, type TestWiring } from '../lib/dockContext';
+import { t } from '../lib/i18n';
 import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
@@ -74,11 +75,11 @@ const SECTION_TO_STEP: Record<BuildStepKey, string> = {
  *  has no live counterpart: editing the brief stays in the guided view
  *  (reopened from Overview) and agent details live under settings. */
 const LIVE_NAV: Record<Exclude<BuildStepKey, 'create'>, { label: string; section: string }> = {
-  teach: { label: 'Knowledge', section: 'knowledge' },
-  guide: { label: 'Behavior', section: 'behavior' },
-  abilities: { label: 'Actions', section: 'integrations' },
-  try: { label: 'Test', section: 'tests' },
-  deploy: { label: 'Channels', section: 'channels' },
+  teach: { label: t('nav.knowledge', 'Knowledge'), section: 'knowledge' },
+  guide: { label: t('nav.behavior', 'Behavior'), section: 'behavior' },
+  abilities: { label: t('nav.actions', 'Actions'), section: 'integrations' },
+  try: { label: t('nav.test', 'Test'), section: 'tests' },
+  deploy: { label: t('nav.channels', 'Channels'), section: 'channels' },
 };
 
 /** Sidebar agent nav — setup mode shows the six guided steps, each
@@ -105,7 +106,7 @@ function buildNav(agent: Agent, agentId: string, live: boolean) {
       .filter((s) => s.key !== 'create')
       .map((s) => ({ ...s, label: LIVE_NAV[s.key as keyof typeof LIVE_NAV].label, to: `/agents/${agentId}/${LIVE_NAV[s.key as keyof typeof LIVE_NAV].section}` }));
   }
-  return [{ key: 'deploy' as const, label: live ? 'Channels' : 'Deploy', to: `/agents/${agentId}/channels`, Icon: Rocket }];
+  return [{ key: 'deploy' as const, label: live ? t('nav.channels', 'Channels') : t('nav.deploy', 'Deploy'), to: `/agents/${agentId}/channels`, Icon: Rocket }];
 }
 
 interface MeData {
@@ -1210,7 +1211,7 @@ export default function Layout() {
               );
             })}
             <div className="nav-sec"><span>Configure</span></div>
-            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="icon"><Settings size={18} /></span><span className="label">Agent settings</span></NavLink>
+            <NavLink className="nav-indent" to={`/agents/${ctxAgent}/settings`}><span className="icon"><Settings size={18} /></span><span className="label">{t('nav.agentSettings', 'Agent settings')}</span></NavLink>
             </>
             )}
           </div>
@@ -1232,25 +1233,25 @@ export default function Layout() {
             Still shown while agents load so real workspaces never flicker. */}
         {(!agentsData || agentsData.agents.length > 0) && (
           <NavLink to="/conversations" className={({ isActive }) => `nav-indent${scopedActive('inbox')({ isActive }) ? ' active' : ''}`}>
-            <span className="label">Inbox</span><span className="icon"><Inbox size={18} /></span>
+            <span className="label">{t('nav.inbox', 'Inbox')}</span><span className="icon"><Inbox size={18} /></span>
             {(ctxAgent ? agentAttention : attention)?.attention ? (
               <span className="nav-badge">{(ctxAgent ? agentAttention : attention)!.attention}</span>
             ) : null}
           </NavLink>
         )}
-        <NavLink to="/agents" end className="nav-indent"><span className="label">Agents</span><span className="icon"><Bot size={18} /></span></NavLink>
-        <NavLink to="/contacts" className={({ isActive }) => `nav-indent${scopedActive('contacts')({ isActive }) ? ' active' : ''}`}><span className="label">Contacts</span><span className="icon"><Users size={18} /></span></NavLink>
-        <NavLink to="/campaigns" className={({ isActive }) => `nav-indent${scopedActive('campaigns')({ isActive }) ? ' active' : ''}`}><span className="label">Campaigns</span><span className="icon"><Megaphone size={18} /></span></NavLink>
+        <NavLink to="/agents" end className="nav-indent"><span className="label">{t('nav.agents', 'Agents')}</span><span className="icon"><Bot size={18} /></span></NavLink>
+        <NavLink to="/contacts" className={({ isActive }) => `nav-indent${scopedActive('contacts')({ isActive }) ? ' active' : ''}`}><span className="label">{t('nav.contacts', 'Contacts')}</span><span className="icon"><Users size={18} /></span></NavLink>
+        <NavLink to="/campaigns" className={({ isActive }) => `nav-indent${scopedActive('campaigns')({ isActive }) ? ' active' : ''}`}><span className="label">{t('nav.campaigns', 'Campaigns')}</span><span className="icon"><Megaphone size={18} /></span></NavLink>
         {/* Workspace-wide sections vanish for agent-scoped users — they only
             hold grants on specific agents, not the workspace itself. */}
         {!data?.agent_scope && (
           <>
-            <NavLink to="/reports" className={({ isActive }) => `nav-indent${scopedActive('reports')({ isActive }) ? ' active' : ''}`}><span className="label">Reports</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
+            <NavLink to="/reports" className={({ isActive }) => `nav-indent${scopedActive('reports')({ isActive }) ? ' active' : ''}`}><span className="label">{t('nav.reports', 'Reports')}</span><span className="icon"><BarChart3 size={18} /></span></NavLink>
             {data?.operator && (
-              <NavLink to="/errors" className="nav-indent"><span className="label">Errors</span><span className="icon"><Bug size={18} /></span></NavLink>
+              <NavLink to="/errors" className="nav-indent"><span className="label">{t('nav.errors', 'Errors')}</span><span className="icon"><Bug size={18} /></span></NavLink>
             )}
-            <NavLink to="/billing" className="nav-indent"><span className="label">Billing</span><span className="icon"><CreditCard size={18} /></span></NavLink>
-            <NavLink to="/settings" className="nav-indent"><span className="label">Settings</span><span className="icon"><Settings size={18} /></span></NavLink>
+            <NavLink to="/billing" className="nav-indent"><span className="label">{t('nav.billing', 'Billing')}</span><span className="icon"><CreditCard size={18} /></span></NavLink>
+            <NavLink to="/settings" className="nav-indent"><span className="label">{t('nav.settings', 'Settings')}</span><span className="icon"><Settings size={18} /></span></NavLink>
           </>
         )}
         {/* Copilot closes the nav, divided off from the workspace layer —
@@ -1279,7 +1280,7 @@ export default function Layout() {
         )}
         <div className="spacer" />
         <Link to="/docs?guide=operator" className="docs-link" style={{ fontSize: 12, opacity: 0.75 }}>
-          <span className="label">Operator guide</span><span className="icon"><BookOpen size={16} /></span>
+          <span className="label">{t('nav.operatorGuide', 'Operator guide')}</span><span className="icon"><BookOpen size={16} /></span>
         </Link>
         <div className="user">
           {data?.user.name}
@@ -1443,7 +1444,7 @@ export default function Layout() {
               ) : (
                 <strong className="test-dock-title">
                   {railTab === 'ask'
-                    ? 'Copilot'
+                    ? t('nav.copilot', 'Copilot')
                     : `Test your agent${testRail?.label ? ` — ${testRail.label}` : ''}`}
                 </strong>
               )}

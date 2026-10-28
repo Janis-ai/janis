@@ -616,12 +616,13 @@ drizzle-kit/workbox-build, nothing to drop directly).
 - A. Iconography: DONE — lucide-react nav icons (collapsed-rail legible) +
   star/snooze/save/paperclip chrome; emoji kept inside <option> text and
   emoji pickers (native elements can't render SVG).
-- B2. Console i18n — real signal 2026-10-27: organic signup (Vietnamese,
-  `bachngoctructhanh@`) created agent + test-chatted fine, but asked the
-  agent (in Vietnamese) "do I have to connect other AIs like Claude?" —
-  the English-only console likely cost the activation. Hosted agent
-  answered correctly in Vietnamese; the product shell is the gap.
-  Non-EN locales (vi/es/pt) → onboarding + key surfaces first.
+- B2. Console i18n — v1 shipped 2026-10-28: lib/i18n.ts (browser-locale
+  detect, English fallback literals) + vi/es/pt nav dictionaries, 17
+  call sites (nav + rails). Trigger: organic vi signup `bachngoctructhanh@`
+  asked the agent "do I have to connect other AIs like Claude?" — the
+  English-only shell likely cost the activation. Extend coverage
+  incrementally via t('key','English') — onboarding/discovery/login are
+  the next-highest-value surfaces.
 - B. Shared usePrompt modal: DONE — workspace create, view naming, bulk
   tag, workspace-delete confirm all off window.prompt.
 - C. Keyboard layer: DONE — ⌘K palette (nav + agents + conversation

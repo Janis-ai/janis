@@ -1,0 +1,21 @@
+/** Vietnamese — authored 2026-10-28 (first organic vi signup evidence). */
+export const vi: Record<string, string> = {
+  'nav.inbox': 'Hộp thư',
+  'nav.agents': 'Tác tử',
+  'nav.contacts': 'Liên hệ',
+  'nav.campaigns': 'Chiến dịch',
+  'nav.reports': 'Báo cáo',
+  'nav.errors': 'Lỗi',
+  'nav.billing': 'Thanh toán',
+  'nav.settings': 'Cài đặt',
+  'nav.copilot': 'Trợ lý',
+  'nav.overview': 'Tổng quan',
+  'nav.knowledge': 'Kiến thức',
+  'nav.behavior': 'Hành vi',
+  'nav.actions': 'Hành động',
+  'nav.test': 'Thử nghiệm',
+  'nav.channels': 'Kênh',
+  'nav.deploy': 'Triển khai',
+  'nav.agentSettings': 'Cài đặt tác tử',
+  'nav.operatorGuide': 'Hướng dẫn vận hành',
+};
