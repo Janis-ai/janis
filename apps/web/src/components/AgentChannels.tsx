@@ -19,7 +19,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   const { data } = useChannels();
   const { data: me } = useMe();
   const { data: billing } = useBillingStatus();
-  const plan = billing?.plan;
+  const plan = billing?.plan_key;
   const isAdmin = me?.user.role === 'admin';
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();

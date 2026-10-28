@@ -336,7 +336,7 @@ export function useSlackStatus() {
 export function useBillingStatus() {
   return useQuery({
     queryKey: ['billing-status'],
-    queryFn: () => api<{ plan: string }>('/api/billing/status'),
+    queryFn: () => api<{ plan_key: string }>('/api/billing/status'),
   });
 }
 
