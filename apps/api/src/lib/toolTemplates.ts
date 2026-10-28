@@ -1010,7 +1010,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'gsheets_list',
         label: 'List spreadsheets',
         description:
-          'List the account\u2019s most recently modified spreadsheets — returns ids the other Sheets tools need.',
+          'List spreadsheets the integration created or the user opened via Google — returns ids the other Sheets tools need. For an existing sheet, ask the user for its link or id instead.',
         method: 'GET',
         url: "https://www.googleapis.com/drive/v3/files?q=mimeType%3D'application%2Fvnd.google-apps.spreadsheet'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime+desc&pageSize=20",
         headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
@@ -1058,7 +1058,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'gdocs_list',
         label: 'List documents',
         description:
-          'List the account\u2019s most recently modified Google Docs — returns ids the other Docs tools need.',
+          'List docs the integration created or the user opened via Google — returns ids the other Docs tools need. For an existing doc, ask the user for its link or id instead.',
         method: 'GET',
         url: "https://www.googleapis.com/drive/v3/files?q=mimeType%3D'application%2Fvnd.google-apps.document'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime+desc&pageSize=20",
         headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
