@@ -4904,6 +4904,7 @@ export async function runHostedEvent(
       enabledBuiltins(
         ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
         agent.workspaceId,
+        ((conv.userProfile ?? {}) as { identity_verified?: boolean }).identity_verified === true,
       ),
     ).catch(() => null);
     if (result) {
@@ -5551,6 +5552,7 @@ async function replyAsHostedAgent(
       : enabledBuiltins(
           ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
           agent.workspaceId,
+          ((conv?.userProfile ?? {}) as { identity_verified?: boolean }).identity_verified === true,
         );
     // Never offer the model a ref that can't run for this shopper — an
     // identity-gated binding is a guaranteed dead end for an unverified

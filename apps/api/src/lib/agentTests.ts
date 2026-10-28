@@ -406,7 +406,12 @@ export async function runAgentTest(
     toolsFor(agent),
     secrets,
     ctx,
-    enabledBuiltins(cfg.builtin_tools, agent.workspaceId),
+    enabledBuiltins(
+      cfg.builtin_tools,
+      agent.workspaceId,
+      ((convForPrompt?.userProfile ?? {}) as { identity_verified?: boolean }).identity_verified ===
+        true,
+    ),
   );
   if (gen.promptTokens || gen.completionTokens) {
     await recordLlmUsage(db, {

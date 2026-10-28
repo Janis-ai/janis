@@ -81,6 +81,11 @@ export interface BuiltinTool {
    *  "Platform tools" card). Operator-gated tools omit this — they stay
    *  concierge-only no matter which workspace the agent lives in. */
   platform?: boolean;
+  /** Offered to UNVERIFIED visitors on the operator concierge — read-only
+   *  public tools only (web_search/web_fetch). Everything else is hidden
+   *  from unsigned conversations: the model can't call what it can't see,
+   *  so a forgotten signedInUser check can't become an info leak. */
+  publicAnon?: boolean;
   run: (args: Record<string, string>, ctx?: BuiltinCtx) => Promise<string>;
 }
 
@@ -514,6 +519,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       'Search the web for current information, links, products or answers. Returns titles, URLs and snippets.',
     params: { q: 'search query' },
     platform: true,
+    publicAnon: true,
     available: () => env.searchApiKey.length > 0 || env.searchBaseUrl.length > 0,
     run: async (args) => {
       const q = encodeURIComponent(args.q ?? '');
@@ -548,6 +554,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       'Open a web page and read its text. Use after web_search when a live value matters (a stock price, a schedule) — snippets are indexed and can be stale, the page itself is current.',
     params: { url: 'page URL — typically a result returned by web_search' },
     platform: true,
+    publicAnon: true,
     available: () => env.searchApiKey.length > 0 || env.searchBaseUrl.length > 0,
     run: async (args) => {
       const url = (args.url ?? '').trim();
@@ -3622,8 +3629,22 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
 export function enabledBuiltins(
   enabled: string[] | undefined,
   workspaceId?: string,
+  /** The conversation's visitor is a verified signed-in Janis user.
+   *  Fail-closed default: callers must affirmatively pass true. */
+  verified = false,
 ): BuiltinTool[] {
-  return BUILTIN_TOOLS.filter((b) => enabled?.includes(b.name) && b.available(workspaceId));
+  // The sales concierge (public webchat) and the operator copilot share
+  // one agent and one catalog — available() is workspace-scoped, so
+  // without this filter anonymous visitors see the same workspace-bound
+  // tools signed-in operators do. Scope the menu by conversation
+  // identity instead: unverified visitors keep only publicAnon tools.
+  const operatorWs = Boolean(env.operatorWorkspaceId) && workspaceId === env.operatorWorkspaceId;
+  return BUILTIN_TOOLS.filter(
+    (b) =>
+      enabled?.includes(b.name) &&
+      b.available(workspaceId) &&
+      (verified || !operatorWs || b.publicAnon === true),
+  );
 }
 
 /** The copilot toolset for embedded merchant-Ask threads — every builtin

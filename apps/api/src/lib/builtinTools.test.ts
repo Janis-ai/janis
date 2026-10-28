@@ -126,9 +126,38 @@ describe('account_status builtin', () => {
     env.operatorWorkspaceId = WS;
     expect(accountStatus().available(WS)).toBe(true);
     expect(accountStatus().available('other-ws')).toBe(false);
-    expect(enabledBuiltins(['account_status'], WS).map((b) => b.name)).toEqual(['account_status']);
+    expect(enabledBuiltins(['account_status'], WS, true).map((b) => b.name)).toEqual(['account_status']);
     expect(enabledBuiltins(['account_status'], 'other-ws')).toEqual([]);
     env.operatorWorkspaceId = prev;
+  });
+
+  it('unverified operator-concierge visitors get only publicAnon tools', () => {
+    const prev = env.operatorWorkspaceId;
+    const prevSearch = env.searchBaseUrl;
+    env.operatorWorkspaceId = WS;
+    env.searchBaseUrl = 'https://search.example.com';
+    try {
+      // verified=false (the fail-closed default): workspace-bound builtins
+      // hidden, publicAnon tools still offered.
+      const anon = enabledBuiltins(['account_status', 'web_search', 'create_agent'], WS).map(
+        (b) => b.name,
+      );
+      expect(anon).toEqual(['web_search']);
+      // Verified visitors keep the full catalog.
+      expect(
+        enabledBuiltins(['account_status', 'web_search', 'create_agent'], WS, true).map(
+          (b) => b.name,
+        ),
+      ).toEqual(['web_search', 'account_status', 'create_agent']);
+      // The gate is operator-workspace-scoped — anonymous shoppers on a
+      // customer agent still get its normal catalog.
+      expect(enabledBuiltins(['web_search'], 'other-ws', false).map((b) => b.name)).toEqual([
+        'web_search',
+      ]);
+    } finally {
+      env.operatorWorkspaceId = prev;
+      env.searchBaseUrl = prevSearch;
+    }
   });
 
   it('returns signed_in: false when the visitor is not verified', async () => {
@@ -279,7 +308,7 @@ describe('change_plan builtin', () => {
   it('gated to the operator workspace and Stripe being configured', () => {
     expect(changePlan().available(WS)).toBe(true);
     expect(changePlan().available('other-ws')).toBe(false);
-    expect(enabledBuiltins(['change_plan'], WS).map((b) => b.name)).toEqual(['change_plan']);
+    expect(enabledBuiltins(['change_plan'], WS, true).map((b) => b.name)).toEqual(['change_plan']);
   });
 
   it('rejects unknown plans', async () => {
@@ -354,7 +383,7 @@ describe('create_agent builtin', () => {
   it('is gated to the operator workspace', () => {
     expect(createAgent().available(WS)).toBe(true);
     expect(createAgent().available('other-ws')).toBe(false);
-    expect(enabledBuiltins(['create_agent'], WS).map((b) => b.name)).toEqual(['create_agent']);
+    expect(enabledBuiltins(['create_agent'], WS, true).map((b) => b.name)).toEqual(['create_agent']);
   });
 
   it('rejects visitors who are not signed in', async () => {
