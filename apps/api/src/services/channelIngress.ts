@@ -585,10 +585,6 @@ export async function handleChannelMessage(
     }
   }
   if (created) {
-    // processEvents sees this row as pre-existing, so its own isNew emit
-    // can't fire — the hook contract is 'a conversation row was created',
-    // regardless of which path inserted it.
-    emitHookEvent(db, channel.agentId, 'new_conversation', conv);
     await db.insert(channelBindings).values({
       channelId: channel.id,
       conversationId: conv.id,
@@ -791,6 +787,11 @@ export async function handleChannelMessage(
     if (isUniqueViolation(err, 'messages_in_mid')) return;
     throw err;
   }
+
+  // processEvents sees the ingress-created row as pre-existing, so its own
+  // isNew emit can't fire — emit here, after the inbound message landed,
+  // so the hook payload carries the first message's preview.
+  if (created) emitHookEvent(db, channel.agentId, 'new_conversation', conv);
 
   // Campaign reply attribution — an inbound on a conversation a campaign
   // sent to marks those sends replied (also what stops a drip sequence).

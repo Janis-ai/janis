@@ -37,7 +37,15 @@ export function emitHookEvent(
       .from(hookSubscriptions)
       .where(and(eq(hookSubscriptions.agentId, agentId), eq(hookSubscriptions.event, event)));
     if (!subs.length) return;
-    const payload = toConversation(conv);
+    // Re-read at push time — several call sites emit at row-creation while
+    // the first message/preview lands a few awaits later; the freshest row
+    // makes the push actually useful (name, preview, last activity).
+    const [fresh] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id))
+      .limit(1);
+    const payload = toConversation(fresh ?? conv);
     const results = await Promise.allSettled(
       subs.map((s) => deliverHookPush(db, agentId, s.targetUrl, `hook:${event}`, payload)),
     );

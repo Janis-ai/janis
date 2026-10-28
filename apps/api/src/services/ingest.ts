@@ -78,7 +78,6 @@ export async function processEvents(
       continue;
     }
     const { conv, isNew } = await findOrCreateConversation(db, agent, event);
-    if (isNew) emitHookEvent(db, agent.id, 'new_conversation', conv);
     const alertIds: string[] = [];
     const newAlertTypes: string[] = [];
 
@@ -414,6 +413,11 @@ export async function processEvents(
       .returning();
     // Conv deleted between our read and this update — nothing to act on.
     if (!updated) continue;
+
+    // Emit with the post-update row — this event's message preview/activity
+    // have just been written, so hook pushes carry a populated payload
+    // rather than the all-null creation snapshot.
+    if (isNew) emitHookEvent(db, agent.id, 'new_conversation', updated);
 
     // Transition side effects — the shared path the operator PATCH runs:
     // conversation event, state-change audit line, escalated/resolved hooks,

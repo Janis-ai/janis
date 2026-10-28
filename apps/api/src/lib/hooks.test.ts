@@ -161,6 +161,12 @@ describe('channel-ingress creates', () => {
     });
     const urls = fetchMock.mock.calls.map((c) => c[0]);
     expect(urls).toContain('https://hooks.example.com/ingress');
+    // the push went out after the inbound message landed — the payload
+    // carries the first message's preview, not the null creation snapshot
+    const hookCall = fetchMock.mock.calls.find((c) => c[0] === 'https://hooks.example.com/ingress');
+    const body = JSON.parse(hookCall![1].body as string);
+    expect(body.last_message_preview).toBe('hi there');
+    expect(body.last_message_at).toBeTruthy();
   });
 });
 
