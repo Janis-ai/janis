@@ -3314,10 +3314,24 @@ function IntegrationCards({
                 <>No files shared yet — pick or create one above.</>
               ) : (
                 gfilesFor(t.id).map((f) => (
-                  <div key={f.id}>
+                  <div key={f.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <a href={f.webViewLink} target="_blank" rel="noreferrer">
                       {f.name}
                     </a>
+                    <button
+                      className="btn sm"
+                      style={{ marginLeft: 'auto', padding: '0 6px', fontSize: 11 }}
+                      title="Unshare this file"
+                      onClick={async () => {
+                        await api(`/api/google/unfile`, {
+                          method: 'POST',
+                          body: JSON.stringify({ agent_id: agentId, file_id: f.id }),
+                        });
+                        gfiles.refetch();
+                      }}
+                    >
+                      ×
+                    </button>
                   </div>
                 ))
               )}

@@ -8,7 +8,7 @@ import { agentConnections, agents } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { connectionToken } from '../lib/connections.js';
+import { connectionCreds, connectionToken } from '../lib/connections.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { TOOL_TEMPLATES } from '../lib/toolTemplates.js';
 
@@ -159,9 +159,34 @@ export function googleApiRoutes(db: Db) {
       'https://www.googleapis.com/drive/v3/files?fields=files(id,name,mimeType,webViewLink,modifiedTime)&orderBy=modifiedTime+desc&pageSize=100',
       { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
     );
-    const data = (await res.json().catch(() => ({}))) as { files?: unknown[] };
-    return c.json({ files: data.files ?? [] });
+    const data = (await res.json().catch(() => ({}))) as { files?: { id: string }[] };
+    const excl = excludedFiles(conn);
+    return c.json({ files: (data.files ?? []).filter((f) => !excl.has(f.id)) });
   });
+
+  // Unshare a file — drop it from the connection's exclusion-aware listings.
+  // drive.file access is scope-level (no per-file Google revoke), so the
+  // exclusion list is the agent's effective view; removing the template +
+  // connection is the true revoke.
+  app.post(
+    '/unfile',
+    adminOnly,
+    zValidator('json', z.object({ agent_id: z.string(), file_id: z.string().min(1) })),
+    async (c) => {
+      const { agent_id, file_id } = c.req.valid('json');
+      const conn = await googleConn(db, agent_id, c.get('workspaceId'));
+      if (!conn) return c.json({ error: 'connect Google first' }, 404);
+      const creds = connectionCreds(conn);
+      const excl = excludedFiles(conn);
+      excl.add(file_id);
+      creds.excluded = [...excl].join(',');
+      await db
+        .update(agentConnections)
+        .set({ credentialsEnc: encryptSecret(JSON.stringify(creds)), updatedAt: new Date() })
+        .where(eq(agentConnections.id, conn.id));
+      return c.json({ ok: true });
+    },
+  );
 
   // Create a new Google file (sheet/doc/slide) for this connection —
   // app-created files are visible to tools under drive.file automatically.
@@ -188,6 +213,12 @@ export function googleApiRoutes(db: Db) {
   );
 
   return app;
+}
+
+/** File ids the operator unshared — stored on the connection creds. */
+function excludedFiles(conn: typeof agentConnections.$inferSelect): Set<string> {
+  const raw = connectionCreds(conn).excluded ?? '';
+  return new Set(raw.split(',').filter(Boolean));
 }
 
 /** The agent's 'google' agent_connection row, if connected. */
