@@ -3026,16 +3026,18 @@ function IntegrationCards({
   // OAuth returns land back on this tab with a flash param — surface it and
   // clear the query so a refresh doesn't replay the banner.
   const [params, setParams] = useSearchParams();
-  const flash =
-    params.get('calendly_connect') != null
-      ? { kind: 'ok' as const, msg: `Calendly connected — ${params.get('calendly_connect')}` }
-      : params.get('calendly_error') != null
-        ? { kind: 'err' as const, msg: `Calendly connect failed — ${params.get('calendly_error')}` }
-        : null;
+  const connectProvider = ['calendly', 'google'].find((p) => params.get(`${p}_connect`) != null || params.get(`${p}_error`) != null);
+  const flash = connectProvider
+    ? params.get(`${connectProvider}_connect`) != null
+      ? { kind: 'ok' as const, msg: `${connectProvider === 'google' ? 'Google' : 'Calendly'} connected — ${params.get(`${connectProvider}_connect`)}` }
+      : { kind: 'err' as const, msg: `${connectProvider === 'google' ? 'Google' : 'Calendly'} connect failed — ${params.get(`${connectProvider}_error`)}` }
+    : null;
   const clearFlash = () => {
     if (!flash) return;
-    params.delete('calendly_connect');
-    params.delete('calendly_error');
+    for (const p of ['calendly', 'google']) {
+      params.delete(`${p}_connect`);
+      params.delete(`${p}_error`);
+    }
     setParams(params, { replace: true });
   };
 
