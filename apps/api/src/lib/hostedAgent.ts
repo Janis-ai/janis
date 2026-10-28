@@ -4953,6 +4953,31 @@ export async function runHostedEvent(
 
   const convId = event.janis_conversation_id;
   if (!convId) return;
+  return runConversationTurn(db, agent, convId, { event });
+}
+
+/**
+ * Called after a teammate decides a pending action so the agent can tell the
+ * customer the outcome. Bypasses the unanswered-inbound gate — the agent's
+ * own "sent for approval" reply already answered the last inbound. A
+ * human-owned (`state === 'human'`) conversation still stays silent — that
+ * check lives in runConversationTurn.
+ */
+export async function resumeAfterDecision(
+  db: Db,
+  agent: AgentRow,
+  convId: string,
+): Promise<void> {
+  agent = await withWorkspaceDefaults(db, agent);
+  return runConversationTurn(db, agent, convId, { resume: 'action_decided' });
+}
+
+async function runConversationTurn(
+  db: Db,
+  agent: AgentRow,
+  convId: string,
+  opts: { event?: OutboundWebhook; resume?: 'action_decided' },
+): Promise<void> {
   const [conv] = await db
     .select()
     .from(conversations)
@@ -4964,11 +4989,13 @@ export async function runHostedEvent(
 
   // Legacy engines: migrated wordhopapi bots. 'monitor' bots (Chatfuel-era —
   // the bot platform replies on its own) never answer; 'dialogflow' bots
-  // answer via their imported DF agent.
+  // answer via their imported DF agent. Legacy bots have no approvals, so a
+  // resume without an event is a no-op.
   const engine = (agent.config as { engine?: string }).engine;
   if (engine === 'monitor') return;
   if (engine === 'dialogflow') {
-    await runLegacyReply(db, agent, event, conv);
+    if (!opts.event) return;
+    await runLegacyReply(db, agent, opts.event, conv);
     return;
   }
 
@@ -4976,7 +5003,8 @@ export async function runHostedEvent(
   // same unanswered message, producing double replies. A message landing
   // mid-run marks pending and coalesces into one follow-up pass that sees
   // the fresh transcript.
-  let run = convRuns.get(convId) ?? { running: false, pending: false, startedAt: 0 };
+  let run =
+    convRuns.get(convId) ?? { running: false, pending: false, resume: false, startedAt: 0 };
   // Watchdog: a run can wedge inside an awaited call whose promise never
   // settles (dead socket, hung tool). Left alone, run.running stays true and
   // every later inbound just sets pending on a corpse — the conversation
@@ -4985,14 +5013,16 @@ export async function runHostedEvent(
   // original from double-replying.
   if (run.running && Date.now() - run.startedAt > RUN_WATCHDOG_MS) {
     console.warn(`[hosted] ${convId}: wedged run exceeded ${RUN_WATCHDOG_MS}ms — restarting`);
-    run = { running: false, pending: false, startedAt: 0 };
+    run = { running: false, pending: false, resume: false, startedAt: 0 };
   }
   convRuns.set(convId, run);
   if (run.running) {
     run.pending = true;
+    if (opts.resume) run.resume = true;
     return;
   }
   run.running = true;
+  if (opts.resume) run.resume = true;
   run.startedAt = Date.now();
   try {
     // Multi-instance (DATABASE_URL): the Map only serializes this process —
@@ -5011,6 +5041,11 @@ export async function runHostedEvent(
         // inbound arrived while we were running
         const wasPending = run.pending;
         run.pending = false;
+        // A queued resume (teammate decided a pending action) forces this
+        // pass — the agent's own "sent for approval" reply already answered
+        // the last inbound, so newestInboundIsPending alone would skip it.
+        const forced = run.resume;
+        run.resume = false;
         // Re-check ownership — a human may have taken over mid-run.
         const [fresh] = await db
           .select({ state: conversations.state })
@@ -5024,8 +5059,8 @@ export async function runHostedEvent(
         // Without pending, the check closes the cross-instance gap — a
         // contender that waited on the lock finds its inbound already
         // answered and no-ops instead of double-replying.
-        if (!wasPending && !(await newestInboundIsPending(db, convId))) break;
-        await replyAsHostedAgent(db, agent, conv);
+        if (!wasPending && !forced && !(await newestInboundIsPending(db, convId))) break;
+        await replyAsHostedAgent(db, agent, conv, forced ? { resume: 'action_decided' } : undefined);
       } while (run.pending && Date.now() < holdDeadline);
     } finally {
       await release?.();
@@ -5038,12 +5073,19 @@ export async function runHostedEvent(
     if (convRuns.get(convId) === run) convRuns.delete(convId);
     // An inbound that slipped in between the loop's last check and teardown
     // set pending on a run nobody will read — re-enter as a fresh run so it
-    // isn't dropped.
-    if (run.pending) void runHostedEvent(db, agent, event);
+    // isn't dropped. A queued resume re-enters the same way.
+    if (run.pending || run.resume)
+      void runConversationTurn(db, agent, convId, {
+        ...opts,
+        resume: run.resume ? 'action_decided' : undefined,
+      });
   }
 }
 
-const convRuns = new Map<string, { running: boolean; pending: boolean; startedAt: number }>();
+const convRuns = new Map<
+  string,
+  { running: boolean; pending: boolean; resume: boolean; startedAt: number }
+>();
 // Runs are serialized per conversation; a healthy pass is seconds. 3min means
 // the run is wedged on an await that will never settle — let the next inbound
 // restart it rather than mute the conversation forever.
@@ -5203,6 +5245,7 @@ async function replyAsHostedAgent(
   db: Db,
   agent: AgentRow,
   conv: ConversationRow,
+  opts?: { resume?: 'action_decided' },
 ): Promise<void> {
   agent = await withWorkspaceDefaults(db, agent);
   const convId = conv.id;
@@ -5277,10 +5320,19 @@ async function replyAsHostedAgent(
     // the inbound landed mid-run and the reply it raced ahead of covered
     // it. Bail quietly rather than 400 the provider and drop a failure
     // line on the customer. Internal notes never count as answers.
-    if (!(await newestInboundIsPending(db, convId))) return;
+    if (!opts?.resume && !(await newestInboundIsPending(db, convId))) return;
     const fileAnalysis = await fileAnalysisAllowed(db, agent.workspaceId);
     console.log(`[files] conv=${convId} analysis=${fileAnalysis}`);
     const history = await transcriptFor(db, convId, fileAnalysis);
+    // A resume transcript ends on the assistant-side "(teammate approved …)"
+    // line — complete() drops trailing non-user turns, which would hide the
+    // very outcome this pass exists to relay. A trailing marker keeps it.
+    if (opts?.resume === 'action_decided') {
+      history.push({
+        role: 'user',
+        content: '(the decision on your proposed action is the last line above — reply to the customer now)',
+      });
+    }
     {
       const lastIns = await db
         .select({ createdAt: messages.createdAt, payload: messages.payload, text: messages.text })
@@ -5522,6 +5574,10 @@ async function replyAsHostedAgent(
         `\nThe visitor's latest message matches your saved component "${matchedComponent}" — ` +
         `answer their ask by emitting "WIDGET_REF: ${matchedComponent}" this turn (with whatever ` +
         'short text fits alongside it). Do not substitute a tool call for the same information.';
+    }
+    if (opts?.resume === 'action_decided') {
+      prompt +=
+        '\n\n## Resuming after a teammate decision\nA teammate just decided the action you proposed — the bracketed "(teammate approved and ran …)" or "(teammate declined …)" line at the end of the transcript is the outcome. Reply to the customer now in one short message: say plainly what happened and what comes next for them. Do not call the tool again, do not ask for approval again, and do not re-verify identity. If the line says it was declined or ended in an error, tell them it could not be done and offer the next best step.';
     }
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;

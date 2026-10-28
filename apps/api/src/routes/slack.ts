@@ -9,7 +9,7 @@ import { agents, channelBindings, channels, conversations, memberships, messages
 import { env, requestOrigin, requestWebOrigin } from '../env.js';
 import { adminOnly, sessionAuth, SESSION_COOKIE, type SessionEnv } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
-import { runHostedEvent } from '../lib/hostedAgent.js';
+import { resumeAfterDecision, runHostedEvent } from '../lib/hostedAgent.js';
 import { decidePendingAction, isConciergeAction } from '../lib/approvals.js';
 import {
   createSlackChannel,
@@ -2007,12 +2007,7 @@ export function slackPublicRoutes(db: Db) {
             }
           } else {
             // Resume the agent so it can tell the customer the outcome.
-            void runHostedEvent(db, decided.agent, {
-              type: 'message.user',
-              conversation_id: decided.conv.externalId,
-              janis_conversation_id: decided.conv.id,
-              timestamp: new Date().toISOString(),
-            }).catch(() => {});
+            void resumeAfterDecision(db, decided.agent, decided.conv.id).catch(() => {});
           }
         }
       } else if (action.action_id === 'janis_resume') {

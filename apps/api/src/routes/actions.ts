@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import { conversations, pendingActions } from '../db/schema.js';
 import { conversationAgent } from '../lib/access.js';
 import { decidePendingAction, isConciergeAction } from '../lib/approvals.js';
-import { runHostedEvent } from '../lib/hostedAgent.js';
+import { resumeAfterDecision } from '../lib/hostedAgent.js';
 import type { UserProfile } from '@janis/shared';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 
@@ -65,12 +65,7 @@ export function actionRoutes(db: Db) {
     // deterministic confirmation, and a resumed turn that took a while or
     // emitted nothing read as typing dots that never resolve.
     if (!isConciergeAction(decided.action.workspaceId, decided.conv.userProfile)) {
-      void runHostedEvent(db, decided.agent, {
-        type: 'message.user',
-        conversation_id: decided.conv.externalId,
-        janis_conversation_id: decided.conv.id,
-        timestamp: new Date().toISOString(),
-      }).catch(() => {});
+      void resumeAfterDecision(db, decided.agent, decided.conv.id).catch(() => {});
     }
 
     return c.json({ ok: true, status: decided.action.status, result: decided.action.result });

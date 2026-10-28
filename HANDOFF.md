@@ -100,6 +100,20 @@ switcher (light: `ctx-sep` divider + stacked buttons — bordered cards
 were rejected as "too much"), self-first roster sorting, bidirectional
 name uniqueness. See `git log` ~589f1f2 and the ~15 commits before it.
 
+2026-10-27: approval decisions now reach the customer. `decidePendingAction`
+callers (console `/api/actions`, Slack buttons) call
+`resumeAfterDecision(db, agent, convId)` instead of a synthetic
+`message.user` event — the old resume silently no-op'd because
+`newestInboundIsPending` saw the agent's own "sent for approval" reply as
+having answered the last inbound. The resume forces one pass (`run.resume`
+in `runConversationTurn`), appends a "Resuming after a teammate decision"
+prompt section, and adds a trailing user marker so `complete()`'s
+trailing-assistant pop doesn't strip the `(teammate approved…)` line.
+Human-owned (`state='human'`) threads still stay silent; concierge threads
+keep the deterministic "Done — …" line. Also: agent/workspace delete now
+cascades every agent-keyed table via `lib/agentCleanup.ts` (`shopify_shops`
+was the FK that 500'd deletes).
+
 ## How Mike likes things (worked examples — honor these)
 
 - **Concise.** Bulleted UI copy over prose paragraphs ("be most concise").
