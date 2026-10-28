@@ -14,6 +14,7 @@ import type { QuickReply } from '@janis/shared';
 import { mathToUnicode } from '@janis/shared';
 import type { ChannelCredentials, InboundMessage } from '../lib/channels.js';
 import { resolveGreeting } from '../lib/greeting.js';
+import { emitHookEvent } from '../lib/hooks.js';
 import { interpolateSpec, stripEmptyStrings, WidgetComponent } from '../lib/widgets.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { recordSttUsage } from '../lib/usage.js';
@@ -1212,6 +1213,7 @@ export function webchatRoutes(db: Db) {
           contactId: conv.contactId,
         })
         .returning();
+      emitHookEvent(db, created.agentId, 'new_conversation', created);
       await db
         .update(channelBindings)
         .set({ conversationId: created.id })

@@ -28,6 +28,7 @@ import { adminOnly, sessionAuth, SESSION_COOKIE, type SessionEnv } from '../midd
 import { generateSessionToken } from '../lib/crypto.js';
 import { sendEmail } from '../lib/notify.js';
 import { toConversation, toMessage } from '../lib/serializers.js';
+import { emitHookEvent } from '../lib/hooks.js';
 import {
   getConversationForWorkspace,
   humanReply,
@@ -708,6 +709,7 @@ export function shopifyPublicRoutes(db: Db) {
             },
           })
           .returning();
+        emitHookEvent(db, conv.agentId, 'new_conversation', conv);
       } else {
         const p = conv.userProfile as { metadata?: { current_agent?: string } };
         const patch: Record<string, unknown> = {};

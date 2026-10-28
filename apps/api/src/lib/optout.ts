@@ -11,6 +11,7 @@ import { contactForBinding, linkConversationContact } from './contacts.js';
 import { queueCrmActivity } from './crm.js';
 import { audit } from './audit.js';
 import { bus } from './bus.js';
+import { emitHookEvent } from './hooks.js';
 import type { UserProfile } from '@janis/shared';
 
 type ChannelRow = typeof channels.$inferSelect;
@@ -79,8 +80,9 @@ export async function applySmsOpt(
     const [conv] = await db
       .insert(conversations)
       .values({ agentId: channel.agentId, externalId, userProfile: profile })
-      .returning({ id: conversations.id });
+      .returning();
     convId = conv.id;
+    emitHookEvent(db, channel.agentId, 'new_conversation', conv);
     await db
       .insert(channelBindings)
       .values({ channelId: channel.id, conversationId: convId, platformUserId: from });

@@ -11,6 +11,7 @@ import { detectIntentV1, type LegacyContext, type ServiceAccount } from '../lib/
 import { env } from '../env.js';
 import { loadSecretsMap } from '../lib/secrets.js';
 import { isUniqueViolation } from '../lib/errorReporting.js';
+import { emitHookEvent } from '../lib/hooks.js';
 import { processEvents } from '../services/ingest.js';
 
 type AgentRow = typeof agents.$inferSelect;
@@ -123,6 +124,7 @@ async function findOrCreateConv(
       userProfile: { id: platformUserId, channel: channel.kind, channel_name: channel.name },
     })
     .returning();
+  emitHookEvent(db, agent.id, 'new_conversation', conv);
   await db.insert(channelBindings).values({
     channelId: channel.id,
     conversationId: conv.id,

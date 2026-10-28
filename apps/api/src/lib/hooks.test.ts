@@ -5,10 +5,11 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, conversations, hookSubscriptions, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, channels, conversations, hookSubscriptions, webhookDeliveries, workspaces } from '../db/schema.js';
 import { generateApiKey } from './crypto.js';
 import { emitHookEvent } from './hooks.js';
 import { sweepHostedStalls, sweepWebhookRetries } from './webhooks.js';
+import { handleChannelMessage } from '../services/channelIngress.js';
 
 let db: Db;
 let agentId: string; // hosted — hook pushes must still deliver as plain HTTP
@@ -121,6 +122,45 @@ describe('emitHookEvent', () => {
     );
     const [done] = await deliveries();
     expect(done.attempts).toBe(2);
+  });
+});
+
+describe('channel-ingress creates', () => {
+  // Regression: handleChannelMessage inserts the conversation row itself, so
+  // processEvents' isNew emit never fires for channel conversations —
+  // new_conversation hooks must emit at the create site instead.
+  it('emits new_conversation when ingress creates the conversation', async () => {
+    const [ch] = await db
+      .insert(channels)
+      .values({
+        workspaceId: wsId,
+        agentId,
+        kind: 'messenger',
+        name: 'Page',
+        credentials: { page_id: 'PG1', access_token: 'tok' },
+      })
+      .returning();
+    await db.insert(hookSubscriptions).values({
+      agentId,
+      event: 'new_conversation',
+      targetUrl: 'https://hooks.example.com/ingress',
+    });
+
+    await handleChannelMessage(db, ch, {
+      objectId: 'PG1',
+      senderId: 'PSID-HOOK',
+      text: 'hi there',
+      messageId: `mid.${crypto.randomUUID()}`,
+    });
+
+    await vi.waitFor(async () => {
+      const rows = await deliveries();
+      expect(
+        rows.some((r) => r.type === 'hook:new_conversation' && r.status === 'delivered'),
+      ).toBe(true);
+    });
+    const urls = fetchMock.mock.calls.map((c) => c[0]);
+    expect(urls).toContain('https://hooks.example.com/ingress');
   });
 });
 

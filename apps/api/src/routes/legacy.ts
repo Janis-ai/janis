@@ -5,6 +5,7 @@ import { agents, agentSecrets, channelBindings, channels, conversations, message
 import type { ChannelCredentials } from '../lib/channels.js';
 import { findChannelByObjectId, parseMetaWebhook } from '../lib/channels.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
+import { emitHookEvent } from '../lib/hooks.js';
 import { processEvents } from '../services/ingest.js';
 import { toConversation, toMessage } from '../lib/serializers.js';
 import { bus } from '../lib/bus.js';
@@ -441,6 +442,7 @@ async function convForUser(db: Db, channel: ChannelRow, userId: string) {
         .limit(1)
     )[0];
   if (!winner) throw new Error('conv create raced and winner not visible');
+  if (conv) emitHookEvent(db, channel.agentId, 'new_conversation', conv);
   await db
     .insert(channelBindings)
     .values({ channelId: channel.id, conversationId: winner.id, platformUserId: userId })

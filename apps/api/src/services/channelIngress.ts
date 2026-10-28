@@ -34,6 +34,7 @@ import { systemNote } from '../lib/systemNote.js';
 import { groupsForRules } from '../lib/ruleAlerts.js';
 import { env } from '../env.js';
 import { deliverWebhook } from '../lib/webhooks.js';
+import { emitHookEvent } from '../lib/hooks.js';
 import { isUniqueViolation } from '../lib/errorReporting.js';
 import { processEvents } from './ingest.js';
 
@@ -466,6 +467,7 @@ export async function handleChannelMessage(
         .values({ agentId: channel.agentId, externalId, userProfile: baseProfile(channel, msg) })
         .onConflictDoNothing({ target: [conversations.agentId, conversations.externalId] })
         .returning();
+      if (conv) emitHookEvent(db, channel.agentId, 'new_conversation', conv);
       if (!conv) {
         [conv] = await db
           .select()
@@ -583,6 +585,10 @@ export async function handleChannelMessage(
     }
   }
   if (created) {
+    // processEvents sees this row as pre-existing, so its own isNew emit
+    // can't fire — the hook contract is 'a conversation row was created',
+    // regardless of which path inserted it.
+    emitHookEvent(db, channel.agentId, 'new_conversation', conv);
     await db.insert(channelBindings).values({
       channelId: channel.id,
       conversationId: conv.id,
