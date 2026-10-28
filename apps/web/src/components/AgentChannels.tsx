@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
-import { useChannels, useMe } from '../api/hooks';
+import { useBillingStatus, useChannels, useMe } from '../api/hooks';
 import { Empty } from './bits';
 import { KIND_LABEL, type PendingAssets } from './Channels';
 import { useConfirm } from './Prompt';
@@ -18,6 +18,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   const agentId = agent.id;
   const { data } = useChannels();
   const { data: me } = useMe();
+  const { data: billing } = useBillingStatus();
+  const plan = billing?.plan;
   const isAdmin = me?.user.role === 'admin';
   const qc = useQueryClient();
   const [params, setParams] = useSearchParams();
@@ -760,6 +762,10 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                 <div className="muted" style={{ marginTop: 12 }}>
                   Voice calling is in carrier review — coming soon.
                 </div>
+              ) : plan === 'free' ? (
+                <div className="muted" style={{ marginTop: 12 }}>
+                  Voice calling is a paid-plan feature — <a href="/billing">upgrade on the Billing page</a>.
+                </div>
               ) : (<>
               <div className="seg" style={{ marginTop: 12 }}>
                 <button
@@ -892,6 +898,10 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               {!me?.twilio_channels_live ? (
                 <div className="muted" style={{ marginTop: 12 }}>
                   SMS is in carrier review — coming soon.
+                </div>
+              ) : plan === 'free' ? (
+                <div className="muted" style={{ marginTop: 12 }}>
+                  SMS channels are a paid-plan feature — <a href="/billing">upgrade on the Billing page</a>.
                 </div>
               ) : (<>
               {channels.some((v) => v.kind === 'voice') ? (

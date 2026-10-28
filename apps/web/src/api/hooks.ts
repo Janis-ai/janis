@@ -333,6 +333,13 @@ export function useSlackStatus() {
   });
 }
 
+export function useBillingStatus() {
+  return useQuery({
+    queryKey: ['billing-status'],
+    queryFn: () => api<{ plan: string }>('/api/billing/status'),
+  });
+}
+
 export function useChannels() {
   return useQuery({
     queryKey: ['channels'],
