@@ -449,9 +449,10 @@ drizzle-kit/workbox-build, nothing to drop directly).
     the concierge claimed no Stripe access despite holding the tools —
     saved as regression test "Alert battery — billing question must try
     Stripe tools". Positive: "explicit human request escalates".
-44. `janis-zapier-logo.png` shows deleted in git — confirm intentional.
+44. DONE — `janis-zapier-logo.png` deleted intentionally (bad version);
+   Mike made his own logo (janis-big-j.png).
 45. Three `big-j*.png` untracked in apps/web/public/img/ — commit or gitignore?
-46. Optional: zapier-platform-core 19 bump before directory submission.
+46. DONE — zapier-platform-core is on 19.2.1 (1.0.2 promoted 2026-10-28).
 
 **Infra / reliability**
 - Multi-instance: DONE — bus_events SSE relay, viewers + voice_queue tables,
