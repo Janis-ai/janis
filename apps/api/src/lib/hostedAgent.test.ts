@@ -2654,6 +2654,44 @@ describe('systemPrompt escalation clause', () => {
   });
 });
 
+describe('concierge anonymous-visitor guard', () => {
+  const conv = (userProfile: object) =>
+    ({ externalId: 'webchat:v1', userProfile }) as never;
+
+  it('anonymous visitors get told the sign-in gate up front; verified users do not', () => {
+    const prev = env.operatorWorkspaceId;
+    env.operatorWorkspaceId = 'ws-op';
+    try {
+      const agent = { name: 'Janis', config: {}, workspaceId: 'ws-op' } as never;
+      const anon = systemPrompt(agent, [], conv({}));
+      expect(anon).toContain('NOT signed in to Janis');
+      expect(anon).toContain(`${env.webOrigin}/login`);
+      expect(anon).toContain('create_agent');
+
+      const signed = systemPrompt(
+        agent,
+        [],
+        conv({ identity_verified: true, external_id: 'u-1' }),
+      );
+      expect(signed).not.toContain('NOT signed in to Janis');
+    } finally {
+      env.operatorWorkspaceId = prev;
+    }
+  });
+
+  it('non-operator workspaces never see the line', () => {
+    const prev = env.operatorWorkspaceId;
+    env.operatorWorkspaceId = 'ws-op';
+    try {
+      const agent = { name: 'Other', config: {}, workspaceId: 'ws-other' } as never;
+      const p = systemPrompt(agent, [], conv({}));
+      expect(p).not.toContain('NOT signed in to Janis');
+    } finally {
+      env.operatorWorkspaceId = prev;
+    }
+  });
+});
+
 describe('conversationContext traits', () => {
   it('the janis console pack keeps long agent inventories; self-reported traits clip at 120', () => {
     const uuid = (n: number) => `${'a'.repeat(8)}-0000-4000-8000-${String(n).padStart(12, '0')}`;

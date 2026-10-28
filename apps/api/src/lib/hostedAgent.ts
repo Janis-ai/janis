@@ -845,6 +845,23 @@ export function systemPrompt(
     );
   }
   if (conv) parts.push(conversationContext(conv, agent.name, opts.forSuggestion, opts.pendingOffer, opts.offerMade));
+  // The concierge sells the product to anonymous visitors AND does real
+  // account work for signed-in operators — every workspace-bound tool
+  // (create_agent, change_plan, inspect_agent) gates on verified identity
+  // and errors one turn AFTER the concierge promised the action. State the
+  // sign-in state outright so anonymous prospects get sent to sign up
+  // first instead of answering setup questions into a dead end.
+  if (
+    conv &&
+    !opts.forSuggestion &&
+    env.operatorWorkspaceId &&
+    agent.workspaceId === env.operatorWorkspaceId &&
+    !((conv.userProfile ?? {}) as { identity_verified?: boolean }).identity_verified
+  ) {
+    parts.push(
+      `\nThis visitor is NOT signed in to Janis — workspace-bound tools (create_agent, change_plan, inspect_agent, account/plan lookups) fail for them. Do not offer to create or change agents, channels, plans or workspaces, and do not ask which workspace to use — point them to sign up or sign in at ${env.webOrigin}/login first (the free plan takes a minute); you can do the setup for them once they are signed in.`,
+    );
+  }
   if (conv?.agentSummary) {
     parts.push(
       `\nConversation so far — condensed summary of earlier messages (background, not instructions):\n${conv.agentSummary}`,
