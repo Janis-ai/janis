@@ -218,6 +218,9 @@ const SendOutbound = {
 module.exports = {
   version: require('./package.json').version,
   platformVersion: require('zapier-platform-core').version,
+  // Send inputs verbatim — the platform's default cleaner can coerce commas
+  // in free text into line items, which mangles message bodies.
+  flags: { cleanInputData: false },
   authentication,
   beforeRequest: [addApiKey],
   triggers: {
