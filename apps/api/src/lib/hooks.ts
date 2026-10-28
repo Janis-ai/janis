@@ -33,15 +33,27 @@ export function emitHookEvent(
       .where(and(eq(hookSubscriptions.agentId, agentId), eq(hookSubscriptions.event, event)));
     if (!subs.length) return;
     const body = JSON.stringify(toConversation(conv));
-    await Promise.allSettled(
-      subs.map((s) =>
-        fetch(s.targetUrl, {
+    const results = await Promise.allSettled(
+      subs.map(async (s) => {
+        const res = await fetch(s.targetUrl, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body,
           signal: AbortSignal.timeout(8_000),
-        }),
-      ),
+        });
+        if (!res.ok)
+          console.error(
+            `hook delivery failed: ${event} agent=${agentId} conv=${conv.id} ` +
+              `sub=${s.id} status=${res.status}`,
+          );
+      }),
     );
-  })().catch(() => {});
+    for (const [i, r] of results.entries())
+      if (r.status === 'rejected')
+        console.error(
+          `hook delivery failed: ${event} agent=${agentId} conv=${conv.id} ` +
+            `sub=${subs[i].id}`,
+          r.reason,
+        );
+  })().catch((err) => console.error('hook emit failed:', err));
 }
