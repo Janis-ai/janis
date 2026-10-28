@@ -6,6 +6,8 @@ import { env, requestOrigin, requestWebOrigin } from '../env.js';
 import { AgentConfig } from '@janis/shared';
 import { agentConnections, agents } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
+import { zValidator } from '@hono/zod-validator';
+import { z } from 'zod';
 import { connectionToken } from '../lib/connections.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { TOOL_TEMPLATES } from '../lib/toolTemplates.js';
@@ -31,6 +33,7 @@ const SCOPES = [
 interface Intent {
   w: string;
   a: string;
+  t: string; // which google-* template card initiated the connect
   x: number;
 }
 
@@ -49,7 +52,7 @@ function verifyIntent(token: string): Intent | null {
   if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
   try {
     const i = JSON.parse(Buffer.from(body, 'base64url').toString()) as Intent;
-    return i.w && i.a && i.x > Date.now() ? i : null;
+    return i.w && i.a && i.t && i.x > Date.now() ? i : null;
   } catch {
     return null;
   }
@@ -93,9 +96,11 @@ export function googleApiRoutes(db: Db) {
     if (!agent) {
       return fail('pick the agent this Google account should serve');
     }
+    const tplId = c.req.query('tpl') ?? 'google-sheets';
     const state = signIntent({
       w: c.get('workspaceId'),
       a: agentId,
+      t: tplId,
       x: Date.now() + STATE_TTL_MS,
     });
     return c.redirect(consentUrl(requestOrigin(c), state));
@@ -126,7 +131,79 @@ export function googleApiRoutes(db: Db) {
     });
   });
 
+  // Whether a Google connection exists for this agent — other google-*
+  // cards render "Add" (install tools, no re-consent) instead of Connect.
+  app.get('/connection', adminOnly, async (c) => {
+    const agentId = c.req.query('agent_id') ?? '';
+    const [conn] = await db
+      .select({ label: agentConnections.label })
+      .from(agentConnections)
+      .where(
+        and(
+          eq(agentConnections.agentId, agentId),
+          eq(agentConnections.workspaceId, c.get('workspaceId')),
+          eq(agentConnections.provider, 'google'),
+        ),
+      )
+      .limit(1);
+    return c.json({ connected: Boolean(conn), label: conn?.label ?? null });
+  });
+
+  // Drive files the connection can see — picked files, app-created, opened.
+  app.get('/files', adminOnly, async (c) => {
+    const agentId = c.req.query('agent_id') ?? '';
+    const conn = await googleConn(db, agentId, c.get('workspaceId'));
+    if (!conn) return c.json({ files: [] });
+    const token = await connectionToken(db, conn);
+    const res = await fetch(
+      'https://www.googleapis.com/drive/v3/files?fields=files(id,name,mimeType,webViewLink,modifiedTime)&orderBy=modifiedTime+desc&pageSize=100',
+      { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
+    );
+    const data = (await res.json().catch(() => ({}))) as { files?: unknown[] };
+    return c.json({ files: data.files ?? [] });
+  });
+
+  // Create a new Google file (sheet/doc/slide) for this connection —
+  // app-created files are visible to tools under drive.file automatically.
+  app.post(
+    '/create-file',
+    adminOnly,
+    zValidator('json', z.object({ agent_id: z.string(), mime_type: z.string(), title: z.string().min(1) })),
+    async (c) => {
+      const { agent_id, mime_type, title } = c.req.valid('json');
+      const conn = await googleConn(db, agent_id, c.get('workspaceId'));
+      if (!conn) return c.json({ error: 'connect Google first' }, 404);
+      if (!mime_type.startsWith('application/vnd.google-apps.'))
+        return c.json({ error: 'unsupported file type' }, 400);
+      const token = await connectionToken(db, conn);
+      const res = await fetch('https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType,webViewLink', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: title, mimeType: mime_type }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) return c.json({ error: `drive create failed (${res.status})` }, 502);
+      return c.json({ file: await res.json() });
+    },
+  );
+
   return app;
+}
+
+/** The agent's 'google' agent_connection row, if connected. */
+async function googleConn(db: Db, agentId: string, workspaceId: string) {
+  const [conn] = await db
+    .select()
+    .from(agentConnections)
+    .where(
+      and(
+        eq(agentConnections.agentId, agentId),
+        eq(agentConnections.workspaceId, workspaceId),
+        eq(agentConnections.provider, 'google'),
+      ),
+    )
+    .limit(1);
+  return conn ?? null;
 }
 
 /** Public endpoint mounted at /google — the signed state IS the auth. */
@@ -219,17 +296,16 @@ export function googlePublicRoutes(db: Db) {
       return done(`connected but the token check failed: ${(err as Error).message}`);
     }
 
-    // Install BOTH Sheets + Docs templates — one Google connection serves both.
-    const cfg = (agent.config ?? {}) as AgentConfig;
-    let tools = cfg.tools ?? [];
-    for (const tplId of ['google-sheets', 'google-docs', 'google-slides', 'google-drive']) {
-      const tpl = TOOL_TEMPLATES.find((t) => t.id === tplId);
-      if (!tpl) continue;
+    // Install only the template the user clicked — other Google cards add
+    // their tools later without re-running OAuth (connection already exists).
+    const tpl = TOOL_TEMPLATES.find((t) => t.id === intent.t) ?? TOOL_TEMPLATES.find((t) => t.id === 'google-sheets');
+    if (tpl) {
+      const cfg = (agent.config ?? {}) as AgentConfig;
       const names = new Set(tpl.tools.map((t) => t.name));
       const stamped = tpl.tools.map((t) => ({ ...t, template: tpl.id }));
-      tools = [...tools.filter((t) => !names.has(t.name)), ...stamped];
+      const tools = [...(cfg.tools ?? []).filter((t) => !names.has(t.name)), ...stamped];
+      await db.update(agents).set({ config: { ...cfg, tools } }).where(eq(agents.id, agent.id));
     }
-    await db.update(agents).set({ config: { ...cfg, tools } }).where(eq(agents.id, agent.id));
 
     return done(label, true);
   });

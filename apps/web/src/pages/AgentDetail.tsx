@@ -2996,6 +2996,21 @@ function IntegrationCards({
     queryFn: () => api<{ templates: ToolTemplateInfo[] }>('/api/tool-templates'),
     staleTime: 300_000,
   });
+  const gconn = useQuery({
+    queryKey: ['google-conn', agentId],
+    queryFn: () =>
+      api<{ connected: boolean; label: string | null }>(
+        `/api/google/connection?agent_id=${agentId}`,
+      ),
+  });
+  const gfiles = useQuery({
+    queryKey: ['google-files', agentId],
+    queryFn: () =>
+      api<{ files: { id: string; name: string; mimeType: string; webViewLink?: string }[] }>(
+        `/api/google/files?agent_id=${agentId}`,
+      ),
+    enabled: gconn.data?.connected === true,
+  });
   // Platform tools — in-process builtins on Janis infrastructure (web
   // search today). No credentials; toggles write config.builtin_tools.
   const { data: builtin } = useQuery({
@@ -3049,8 +3064,10 @@ function IntegrationCards({
         .setAppId(boot.app_id)
         .addView(view)
         .setCallback((data: { action: string; docs?: { name: string }[] }) => {
-          if (data.action === 'picked')
+          if (data.action === 'picked') {
             setErr(`Picked ${data.docs?.length ?? 0} item(s) — the agent can now see them.`);
+            gfiles.refetch();
+          }
         })
         .build();
       picker.setVisible(true);
@@ -3067,6 +3084,35 @@ function IntegrationCards({
     } else open();
   };
 
+  const GFILE_MIME: Record<string, [string, string]> = {
+    'google-sheets': ['application/vnd.google-apps.spreadsheet', 'spreadsheet'],
+    'google-docs': ['application/vnd.google-apps.document', 'doc'],
+    'google-slides': ['application/vnd.google-apps.presentation', 'presentation'],
+    'google-drive': ['application/vnd.google-apps.document', 'doc'],
+  };
+  const createGoogleFile = async (tplId: string) => {
+    const [mime, kind] = GFILE_MIME[tplId] ?? GFILE_MIME['google-docs'];
+    const title = window.prompt(`Title for the new ${kind}`);
+    if (!title?.trim()) return;
+    try {
+      await api(`/api/google/create-file`, {
+        method: 'POST',
+        body: JSON.stringify({ agent_id: agentId, mime_type: mime, title: title.trim() }),
+      });
+      gfiles.refetch();
+      setErr(`Created "${title.trim()}" — the agent can now see it.`);
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
+
+  // google_* files visible under a card — filtered to the card's file type.
+  const gfilesFor = (tplId: string) => {
+    const mime = GFILE_MIME[tplId]?.[0];
+    const all = gfiles.data?.files ?? [];
+    return tplId === 'google-drive' ? all : all.filter((f) => f.mimeType === mime);
+  };
+
   const connectProvider = ['calendly', 'google'].find((p) => params.get(`${p}_connect`) != null || params.get(`${p}_error`) != null);
   const flash = connectProvider
     ? params.get(`${connectProvider}_connect`) != null
@@ -3081,6 +3127,15 @@ function IntegrationCards({
     }
     setParams(params, { replace: true });
   };
+  // Back from Google consent — prompt a file pick for the card that connected.
+  useEffect(() => {
+    const tpl = params.get('google_tpl');
+    if (!tpl) return;
+    params.delete('google_tpl');
+    setParams(params, { replace: true });
+    void openGooglePicker(tpl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.get('google_tpl')]);
 
   const syncTools = (tools: AgentConfig['tools']) => setCfg({ ...cfg, tools });
   const invalidate = () => {
@@ -3253,6 +3308,21 @@ function IntegrationCards({
               </div>
             </div>
           ) : null}
+          {t.oauth_connect === '/api/google/connect' && installed(t) && (
+            <div className="muted" style={{ fontSize: 11, margin: '0 0 10px' }}>
+              {gfilesFor(t.id).length === 0 ? (
+                <>No files shared yet — pick or create one above.</>
+              ) : (
+                gfilesFor(t.id).map((f) => (
+                  <div key={f.id}>
+                    <a href={f.webViewLink} target="_blank" rel="noreferrer">
+                      {f.name}
+                    </a>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
           {openId === t.id ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {t.fields.map((f) => (
@@ -3290,20 +3360,31 @@ function IntegrationCards({
               {/* Janis-owned OAuth apps get a consent link, not a form — the
                   callback stores the connection and installs the tools. */}
               {t.oauth_connect && !installed(t) ? (
-                <a
-                  className="btn primary"
-                  href={`${t.oauth_connect}?agent_id=${agentId}`}
-                  onClick={clearFlash}
-                >
-                  Connect {t.name.replace(/ \(OAuth\)$/, '')}
-                </a>
+                t.oauth_connect === '/api/google/connect' && gconn.data?.connected ? (
+                  <button className="btn" onClick={() => install.mutate(t)}>
+                    Add
+                  </button>
+                ) : (
+                  <a
+                    className="btn primary"
+                    href={`${t.oauth_connect}?agent_id=${agentId}${t.oauth_connect === '/api/google/connect' ? `&tpl=${t.id}` : ''}`}
+                    onClick={clearFlash}
+                  >
+                    Connect {t.name.replace(/ \(OAuth\)$/, '')}
+                  </a>
+                )
               ) : null}
               {/* Credential-less integrations have nothing to update once
                   installed — show the badge + Remove, not a dead button. */}
               {t.oauth_connect === '/api/google/connect' && installed(t) && (
-                <button className="btn" onClick={() => openGooglePicker(t.id)}>
-                  Pick Drive files…
-                </button>
+                <>
+                  <button className="btn" onClick={() => openGooglePicker(t.id)}>
+                    Pick files…
+                  </button>
+                  <button className="btn" onClick={() => createGoogleFile(t.id)}>
+                    Create new…
+                  </button>
+                </>
               )}
               {!t.oauth_connect && (!installed(t) || t.fields.length > 0) && (
                 <button
