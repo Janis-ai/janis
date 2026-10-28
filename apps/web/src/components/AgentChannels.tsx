@@ -762,17 +762,13 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                 <div className="muted" style={{ marginTop: 12 }}>
                   Voice calling is in carrier review — coming soon.
                 </div>
-              ) : plan === 'free' ? (
-                <div className="muted" style={{ marginTop: 12 }}>
-                  Voice calling is a paid-plan feature — <a href="/billing">upgrade on the Billing page</a>.
-                </div>
               ) : (<>
               <div className="seg" style={{ marginTop: 12 }}>
                 <button
                   type="button"
                   className={voiceMode === 'hosted' ? 'active' : ''}
                   onClick={() => setVoiceMode('hosted')}
-                  disabled={!hostedConfigured}
+                  disabled={!hostedConfigured || plan === 'free'}
                 >
                   Janis-hosted
                 </button>
@@ -792,7 +788,13 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                   else createVoice.mutate();
                 }}
               >
-                {voiceMode === 'hosted' ? (
+                {voiceMode === 'hosted' && plan === 'free' ? (
+                  <div className="muted" style={{ marginTop: 10 }}>
+                    Janis-hosted numbers are a paid-plan feature —{' '}
+                    <a href="/billing">upgrade on the Billing page</a>, or use your own Twilio
+                    account.
+                  </div>
+                ) : voiceMode === 'hosted' ? (
                   <>
                     <div className="row" style={{ gap: 8 }}>
                       <input
@@ -898,10 +900,6 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               {!me?.twilio_channels_live ? (
                 <div className="muted" style={{ marginTop: 12 }}>
                   SMS is in carrier review — coming soon.
-                </div>
-              ) : plan === 'free' ? (
-                <div className="muted" style={{ marginTop: 12 }}>
-                  SMS channels are a paid-plan feature — <a href="/billing">upgrade on the Billing page</a>.
                 </div>
               ) : (<>
               {channels.some((v) => v.kind === 'voice') ? (
