@@ -272,10 +272,9 @@ is a day on launch)*
    SearXNG init is ~4min cold; proxy's 30s upstream timeout would 502
    during boot). Rotate token → update .env+.env.production +
    redeploy both services.
-10. Shopify app approval — listing assets DONE 2026-10 (console
-    screenshots, embedded-app home shot, walkthrough video, PCD
-    questionnaire + security policy). Remaining: the submission +
-    review cycle itself.
+10. DONE-ish 2026-10-28 — Shopify app submitted, under review (listing
+    assets + PCD questionnaire + security policy all filed). Remaining:
+    the review cycle itself — watch for reviewer asks.
 11. PARKED 2026-10-24 — Google OAuth verification deferred (CASA/
     restricted-scope assessment too expensive for now). Gmail connect is
     hidden until it's done: GMAIL_CONNECT_DISABLED=1 in .env +
