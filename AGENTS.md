@@ -246,7 +246,11 @@ is a day on launch)*
    (admin in the test workspace, "Zapier review" API key on Demo Agent
    — revoke it after review closes).
 5. Twilio — paid account, A2P 10DLC brand + campaign registration, non-US
-   regulatory bundles.
+   regulatory bundles. 2026-10-28: account upgraded (paid) + Trust Hub
+   customer profile submitted, awaiting review. Next on approval:
+   brand reg (Starter) → campaign (Customer Care use case) →
+   messaging service → US number → add SMS channel in console
+   (setSmsWebhook auto-wires inbound; TWILIO_* envs already live).
 6. DONE 2026-10-19 — Azure app reg + `MS_*` envs live; Outlook channel
    verified end-to-end (Graph /reply threading in lib/outlook.ts).
 7. DONE 2026-10-20 — WorkOS prod env live (API key + client_id verified
