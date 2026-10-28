@@ -810,7 +810,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'create_agent',
     description:
-      "Propose creating a new hosted AI agent in a workspace the signed-in visitor administers — 'take a prompt, get a working agent'. Confirm the name and purpose with the visitor first, then call this with their description as `purpose` — it is stored verbatim as the agent's builder brief and drives the drafted instructions, greeting, and setup suggestions, exactly as if they had typed it into the Create step. Posts an approval card showing the name + drafted instructions — nothing is created until the visitor approves. On approval the builder's Create page opens for the new agent — do NOT offer channels, the builder covers that next. Ask which workspace only if they administer more than one.",
+      "Propose creating a new hosted AI agent — 'take a prompt, get a working agent'. ONLY for signed-in users administering a workspace: if the visitor is not signed in (anonymous chat or voice caller), do NOT offer this — tell them to sign in first instead. Confirm the name and purpose with the visitor, then call this with their description as `purpose` — it is stored verbatim as the agent's builder brief and drives the drafted instructions, greeting, and setup suggestions, exactly as if they had typed it into the Create step. Posts an approval card showing the name + drafted instructions — nothing is created until the visitor approves. On approval the builder's Create page opens for the new agent — do NOT offer channels, the builder covers that next. Ask which workspace only if they administer more than one.",
     params: {
       name: 'agent name, e.g. "Acme Support"',
       purpose:
