@@ -756,16 +756,18 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                   talk, the agent speaks, the whole call lands in the inbox
                 </span>
               </summary>
-              <div className="row" style={{ marginTop: 12, gap: 8 }}>
+              <div className="seg" style={{ marginTop: 12 }}>
                 <button
-                  className={`btn ${voiceMode === 'hosted' ? 'primary' : ''}`}
+                  type="button"
+                  className={voiceMode === 'hosted' ? 'active' : ''}
                   onClick={() => setVoiceMode('hosted')}
                   disabled={!hostedConfigured}
                 >
                   Janis-hosted
                 </button>
                 <button
-                  className={`btn ${voiceMode === 'byo' ? 'primary' : ''}`}
+                  type="button"
+                  className={voiceMode === 'byo' ? 'active' : ''}
                   onClick={() => setVoiceMode('byo')}
                 >
                   Use my Twilio account

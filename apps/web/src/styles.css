@@ -1900,3 +1900,10 @@ input.bub-switch:disabled { cursor: default; }
 .test-chat-history-row .grow {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* Segmented control — joined mode toggle (e.g. hosted vs BYO voice) */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: transparent; padding: 7px 14px; font: inherit; color: var(--muted); cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button.active { background: var(--accent); color: #06281f; font-weight: 600; }
+.seg button:disabled { opacity: 0.45; cursor: default; }
