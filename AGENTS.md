@@ -238,9 +238,13 @@ is a day on launch)*
    billing signals.)
 3. DONE 2026-10-24 — IG App Review approved (`instagram_manage_messages`
    + business verification).
-4. Zapier publishing tail — toggle existing Zaps off/on (old polling
-   triggers → REST hooks now), 2 more users via Sharing-tab invite, ToS
-   checkbox.
+4. DONE 2026-10-28 — Zapier submitted for review: durable REST-hook
+   deliveries (retries/sweeper/replay), 3 users migrated to 1.0.3 with
+   live Zaps covering all 3 triggers + 5 actions, promote passed all
+   checks. Launch Progress: Build+Review green, awaiting Zapier team
+   review (~1 wk). Test account: integration-testing@zapier.com
+   (admin in the test workspace, "Zapier review" API key on Demo Agent
+   — revoke it after review closes).
 5. Twilio — paid account, A2P 10DLC brand + campaign registration, non-US
    regulatory bundles.
 6. DONE 2026-10-19 — Azure app reg + `MS_*` envs live; Outlook channel
