@@ -1,6 +1,6 @@
 {
   "name": "janis",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Janis — human-assisted AI customer conversations. AI when AI is best, humans when needed.",
   "main": "index.js",
   "private": true,

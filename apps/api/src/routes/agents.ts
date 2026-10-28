@@ -1,10 +1,10 @@
 import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
 import { AgentConfig, friendlyName } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, campaignSends, campaigns, channelBindings, channels, contactIdentities, conversations, evalSuggestions, helpArticles, helpSearchLog, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentApiKeys, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, campaignSends, campaigns, channelBindings, channels, contactIdentities, conversations, evalSuggestions, helpArticles, helpSearchLog, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import { WidgetComponent, WidgetState, WidgetToolBinding } from '../lib/widgets.js';
 import { toolsFor } from '../lib/toolExec.js';
 import {
@@ -578,6 +578,84 @@ export function agentRoutes(db: Db) {
       .returning();
     if (!row) return c.json({ error: 'not found' }, 404);
     return c.json({ agent: toAgent(row), api_key: key });
+  });
+
+  const ownedAgentId = async (c: { req: { param: (n: string) => string }; get: (k: string) => string }) => {
+    const [row] = await db
+      .select({ id: agents.id })
+      .from(agents)
+      .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
+      .limit(1);
+    return row;
+  };
+
+  // Named API keys — list, create, revoke. The full key is returned once at
+  // creation; rows are soft-deleted via revoked_at so usage history stays.
+  app.get('/:id/api-keys', agentMember, async (c) => {
+    if (!(await ownedAgentId(c))) return c.json({ error: 'not found' }, 404);
+    const rows = await db
+      .select()
+      .from(agentApiKeys)
+      .where(eq(agentApiKeys.agentId, c.req.param('id')))
+      .orderBy(desc(agentApiKeys.createdAt));
+    return c.json({
+      keys: rows.map((r) => ({
+        id: r.id,
+        label: r.label,
+        preview: r.keyPreview,
+        last_used_at: r.lastUsedAt?.toISOString() ?? null,
+        revoked_at: r.revokedAt?.toISOString() ?? null,
+        created_at: r.createdAt.toISOString(),
+      })),
+    });
+  });
+
+  app.post(
+    '/:id/api-keys',
+    agentAdmin,
+    zValidator('json', z.object({ label: z.string().min(1).max(60) })),
+    async (c) => {
+      if (!(await ownedAgentId(c))) return c.json({ error: 'not found' }, 404);
+      const { label } = c.req.valid('json');
+      const { key, hash, preview } = generateApiKey();
+      const [row] = await db
+        .insert(agentApiKeys)
+        .values({ agentId: c.req.param('id'), label, keyHash: hash, keyPreview: preview })
+        .returning();
+      return c.json({ key: { id: row.id, label, preview, api_key: key } }, 201);
+    },
+  );
+
+  app.post('/:id/api-keys/:keyId/revoke', agentAdmin, async (c) => {
+    const [row] = await db
+      .update(agentApiKeys)
+      .set({ revokedAt: new Date() })
+      .where(
+        and(
+          eq(agentApiKeys.id, c.req.param('keyId')),
+          eq(agentApiKeys.agentId, c.req.param('id')),
+          isNull(agentApiKeys.revokedAt),
+        ),
+      )
+      .returning();
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({ ok: true });
+  });
+
+  // Revoke the implicit "Primary" key (the legacy api_key_hash column).
+  app.post('/:id/api-keys/legacy/revoke', agentAdmin, async (c) => {
+    const [row] = await db
+      .update(agents)
+      .set({ apiKeyHash: null, apiKeyPreview: null })
+      .where(
+        and(
+          eq(agents.id, c.req.param('id')),
+          eq(agents.workspaceId, c.get('workspaceId')),
+        ),
+      )
+      .returning();
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({ ok: true });
   });
 
   app.post('/:id/rotate-webhook-secret', agentAdmin, async (c) => {

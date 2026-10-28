@@ -1649,6 +1649,29 @@ export const hookSubscriptions = pgTable(
 );
 
 /**
+ * Named API keys per agent — the enterprise shape: many keys, each labeled,
+ * individually revocable, last_used stamped on auth. The legacy
+ * agents.api_key_hash column still authenticates as the implicit "Primary"
+ * key; new keys live here. Hash only — full value shown once at creation.
+ */
+export const agentApiKeys = pgTable(
+  'agent_api_keys',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    keyHash: text('key_hash').notNull().unique(),
+    keyPreview: text('key_preview').notNull(),
+    lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('agent_api_keys_agent').on(t.agentId)],
+);
+
+/**
  * In-product activation events (discovery-card clicks, tab views) — the
  * server-side funnel complement to GA4's marketing funnel. Fire-and-forget
  * writes from POST /api/track; queried by hand for activation metrics.

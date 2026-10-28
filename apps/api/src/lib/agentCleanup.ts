@@ -3,6 +3,7 @@ import type { Db } from '../db/client.js';
 import {
   agentConnections,
   agentMembers,
+  agentApiKeys,
   agentSecrets,
   agentTestRuns,
   agentTests,
@@ -57,6 +58,7 @@ export async function deleteAgentsCascade(tx: Db, agentIds: string[]): Promise<v
   await tx.delete(agentTests).where(inArray(agentTests.agentId, agentIds));
   await tx.delete(agentWidgets).where(inArray(agentWidgets.agentId, agentIds));
   await tx.delete(hookSubscriptions).where(inArray(hookSubscriptions.agentId, agentIds));
+  await tx.delete(agentApiKeys).where(inArray(agentApiKeys.agentId, agentIds));
   await tx.delete(shopifyShops).where(inArray(shopifyShops.agentId, agentIds));
   await tx.delete(memberGroups).where(inArray(memberGroups.agentId, agentIds));
   await tx.delete(helpSearchLog).where(inArray(helpSearchLog.agentId, agentIds));

@@ -3530,6 +3530,15 @@ function HelpDomainCard({
 
 /** API key / webhook secret / deliveries — its own card so the General tab
  *  can order it below the LLM override. */
+type ApiKeyRow = {
+  id: string;
+  label: string;
+  preview: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+};
+
 function CredentialsCard({
   agent,
   isAdmin,
@@ -3546,7 +3555,36 @@ function CredentialsCard({
   freshSecret: { label: string; value: string } | null;
 }) {
   const [showDeliveries, setShowDeliveries] = useState(false);
+  const [keyLabel, setKeyLabel] = useState('');
+  const [createdKey, setCreatedKey] = useState<{ label: string; value: string } | null>(null);
   const { data: deliveries } = useDeliveries(showDeliveries ? agent.id : null);
+  const { data: keysData, refetch: refetchKeys } = useQuery({
+    queryKey: ['apiKeys', agent.id],
+    queryFn: () =>
+      api<{ keys: ApiKeyRow[] }>(`/api/agents/${agent.id}/api-keys`),
+  });
+  const createKey = useMutation({
+    mutationFn: (label: string) =>
+      api<{ key: { api_key: string } }>(`/api/agents/${agent.id}/api-keys`, {
+        method: 'POST',
+        body: JSON.stringify({ label }),
+      }),
+    onSuccess: (r, label) => {
+      setCreatedKey({ label, value: r.key.api_key });
+      setKeyLabel('');
+      void refetchKeys();
+    },
+  });
+  const revokeKey = useMutation({
+    mutationFn: (keyId: string) =>
+      api(`/api/agents/${agent.id}/api-keys/${keyId}/revoke`, { method: 'POST' }),
+    onSettled: () => void refetchKeys(),
+  });
+  const revokeLegacy = useMutation({
+    mutationFn: () =>
+      api(`/api/agents/${agent.id}/api-keys/legacy/revoke`, { method: 'POST' }),
+    onSettled: () => void qcLocal.invalidateQueries({ queryKey: ['agents'] }),
+  });
   const qcLocal = useQueryClient();
   const replay = useMutation({
     mutationFn: (deliveryId: string) =>
@@ -3560,18 +3598,57 @@ function CredentialsCard({
         {freshSecret && (
           <FreshSecretCard label={freshSecret.label} value={freshSecret.value} />
         )}
+        {createdKey && (
+          <FreshSecretCard label={`API key "${createdKey.label}"`} value={createdKey.value} />
+        )}
         {agent.api_key_preview && (
-          <div className="muted" style={{ marginTop: 6 }}>
-            Active key: <span className="mono">{agent.api_key_preview}</span>
-            {' '}— full key is shown once at creation and can't be recovered.
+          <div className="row" style={{ marginTop: 6 }}>
+            <span className="grow">Primary · <span className="mono">{agent.api_key_preview}</span></span>
+            {isAdmin && (
+              <>
+                <button className="btn" onClick={onRotateKey}>Rotate</button>
+                <button className="btn" disabled={revokeLegacy.isPending} onClick={() => revokeLegacy.mutate()}>Revoke</button>
+              </>
+            )}
+          </div>
+        )}
+        {(keysData?.keys ?? []).map((k) => (
+          <div className="row" key={k.id} style={{ marginTop: 6, opacity: k.revoked_at ? 0.5 : 1 }}>
+            <span className="grow">{k.label} <span className="mono muted">{k.preview}</span></span>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {k.revoked_at
+                ? `revoked ${timeAgo(k.revoked_at)}`
+                : k.last_used_at
+                  ? `used ${timeAgo(k.last_used_at)}`
+                  : 'never used'}
+            </span>
+            {isAdmin && !k.revoked_at && (
+              <button className="btn" disabled={revokeKey.isPending} onClick={() => revokeKey.mutate(k.id)}>
+                Revoke
+              </button>
+            )}
+          </div>
+        ))}
+        {isAdmin && (
+          <div className="row" style={{ marginTop: 8 }}>
+            <input
+              className="grow"
+              placeholder="New key label — e.g. Zapier, cron job"
+              value={keyLabel}
+              onChange={(e) => setKeyLabel(e.target.value)}
+            />
+            <button
+              className="btn"
+              disabled={!keyLabel.trim() || createKey.isPending}
+              onClick={() => createKey.mutate(keyLabel.trim())}
+            >
+              Create API key
+            </button>
           </div>
         )}
         <div className="row" style={{ marginTop: 8 }}>
           {isAdmin && (
             <>
-              <button className="btn" onClick={onRotateKey}>
-                {agent.api_key_preview ? 'Rotate API key' : 'Generate API key'}
-              </button>
               {!agent.hosted && (
                 <>
                   <button className="btn" onClick={onRotateSecret}>Rotate webhook secret</button>

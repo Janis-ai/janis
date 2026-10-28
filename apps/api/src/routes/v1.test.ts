@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, channels, contacts, conversations, workspaces } from '../db/schema.js';
+import { agentApiKeys, agents, channels, contacts, conversations, workspaces } from '../db/schema.js';
 import { generateApiKey } from '../lib/crypto.js';
 import { v1Routes } from './v1.js';
 
@@ -49,6 +49,25 @@ describe('v1 agent auth', () => {
   it('rejects missing and wrong keys', async () => {
     expect((await get({})).status).toBe(401);
     expect((await get({ 'X-API-KEY': 'nope' })).status).toBe(401);
+  });
+
+  it('accepts named agent_api_keys, stamps last_used, rejects revoked', async () => {
+    const k1 = generateApiKey();
+    const k2 = generateApiKey();
+    const [row1] = await db.insert(agentApiKeys).values([
+      { agentId, label: 'zapier', keyHash: k1.hash, keyPreview: k1.preview },
+      { agentId, label: 'scripts', keyHash: k2.hash, keyPreview: k2.preview },
+    ]).returning();
+    expect((await get({ Authorization: `Bearer ${k1.key}` })).status).toBe(200);
+    expect((await get({ Authorization: `Bearer ${k2.key}` })).status).toBe(200);
+    await new Promise((r) => setTimeout(r, 50));
+    const [stamped] = await db.select().from(agentApiKeys).where(eq(agentApiKeys.id, row1.id));
+    expect(stamped.lastUsedAt).toBeTruthy();
+
+    await db.update(agentApiKeys).set({ revokedAt: new Date() }).where(eq(agentApiKeys.id, row1.id));
+    expect((await get({ Authorization: `Bearer ${k1.key}` })).status).toBe(401);
+    // the other key is unaffected — multiple keys, independent revocation
+    expect((await get({ Authorization: `Bearer ${k2.key}` })).status).toBe(200);
   });
 });
 
