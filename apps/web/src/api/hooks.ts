@@ -44,6 +44,7 @@ export function useMe() {
           dismissed: boolean;
         }[];
         support_channel_id: string | null;
+        twilio_channels_live?: boolean;
         /** Janis operator workspace — unlocks the error-reports surface. */
         operator?: boolean;
       }>('/auth/me'),

@@ -756,6 +756,11 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                   talk, the agent speaks, the whole call lands in the inbox
                 </span>
               </summary>
+              {!me?.twilio_channels_live ? (
+                <div className="muted" style={{ marginTop: 12 }}>
+                  Voice calling is in carrier review — coming soon.
+                </div>
+              ) : (<>
               <div className="seg" style={{ marginTop: 12 }}>
                 <button
                   type="button"
@@ -870,6 +875,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                   ? 'Janis provisions the number and wires it up — callers are transcribed turn-by-turn, the agent answers by voice, and a human takeover can bridge straight to the forward-to number. Billed on your plan\u2019s usage meter: ~$1.15/mo for the number plus ~1.7¢/min on calls.'
                   : 'Then in the Twilio console, set the number\'s Voice → "A call comes in" webhook to the URL on the channel card. Callers are transcribed turn-by-turn; the agent\'s reply is spoken, and when a human takes over the call can bridge straight to the forward-to number.'}
               </div>
+              </>)}
             </details>
           </div>
         );
@@ -883,6 +889,11 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                   needs: a Twilio number — texts to it become conversations here
                 </span>
               </summary>
+              {!me?.twilio_channels_live ? (
+                <div className="muted" style={{ marginTop: 12 }}>
+                  SMS is in carrier review — coming soon.
+                </div>
+              ) : (<>
               {channels.some((v) => v.kind === 'voice') ? (
                 <div style={{ marginTop: 12 }}>
                   {channels
@@ -953,6 +964,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                 We wire the number's inbound-message webhook automatically — texts arrive as
                 conversations and replies send from the same number.
               </div>
+              </>)}
             </details>
           </div>
         );

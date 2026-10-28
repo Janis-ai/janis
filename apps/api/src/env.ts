@@ -58,6 +58,9 @@ export const env = {
   voiceCostMicrosPerMin: Number(process.env.VOICE_COST_MICROS_PER_MIN ?? 14_000),
   // What a hosted number costs Janis per month (Twilio US local ~$1.15) —
   // billed monthly per hosted voice channel at cost × (1 + BILLING_MARGIN).
+  // Feature gate — '1' once the Twilio account clears Trust Hub/A2P.
+  // Console Voice/SMS channel sections render "coming soon" until then.
+  twilioChannelsLive: process.env.TWILIO_CHANNELS_LIVE === '1',
   voiceNumberCostMicrosPerMonth: Number(
     process.env.VOICE_NUMBER_COST_MICROS_PER_MONTH ?? 1_150_000,
   ),
