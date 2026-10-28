@@ -24,10 +24,10 @@ import { env } from '../env.js';
 const escapeXml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-const SAY = (t: string) => `<Say voice="Polly.Joanna">${escapeXml(t)}</Say>`;
+const SAY = (t: string) => `<Say voice="Polly.Joanna-Neural">${escapeXml(t)}</Say>`;
 
-const gather = (channelId: string) =>
-  `<Gather input="speech" action="/voice/${channelId}/turn" method="POST" speechTimeout="auto" timeout="6" />`;
+const gather = (channelId: string, inner = '') =>
+  `<Gather input="speech" action="/voice/${channelId}/turn" bargeIn="true" method="POST" speechTimeout="auto" timeout="6">${inner}</Gather>`;
 
 const twiml = (c: Context, inner: string) =>
   c.text(`<?xml version="1.0" encoding="UTF-8"?><Response>${inner}</Response>`, 200, {
@@ -77,7 +77,7 @@ export function voiceRoutes(db: Db, opts?: { replyWaitMs?: number }) {
     const r = await resolve(c);
     if (!r) return c.text('forbidden', 403);
     const greeting = r.creds.greeting ?? 'Hi, thanks for calling. How can I help you today?';
-    return twiml(c, SAY(greeting) + gather(r.channel.id));
+    return twiml(c, gather(r.channel.id, SAY(greeting)));
   });
 
   app.post('/:channelId/turn', async (c) => {
@@ -130,7 +130,7 @@ export function voiceRoutes(db: Db, opts?: { replyWaitMs?: number }) {
     const replies = await voiceAwaitReply(db, conv.id, replyWaitMs);
     const text = replies.join(' ').trim();
     if (text) {
-      return twiml(c, SAY(text) + gather(channel.id));
+      return twiml(c, gather(channel.id, SAY(text)));
     }
     // Nothing yet — the agent is still thinking. Loop back; queued replies
     // drain at the top of the next pass. Bail after 5 empty polls.
