@@ -2,7 +2,7 @@ import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
-import { AgentConfig, friendlyName } from '@janis/shared';
+import { AgentConfig, catalogModel, friendlyName, vendorForBaseUrl } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, agentApiKeys, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, campaignSends, campaigns, channelBindings, channels, contactIdentities, conversations, evalSuggestions, helpArticles, helpSearchLog, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import { WidgetComponent, WidgetState, WidgetToolBinding } from '../lib/widgets.js';
@@ -15,6 +15,7 @@ import {
   type SessionEnv,
 } from '../middleware/sessionAuth.js';
 import { generateApiKey, generateWebhookSecret } from '../lib/crypto.js';
+import { opsAlert } from '../lib/opsAlert.js';
 import { bus } from '../lib/bus.js';
 import { env } from '../env.js';
 import { deliverWebhook, replayDelivery } from '../lib/webhooks.js';
@@ -428,6 +429,7 @@ export function agentRoutes(db: Db) {
       }
     }
     let configToSave = body.config;
+    let llmVendorAlert: string | undefined;
     // llm.api_key is write-only — reads return key_set instead. Merge so a
     // config save doesn't wipe the key: undefined/'' keep, null clears,
     // a real string replaces.
@@ -465,6 +467,32 @@ export function agentRoutes(db: Db) {
             402,
           );
         }
+      }
+      // First external adoption of a non-default vendor → ping ops so the
+      // vendor account gets topped up before real traffic hits its tier.
+      // BYOK is exempt (their key, not ours), as is the operator workspace.
+      const newVendor = llm.api_key
+        ? undefined
+        : catalogModel(llm.model as string)?.vendor;
+      if (
+        newVendor &&
+        newVendor !== vendorForBaseUrl(env.llmBaseUrl) &&
+        c.get('workspaceId') !== env.operatorWorkspaceId
+      ) {
+        const siblings = await db
+          .select({ config: agents.config })
+          .from(agents)
+          .where(
+            and(
+              eq(agents.workspaceId, c.get('workspaceId')),
+              sql`${agents.id} != ${c.req.param('id')}`,
+            ),
+          );
+        const already = siblings.some((s) => {
+          const m = ((s.config ?? {}) as { llm?: { model?: string; api_key?: string } }).llm;
+          return m?.model && !m.api_key && catalogModel(m.model)?.vendor === newVendor;
+        });
+        if (!already) llmVendorAlert = newVendor;
       }
     }
     // builtin_tools additions go through the same rules as the dedicated
@@ -520,6 +548,11 @@ export function agentRoutes(db: Db) {
       .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
       .returning();
     if (!row) return c.json({ error: 'not found' }, 404);
+    if (llmVendorAlert) {
+      opsAlert(
+        `LLM vendor adopted — workspace ${c.get('workspaceId')} pinned an agent to ${llmVendorAlert}; check that vendor account's balance/rate tier`,
+      );
+    }
     // New alert destinations → every member needs to be in those channels
     // to see/act on alerts.
     if (routesPatch) {
