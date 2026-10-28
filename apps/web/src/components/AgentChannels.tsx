@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
+import { Lock } from 'lucide-react';
 import type { Agent, Channel } from '@janis/shared';
 import { useBillingStatus, useChannels, useMe } from '../api/hooks';
 import { Empty } from './bits';
@@ -262,6 +263,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
   // Voice — Janis-hosted number (search + pick) or bring-your-own Twilio
   // creds; the webhook URL lives on the channel card.
   const [voiceMode, setVoiceMode] = useState<'hosted' | 'byo'>('hosted');
+  // Free plans can't provision hosted numbers — the tab stays tappable so
+  // the upsell explains why, and the shared fields render dimmed/disabled.
+  const hostedFree = voiceMode === 'hosted' && plan === 'free';
   const [areaCode, setAreaCode] = useState('');
   const [foundNumbers, setFoundNumbers] = useState<
     { phone_number: string; friendly_name: string; locality?: string; region?: string }[] | null
@@ -768,8 +772,10 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                   type="button"
                   className={voiceMode === 'hosted' ? 'active' : ''}
                   onClick={() => setVoiceMode('hosted')}
-                  disabled={!hostedConfigured || plan === 'free'}
+                  disabled={!hostedConfigured}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
                 >
+                  {plan === 'free' && <Lock size={12} />}
                   Janis-hosted
                 </button>
                 <button
@@ -788,11 +794,22 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                   else createVoice.mutate();
                 }}
               >
-                {voiceMode === 'hosted' && plan === 'free' ? (
-                  <div className="muted" style={{ marginTop: 10 }}>
+                {hostedFree ? (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: '10px 12px',
+                      fontSize: 14.5,
+                      fontWeight: 600,
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--panel-2)',
+                    }}
+                  >
+                    <Lock size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
                     Janis-hosted numbers are a paid-plan feature —{' '}
                     <a href="/billing">upgrade on the Billing page</a>, or use your own Twilio
-                    account.
+                    account below.
                   </div>
                 ) : voiceMode === 'hosted' ? (
                   <>
@@ -852,30 +869,42 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                     />
                   </>
                 )}
-                <input
-                  placeholder="Forward-to number when a human takes over (optional)"
-                  value={voiceForm.forward_to}
-                  onChange={(e) => setVoiceForm({ ...voiceForm, forward_to: e.target.value })}
-                />
-                <input
-                  placeholder="Spoken greeting (optional)"
-                  value={voiceForm.greeting}
-                  onChange={(e) => setVoiceForm({ ...voiceForm, greeting: e.target.value })}
-                />
-                <div>
-                  <button
-                    className="btn"
-                    disabled={
-                      createVoice.isPending || (voiceMode === 'hosted' && !pickedNumber)
-                    }
-                  >
-                    {voiceMode === 'hosted' ? 'Get this number' : 'Add voice channel'}
-                  </button>
-                  {voiceMode === 'hosted' && !pickedNumber && (
-                    <span className="muted" style={{ marginLeft: 8 }}>
-                      search an area code and pick a number first
-                    </span>
-                  )}
+                <div
+                  style={
+                    hostedFree
+                      ? { display: 'flex', flexDirection: 'column', gap: 8, opacity: 0.45 }
+                      : { display: 'flex', flexDirection: 'column', gap: 8 }
+                  }
+                >
+                  <input
+                    placeholder="Forward-to number when a human takes over (optional)"
+                    value={voiceForm.forward_to}
+                    onChange={(e) => setVoiceForm({ ...voiceForm, forward_to: e.target.value })}
+                    disabled={hostedFree}
+                  />
+                  <input
+                    placeholder="Spoken greeting (optional)"
+                    value={voiceForm.greeting}
+                    onChange={(e) => setVoiceForm({ ...voiceForm, greeting: e.target.value })}
+                    disabled={hostedFree}
+                  />
+                  <div>
+                    <button
+                      className="btn"
+                      disabled={
+                        hostedFree ||
+                        createVoice.isPending ||
+                        (voiceMode === 'hosted' && !pickedNumber)
+                      }
+                    >
+                      {voiceMode === 'hosted' ? 'Get this number' : 'Add voice channel'}
+                    </button>
+                    {voiceMode === 'hosted' && !pickedNumber && !hostedFree && (
+                      <span className="muted" style={{ marginLeft: 8 }}>
+                        search an area code and pick a number first
+                      </span>
+                    )}
+                  </div>
                 </div>
               </form>
               <div className="muted" style={{ marginTop: 10 }}>
