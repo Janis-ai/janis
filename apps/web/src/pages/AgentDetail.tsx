@@ -3027,15 +3027,22 @@ function IntegrationCards({
   // clear the query so a refresh doesn't replay the banner.
   const [params, setParams] = useSearchParams();
 
-  const openGooglePicker = async () => {
+  const openGooglePicker = async (tplId: string) => {
     const boot = await api<{ access_token: string; developer_key: string; app_id: string }>(
       `/api/google/picker-token?agent_id=${agentId}`,
     );
     const w = window as any;
     const open = () => {
-      const view = new w.google.picker.DocsView()
-        .setIncludeFolders(true)
-        .setSelectFolderEnabled(true);
+      const MIME: Record<string, string> = {
+        'google-sheets': 'application/vnd.google-apps.spreadsheet',
+        'google-docs': 'application/vnd.google-apps.document',
+        'google-slides': 'application/vnd.google-apps.presentation',
+      };
+      const view = MIME[tplId]
+        ? new w.google.picker.DocsView().setMimeTypes(MIME[tplId])
+        : new w.google.picker.DocsView()
+            .setIncludeFolders(true)
+            .setSelectFolderEnabled(true);
       const picker = new w.google.picker.PickerBuilder()
         .setOAuthToken(boot.access_token)
         .setDeveloperKey(boot.developer_key)
@@ -3294,7 +3301,7 @@ function IntegrationCards({
               {/* Credential-less integrations have nothing to update once
                   installed — show the badge + Remove, not a dead button. */}
               {t.oauth_connect === '/api/google/connect' && installed(t) && (
-                <button className="btn" onClick={openGooglePicker}>
+                <button className="btn" onClick={() => openGooglePicker(t.id)}>
                   Pick Drive files…
                 </button>
               )}
