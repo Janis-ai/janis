@@ -762,7 +762,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                   onClick={() => setVoiceMode('hosted')}
                   disabled={!hostedConfigured}
                 >
-                  Get a number
+                  Janis-hosted
                 </button>
                 <button
                   className={`btn ${voiceMode === 'byo' ? 'primary' : ''}`}
