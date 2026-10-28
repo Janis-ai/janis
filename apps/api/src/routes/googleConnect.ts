@@ -101,6 +101,31 @@ export function googleApiRoutes(db: Db) {
     return c.redirect(consentUrl(requestOrigin(c), state));
   });
 
+  // Picker bootstrap — the console's "Pick Drive files" button needs a
+  // short-lived OAuth access token + the project's picker creds. Admin-only;
+  // the token is the operator's own connection token.
+  app.get('/picker-token', adminOnly, async (c) => {
+    const agentId = c.req.query('agent_id') ?? '';
+    const [conn] = await db
+      .select()
+      .from(agentConnections)
+      .where(
+        and(
+          eq(agentConnections.agentId, agentId),
+          eq(agentConnections.workspaceId, c.get('workspaceId')),
+          eq(agentConnections.provider, 'google'),
+        ),
+      )
+      .limit(1);
+    if (!conn) return c.json({ error: 'no google connection — connect first' }, 404);
+    const accessToken = await connectionToken(db, conn);
+    return c.json({
+      access_token: accessToken,
+      developer_key: process.env.GOOGLE_API_KEY ?? '',
+      app_id: process.env.GOOGLE_PICKER_APP_ID ?? '',
+    });
+  });
+
   return app;
 }
 
@@ -197,7 +222,7 @@ export function googlePublicRoutes(db: Db) {
     // Install BOTH Sheets + Docs templates — one Google connection serves both.
     const cfg = (agent.config ?? {}) as AgentConfig;
     let tools = cfg.tools ?? [];
-    for (const tplId of ['google-sheets', 'google-docs']) {
+    for (const tplId of ['google-sheets', 'google-docs', 'google-slides', 'google-drive']) {
       const tpl = TOOL_TEMPLATES.find((t) => t.id === tplId);
       if (!tpl) continue;
       const names = new Set(tpl.tools.map((t) => t.name));

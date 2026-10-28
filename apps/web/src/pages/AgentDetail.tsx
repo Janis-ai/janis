@@ -3026,6 +3026,40 @@ function IntegrationCards({
   // OAuth returns land back on this tab with a flash param — surface it and
   // clear the query so a refresh doesn't replay the banner.
   const [params, setParams] = useSearchParams();
+
+  const openGooglePicker = async () => {
+    const boot = await api<{ access_token: string; developer_key: string; app_id: string }>(
+      `/api/google/picker-token?agent_id=${agentId}`,
+    );
+    const w = window as any;
+    const open = () => {
+      const view = new w.google.picker.DocsView()
+        .setIncludeFolders(true)
+        .setSelectFolderEnabled(true);
+      const picker = new w.google.picker.PickerBuilder()
+        .setOAuthToken(boot.access_token)
+        .setDeveloperKey(boot.developer_key)
+        .setAppId(boot.app_id)
+        .addView(view)
+        .setCallback((data: { action: string; docs?: { name: string }[] }) => {
+          if (data.action === 'picked')
+            setErr(`Picked ${data.docs?.length ?? 0} item(s) — the agent can now see them.`);
+        })
+        .build();
+      picker.setVisible(true);
+    };
+    if (!w.google?.picker) {
+      const ensure = () => w.gapi.load('picker', open);
+      if (w.gapi) ensure();
+      else {
+        const sc = document.createElement('script');
+        sc.src = 'https://apis.google.com/js/api.js';
+        sc.onload = ensure;
+        document.head.appendChild(sc);
+      }
+    } else open();
+  };
+
   const connectProvider = ['calendly', 'google'].find((p) => params.get(`${p}_connect`) != null || params.get(`${p}_error`) != null);
   const flash = connectProvider
     ? params.get(`${connectProvider}_connect`) != null
@@ -3259,6 +3293,11 @@ function IntegrationCards({
               ) : null}
               {/* Credential-less integrations have nothing to update once
                   installed — show the badge + Remove, not a dead button. */}
+              {t.oauth_connect === '/api/google/connect' && installed(t) && (
+                <button className="btn" onClick={openGooglePicker}>
+                  Pick Drive files…
+                </button>
+              )}
               {!t.oauth_connect && (!installed(t) || t.fields.length > 0) && (
                 <button
                   className="btn"

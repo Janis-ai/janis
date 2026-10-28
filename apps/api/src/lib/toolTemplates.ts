@@ -1096,6 +1096,107 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     ],
   },
   {
+    id: 'google-slides',
+    name: 'Google Slides',
+    category: 'Docs & data',
+    blurb:
+      'Read slide decks — titles, body text, and speaker notes — and create new presentations.',
+    docs_url: 'https://developers.google.com/slides/api',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'google',
+      label: () => 'Google',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/google/connect',
+    tools: [
+      {
+        name: 'gslides_list',
+        label: 'List presentations',
+        description:
+          'List presentations the integration created or the user opened via Google — for an existing deck, ask the user for its link or id.',
+        method: 'GET',
+        url: "https://www.googleapis.com/drive/v3/files?q=mimeType%3D'application%2Fvnd.google-apps.presentation'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime+desc&pageSize=20",
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+      },
+      {
+        name: 'gslides_read',
+        label: 'Read a presentation',
+        description:
+          'Read a Google Slides presentation — returns slide titles, body text, and speaker notes.',
+        method: 'GET',
+        url: 'https://slides.googleapis.com/v1/presentations/{presentation_id}',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: { presentation_id: 'deck id from gslides_list or a pasted link' },
+      },
+      {
+        name: 'gslides_create',
+        label: 'Create a presentation',
+        description: 'Create a new empty presentation — returns its presentation_id.',
+        method: 'POST',
+        url: 'https://slides.googleapis.com/v1/presentations',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: { title: 'presentation title' },
+        bodyTemplate: '{"title": "${title}"}',
+      },
+    ],
+  },
+  {
+    id: 'google-drive',
+    name: 'Google Drive',
+    category: 'Docs & data',
+    blurb:
+      'Read any file the user picks in Drive — Google Docs/Sheets/Slides export to text, Office files (docx/xlsx/pptx) convert to Google format first.',
+    docs_url: 'https://developers.google.com/drive/api',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'google',
+      label: () => 'Google',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/google/connect',
+    tools: [
+      {
+        name: 'gdrive_files',
+        label: 'List visible files',
+        description:
+          'List every Drive file the integration can see — files it created plus any the user picked via "Pick Drive files" in the console. For a file not listed, ask the user to pick it or paste its link.',
+        method: 'GET',
+        url: 'https://www.googleapis.com/drive/v3/files?fields=files(id,name,mimeType,modifiedTime)&orderBy=modifiedTime+desc&pageSize=50',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+      },
+      {
+        name: 'gdrive_read',
+        label: 'Export a file to text',
+        description:
+          'Export a Google-native file (doc, sheet, slide) to plain text — pass format text/csv for spreadsheets. For Office files (docx/xlsx/pptx) call gdrive_convert first, then read the converted file.',
+        method: 'GET',
+        url: 'https://www.googleapis.com/drive/v3/files/{file_id}/export?mimeType={format}',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: {
+          file_id: 'file id from gdrive_files or a pasted link',
+          format: 'text/plain (default) or text/csv for spreadsheets',
+        },
+      },
+      {
+        name: 'gdrive_convert',
+        label: 'Convert Office file',
+        description:
+          'Convert an Office file to Google format so it can be read — target is document (docx), spreadsheet (xlsx/csv), or presentation (pptx). Returns the new Google file id; read it with gdrive_read or the matching app tool.',
+        method: 'POST',
+        url: 'https://www.googleapis.com/drive/v3/files/{file_id}/copy',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: {
+          file_id: 'the Office file id',
+          to: 'document | spreadsheet | presentation',
+        },
+        bodyTemplate: '{"mimeType": "application/vnd.google-apps.${to}"}',
+      },
+    ],
+  },
+  {
     id: 'itunes',
     name: 'iTunes Search',
     category: 'Media lookup',
