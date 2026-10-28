@@ -6,7 +6,7 @@ import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
 import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, matchSavedComponent, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, deniesLiveData, ungroundedFigures, ungroundedSource, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems, prefillFormFields } from './hostedAgent.js';
+import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, matchSavedComponent, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, deniesLiveData, ungroundedFigures, ungroundedSource, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems, prefillFormFields, openUrlFromToolCalls } from './hostedAgent.js';
 import { identityBlockReason, type ToolDef } from './toolExec.js';
 import { env } from '../env.js';
 import { extractWidgets } from './widgets.js';
@@ -3634,5 +3634,50 @@ describe('email code verification — guest earns verified identity', () => {
     } finally {
       r.restore();
     }
+  });
+});
+
+describe('openUrlFromToolCalls', () => {
+  const call = (outcome: 'ran' | 'failed' | 'proposed', result: string) => ({
+    name: 'select_agent',
+    outcome,
+    result,
+  });
+
+  it("picks the last 'ran' call with a valid open_url", () => {
+    expect(
+      openUrlFromToolCalls([
+        call('ran', JSON.stringify({ open_url: '/agents/a1/inbox' })),
+        call('ran', JSON.stringify({ open_url: '/agents/a2/knowledge' })),
+      ]),
+    ).toBe('/agents/a2/knowledge');
+  });
+
+  it("ignores 'proposed' and 'failed' outcomes", () => {
+    expect(
+      openUrlFromToolCalls([
+        call('proposed', JSON.stringify({ open_url: '/agents/a1/inbox' })),
+        call('failed', JSON.stringify({ open_url: '/agents/a1/inbox' })),
+      ]),
+    ).toBeUndefined();
+  });
+
+  it('ignores non-JSON results', () => {
+    expect(openUrlFromToolCalls([call('ran', 'focused: Bot — url: https://x/agents/a')]))
+      .toBeUndefined();
+  });
+
+  it('rejects protocol-relative and absolute URLs', () => {
+    expect(openUrlFromToolCalls([call('ran', JSON.stringify({ open_url: '//evil.com/x' }))]))
+      .toBeUndefined();
+    expect(openUrlFromToolCalls([call('ran', JSON.stringify({ open_url: 'https://evil.com/x' }))]))
+      .toBeUndefined();
+    expect(
+      openUrlFromToolCalls([call('ran', JSON.stringify({ open_url: '/agents//evil' }))]),
+    ).toBeUndefined();
+  });
+
+  it('returns undefined with no calls', () => {
+    expect(openUrlFromToolCalls([])).toBeUndefined();
   });
 });

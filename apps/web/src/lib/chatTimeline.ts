@@ -24,6 +24,9 @@ export interface ChatMsg {
   attachments?: Attachment[];
   quick_replies?: (string | { type: 'email' | 'phone' })[];
   author?: { name: string; avatar: string | null };
+  /** Console destination a concierge tool asked to open — rail-only,
+   *  followed once on incremental polls. */
+  open_url?: string;
   action?: {
     id: string;
     tool: string;

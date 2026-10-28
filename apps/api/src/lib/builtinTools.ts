@@ -1543,7 +1543,14 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         type: 'navigate',
         data: { user_id: user.id, agent_id: agent.id, path },
       });
-      return `focused: ${agent.name} — the console navigates to ${path} if it's open; this conversation now treats ${agent.name} as the selected agent. url: ${env.webOrigin}${path}`;
+      // open_url persists a console destination on the reply — the rail
+      // follows it on incremental polls when the SSE 'navigate' fast path
+      // dropped (dead/reconnecting stream).
+      return JSON.stringify({
+        summary: `focused: ${agent.name} — this conversation now treats ${agent.name} as the selected agent`,
+        url: `${env.webOrigin}${path}`,
+        open_url: path,
+      });
     },
   },
   {

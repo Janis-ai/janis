@@ -773,6 +773,66 @@ describe('webchat widget endpoints', () => {
     expect(extMsgs.some((m: { action?: unknown }) => m.action)).toBe(false);
   });
 
+  it('surfaces open_url on internal test channels but never on embeds', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [ws] = await db.select().from(workspaces).limit(1);
+    const [agent] = await db.select().from(agents).limit(1);
+    const [internalChannel] = await db
+      .insert(channels)
+      .values({
+        workspaceId: ws.id,
+        agentId: agent.id,
+        kind: 'webchat',
+        name: 'Ask Janis',
+        credentials: { internal: true },
+      })
+      .returning();
+
+    const visitor = 'vis_openurltest1';
+    await app.request(`/chat/${internalChannel.id}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: visitor, text: 'take me to bot' }),
+    });
+    const first = await app.request(
+      `/chat/${internalChannel.id}/messages?visitor_id=${visitor}`,
+    );
+    const convId = (await first.json()).conversation_id as string;
+    expect(convId).toBeTruthy();
+
+    await db.insert(messages).values({
+      conversationId: convId,
+      direction: 'out',
+      text: 'Focused Bot.',
+      payload: { via: 'hosted', open_url: '/agents/x/inbox' },
+    });
+    const poll = await app.request(
+      `/chat/${internalChannel.id}/messages?visitor_id=${visitor}`,
+    );
+    const msgs = (await poll.json()).messages;
+    const nav = msgs.find((m: { open_url?: string }) => m.open_url);
+    expect(nav.open_url).toBe('/agents/x/inbox');
+
+    // The same stored payload on a public embed channel never leaks.
+    await post('take me to bot', 'vis_openurlext1');
+    const [extConv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'webchat:vis_openurlext1'))
+      .limit(1);
+    await db.insert(messages).values({
+      conversationId: extConv.id,
+      direction: 'out',
+      text: 'Focused Bot.',
+      payload: { via: 'hosted', open_url: '/agents/x/inbox' },
+    });
+    const extPoll = await app.request(
+      `/chat/${channelId}/messages?visitor_id=vis_openurlext1`,
+    );
+    const extMsgs = (await extPoll.json()).messages;
+    expect(extMsgs.some((m: { open_url?: unknown }) => m.open_url !== undefined)).toBe(false);
+  });
+
   // Regression: the test rail showed the visitor's first message above the
   // greeting. The transcript contract is greeting row first, so the rail's
   // echoed bubble (sorted by server timestamp once delivered) lands below it.

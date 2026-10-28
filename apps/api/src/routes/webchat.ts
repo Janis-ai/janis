@@ -1063,6 +1063,11 @@ export function webchatRoutes(db: Db) {
         ...(showActions
           ? { action: (m.payload as { action?: unknown } | undefined)?.action }
           : {}),
+        // console destination a concierge tool asked to open — same gate as
+        // the action card; external embeds must never see it
+        ...(showActions && typeof (m.payload as { open_url?: unknown } | undefined)?.open_url === 'string'
+          ? { open_url: (m.payload as { open_url: string }).open_url }
+          : {}),
         // operator identity on human replies — gated by each operator's
         // show_identity profile setting, not a per-channel flag
         ...(m.direction === 'human' && m.author_id && authors.has(m.author_id)

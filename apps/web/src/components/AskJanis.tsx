@@ -506,6 +506,19 @@ export function AskJanis({
       if (hadCursor) {
         for (const m of fresh) {
           if (m.direction === 'out' && m.text?.trim()) onAgentReplyRef.current?.(m.text);
+          // Concierge tools (select_agent) persist a console destination on
+          // the reply — the durable fallback for the one-shot SSE 'navigate'
+          // a dead/reconnecting stream can drop. Incremental polls only;
+          // history backfill must never navigate. A same-URL navigate after
+          // the SSE path already moved is harmless.
+          if (
+            m.direction === 'out' &&
+            typeof m.open_url === 'string' &&
+            m.open_url.startsWith('/') &&
+            !m.open_url.startsWith('//')
+          ) {
+            navigate(m.open_url);
+          }
         }
       }
       if (maxTs && (!lastTs.current || maxTs > lastTs.current)) lastTs.current = maxTs;

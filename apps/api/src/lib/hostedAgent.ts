@@ -3125,6 +3125,26 @@ function inspectorArgs(args: Record<string, unknown>): Record<string, unknown> {
   );
 }
 
+/** A concierge tool (select_agent) asks the operator's console to open a
+ *  path by returning {open_url} — surfaced on the stored reply so the rail's
+ *  poll can follow it when the one-shot SSE 'navigate' is dropped by a dead
+ *  stream. Last 'ran' call wins; only same-origin app paths. */
+export function openUrlFromToolCalls(calls: InspectorToolCall[]): string | undefined {
+  for (let i = calls.length - 1; i >= 0; i--) {
+    const c = calls[i];
+    if (c.outcome !== 'ran' || typeof c.result !== 'string') continue;
+    try {
+      const r = JSON.parse(c.result) as { open_url?: unknown };
+      if (typeof r.open_url === 'string' && /^\/[a-z]/.test(r.open_url) && !r.open_url.includes('//')) {
+        return r.open_url;
+      }
+    } catch {
+      // non-JSON result — not an open_url producer
+    }
+  }
+  return undefined;
+}
+
 interface Completion {
   text: string | null;
   promptTokens: number;
@@ -6500,6 +6520,10 @@ async function replyAsHostedAgent(
     const cfgAutoArchive = acfg.auto_archive === true;
     // Escalation opt-out — handoff/offer tags get stripped to a plain reply.
     const handoffEnabled = acfg.handoff_enabled !== false;
+    // Persisted console destination — select_agent's open_url result rides
+    // the stored reply so the rail's poll follows it even when the SSE
+    // 'navigate' never arrived. Test runs never reach a real console.
+    const openUrl = ctx.testRun ? undefined : openUrlFromToolCalls(gen.toolCalls);
     const inspectorFlag: { inspector: Record<string, unknown> } = {
       inspector: {
         model,
@@ -6545,7 +6569,7 @@ async function replyAsHostedAgent(
             type: 'message_out',
             conversation_id: externalId,
             text: pick(FAILURE_LINES_NO_HANDOFF),
-            payload: { via: 'hosted', ...inspectorFlag },
+            payload: { via: 'hosted', ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
           },
         ]);
         return;
@@ -6557,7 +6581,7 @@ async function replyAsHostedAgent(
           reason: 'no LLM configured or empty reply',
           // The run trace (tool calls incl. args/errors, model, tokens) rides
           // the handoff note — a silent escalation keeps its inspector.
-          payload: { via: 'hosted', ...inspectorFlag },
+          payload: { via: 'hosted', ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
         },
       ]);
       return;
@@ -6606,7 +6630,7 @@ async function replyAsHostedAgent(
               } as Record<string, string>
             )[w0?.type ?? ''] ??
             'Here you go:',
-          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
         },
       ]);
       return;
@@ -6644,7 +6668,7 @@ async function replyAsHostedAgent(
         type: 'message_out',
         conversation_id: externalId,
         text: partial,
-        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
       });
       events.push({
         type: 'handoff_cancelled',
@@ -6673,7 +6697,7 @@ async function replyAsHostedAgent(
         type: 'message_out',
         conversation_id: externalId,
         text: partial,
-        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
       });
       events.push({
         type: 'handoff_request',
@@ -6692,7 +6716,7 @@ async function replyAsHostedAgent(
           type: 'message_out',
           conversation_id: externalId,
           text: partial,
-          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
         },
         {
           type: 'resolve',
@@ -6719,7 +6743,7 @@ async function replyAsHostedAgent(
             type: 'message_out',
             conversation_id: externalId,
             text: kept || pick(HANDOFF_FALLBACKS),
-            payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+            payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
           },
           {
             type: 'handoff_request',
@@ -6764,8 +6788,8 @@ async function replyAsHostedAgent(
         conversation_id: externalId,
         text: partial,
         payload: offeredBefore
-          ? { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag }
-          : { via: 'hosted', quick_replies: OFFER_CHOICES, ...linkFlag, ...widgetFlag, ...inspectorFlag },
+          ? { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) }
+          : { via: 'hosted', quick_replies: OFFER_CHOICES, ...linkFlag, ...widgetFlag, ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
       });
       if (!offeredBefore) {
         events.push({
@@ -6816,7 +6840,7 @@ async function replyAsHostedAgent(
           type: 'message_out',
           conversation_id: externalId,
           text: cleanReply || pick(HANDOFF_FALLBACKS),
-          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+          payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
         },
         {
           type: 'handoff_request',
@@ -6832,7 +6856,7 @@ async function replyAsHostedAgent(
         type: 'message_out',
         conversation_id: externalId,
         text: finalReply,
-        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag },
+        payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
       },
     ]);
     console.log(`[hosted] ${agent.name} replied in ${Date.now() - t0}ms`);

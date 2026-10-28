@@ -1722,8 +1722,10 @@ describe('select_agent builtin', () => {
       { workspace: 'free', agent: 'bot2', section: 'knowledge' },
       cctx(CONV2),
     );
-    expect(out).toContain('focused: Bot2');
-    expect(out).toContain(`/agents/${bot2.id}/knowledge`);
+    const parsed = JSON.parse(out);
+    expect(parsed.summary).toContain('focused: Bot2');
+    expect(parsed.url).toContain(`/agents/${bot2.id}/knowledge`);
+    expect(parsed.open_url).toBe(`/agents/${bot2.id}/knowledge`);
 
     const [conv] = await db.select().from(conversations).where(eq(conversations.id, CONV2));
     const md = (conv.userProfile as { metadata?: Record<string, unknown> })?.metadata;
@@ -1736,7 +1738,7 @@ describe('select_agent builtin', () => {
 
     // unknown section → falls back to inbox rather than emitting a bogus path
     const out2 = await selectAgent().run({ workspace: 'free', agent: 'bot2', section: 'rm -rf' }, cctx(CONV2));
-    expect(out2).toContain(`/agents/${bot2.id}/inbox`);
+    expect(JSON.parse(out2).open_url).toBe(`/agents/${bot2.id}/inbox`);
     // restore the verified-identity profile the other CONV2 tests rely on
     await db
       .update(conversations)
