@@ -1849,6 +1849,14 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
     run: async (args, ctx) => {
       if (!ctx) return 'error: no conversation context';
+      // Internal debugging bundles — same sign-in gate as every other
+      // workspace-bound concierge tool. The public sales concierge shares
+      // this catalog, so without the check any anonymous visitor could ask
+      // "what broke" and read stacks/routes/DOM snapshots.
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
       const limit = Math.min(Math.max(Number(args.limit) || 10, 1), 50);
       if (args.id) {
         const [row] = await ctx.db
