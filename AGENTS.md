@@ -616,6 +616,12 @@ drizzle-kit/workbox-build, nothing to drop directly).
 - A. Iconography: DONE — lucide-react nav icons (collapsed-rail legible) +
   star/snooze/save/paperclip chrome; emoji kept inside <option> text and
   emoji pickers (native elements can't render SVG).
+- B2. Console i18n — real signal 2026-10-27: organic signup (Vietnamese,
+  `bachngoctructhanh@`) created agent + test-chatted fine, but asked the
+  agent (in Vietnamese) "do I have to connect other AIs like Claude?" —
+  the English-only console likely cost the activation. Hosted agent
+  answered correctly in Vietnamese; the product shell is the gap.
+  Non-EN locales (vi/es/pt) → onboarding + key surfaces first.
 - B. Shared usePrompt modal: DONE — workspace create, view naming, bulk
   tag, workspace-delete confirm all off window.prompt.
 - C. Keyboard layer: DONE — ⌘K palette (nav + agents + conversation
