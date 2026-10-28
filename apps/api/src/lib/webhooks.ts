@@ -1,5 +1,5 @@
 import type { OutboundWebhook, OutboundWebhookType } from '@janis/shared';
-import { and, eq, isNull, lt, or } from 'drizzle-orm';
+import { and, eq, isNotNull, isNull, lt, or } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, alerts, webhookDeliveries } from '../db/schema.js';
 import { signWebhookPayload } from './crypto.js';
@@ -118,15 +118,35 @@ export async function deliverWebhook(
 
   if (!agent.webhookUrl) return;
   const body = JSON.stringify(payload);
-  void attempt(db, delivery.id, agent, body, 0);
+  void attempt(db, delivery.id, agent.webhookUrl, body, 0, agent.webhookSecret);
+}
+
+/**
+ * REST-hook fan-out (Zapier REST hooks + /v1/hooks subscribers): one durable
+ * delivery row per subscription, pushed unsigned to the subscriber's catch
+ * URL on the same retry/replay machinery as agent webhooks.
+ */
+export async function deliverHookPush(
+  db: Db,
+  agentId: string,
+  targetUrl: string,
+  type: string,
+  payload: unknown,
+): Promise<void> {
+  const [delivery] = await db
+    .insert(webhookDeliveries)
+    .values({ agentId, targetUrl, type, payload })
+    .returning();
+  void attempt(db, delivery.id, targetUrl, JSON.stringify(payload), 0, null);
 }
 
 async function attempt(
   db: Db,
   deliveryId: string,
-  agent: AgentRow,
+  url: string,
   body: string,
   attemptIndex: number,
+  secret?: string | null,
 ): Promise<void> {
   try {
     const timestamp = Math.floor(Date.now() / 1000).toString();
@@ -134,11 +154,11 @@ async function attempt(
       'content-type': 'application/json',
       'user-agent': 'janis-webhooks/0.1',
     };
-    if (agent.webhookSecret) {
-      headers['x-janis-signature'] = signWebhookPayload(agent.webhookSecret, timestamp, body);
+    if (secret) {
+      headers['x-janis-signature'] = signWebhookPayload(secret, timestamp, body);
     }
 
-    const res = await fetch(agent.webhookUrl!, {
+    const res = await fetch(url, {
       method: 'POST',
       headers,
       body,
@@ -174,7 +194,10 @@ async function attempt(
         nextAttemptAt: new Date(Date.now() + nextDelay),
       })
       .where(eq(webhookDeliveries.id, deliveryId));
-    setTimeout(() => void attempt(db, deliveryId, agent, body, attemptIndex + 1), nextDelay);
+    setTimeout(
+      () => void attempt(db, deliveryId, url, body, attemptIndex + 1, secret),
+      nextDelay,
+    );
   }
 }
 
@@ -200,14 +223,16 @@ export async function replayDelivery(
     )
     .returning();
   if (!d) return false;
-  if (!agent.webhookUrl) {
+  const url = d.targetUrl ?? agent.webhookUrl;
+  if (!url) {
     await db
       .update(webhookDeliveries)
       .set({ status: 'failed', lastError: 'no webhook_url configured' })
       .where(eq(webhookDeliveries.id, d.id));
     return true;
   }
-  await attempt(db, d.id, agent, JSON.stringify(d.payload), 0);
+  // Hook pushes go unsigned — webhookSecret belongs to the agent's own URL.
+  await attempt(db, d.id, url, JSON.stringify(d.payload), 0, d.targetUrl ? null : agent.webhookSecret);
   return true;
 }
 
@@ -235,6 +260,10 @@ export async function sweepHostedStalls(db: Db): Promise<number> {
       and(
         eq(agents.hosted, true),
         eq(webhookDeliveries.status, 'pending'),
+        // Hook pushes (target_url set) are plain HTTP retries — reclaiming
+        // them here would mark a wedged push 'stalled non-message' instead
+        // of re-firing it; sweepWebhookRetries owns them.
+        isNull(webhookDeliveries.targetUrl),
         lt(webhookDeliveries.createdAt, stale),
         // nextAttemptAt doubles as the reclaim claim — unset (never claimed)
         // or past (claim expired, run presumably dead again).
@@ -309,10 +338,18 @@ export async function sweepWebhookRetries(db: Db): Promise<number> {
     .where(
       and(
         eq(webhookDeliveries.status, 'pending'),
-        lt(webhookDeliveries.nextAttemptAt, stale),
+        // A pending row past the grace window with no schedule died before
+        // its first attempt could set one (attempts time out at 10s < 30s
+        // grace, so a legitimately in-flight attempt is never this old).
+        lt(webhookDeliveries.createdAt, stale),
+        or(
+          isNull(webhookDeliveries.nextAttemptAt),
+          lt(webhookDeliveries.nextAttemptAt, stale),
+        ),
         // Hosted deliveries reuse nextAttemptAt as the stall-reclaim claim —
-        // they run in-process, and attempt() would fail them outright.
-        eq(agents.hosted, false),
+        // they run in-process, and attempt() would fail them outright. Hook
+        // pushes (target_url set) are plain HTTP even on hosted agents.
+        or(eq(agents.hosted, false), isNotNull(webhookDeliveries.targetUrl)),
       ),
     )
     .limit(50);
@@ -328,14 +365,22 @@ export async function sweepWebhookRetries(db: Db): Promise<number> {
       )
       .returning({ id: webhookDeliveries.id });
     if (!claimed.length) continue;
-    if (!agent.webhookUrl) {
+    const url = delivery.targetUrl ?? agent.webhookUrl;
+    if (!url) {
       await db
         .update(webhookDeliveries)
         .set({ status: 'failed', lastError: 'no webhook_url configured' })
         .where(eq(webhookDeliveries.id, delivery.id));
       continue;
     }
-    void attempt(db, delivery.id, agent, JSON.stringify(delivery.payload), delivery.attempts);
+    void attempt(
+      db,
+      delivery.id,
+      url,
+      JSON.stringify(delivery.payload),
+      delivery.attempts,
+      delivery.targetUrl ? null : agent.webhookSecret,
+    );
   }
   return rows.length;
 }

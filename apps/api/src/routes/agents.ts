@@ -675,6 +675,7 @@ export function agentRoutes(db: Db) {
       deliveries: rows.map((r) => ({
         id: r.id,
         type: r.type,
+        target_url: r.targetUrl,
         status: r.status,
         attempts: r.attempts,
         last_error: r.lastError,

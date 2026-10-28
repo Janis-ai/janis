@@ -1293,6 +1293,9 @@ export const webhookDeliveries = pgTable('webhook_deliveries', {
   agentId: uuid('agent_id')
     .notNull()
     .references(() => agents.id),
+  // null = the agent's own webhook_url (signed HMAC push); set = a REST-hook
+  // subscriber's catch URL (Zapier/Make/n8n), delivered unsigned
+  targetUrl: text('target_url'),
   type: text('type').notNull(),
   payload: jsonb('payload').notNull(),
   status: text('status', { enum: ['pending', 'delivered', 'failed'] })
