@@ -150,6 +150,48 @@ export async function recordVoiceUsage(
  * workspaces are billed too (that's why the widget toggle is opt-in).
  * Cost is fixed-rate ($0.003/min → 50µ/s), margin applied on report.
  */
+/**
+ * Meter one month of a hosted voice number. Deduped on
+ * voice_number:{channelId}:{YYYY-MM} so any number of sweeps/provisions bill
+ * once per channel per period. Reports through janis.voice_micros at
+ * cost × (1 + margin), same as voice seconds.
+ */
+export async function recordVoiceNumberUsage(
+  db: Db,
+  args: { workspaceId: string; agentId?: string | null; channelId: string; period: string },
+): Promise<void> {
+  try {
+    const externalId = `voice_number:${args.channelId}:${args.period}`;
+    const existing = await db
+      .select({ id: usageEvents.id })
+      .from(usageEvents)
+      .where(
+        and(eq(usageEvents.externalId, externalId), eq(usageEvents.kind, 'voice_number_month')),
+      )
+      .limit(1);
+    if (existing.length) return;
+    const costMicros = env.voiceNumberCostMicrosPerMonth;
+    const [row] = await db
+      .insert(usageEvents)
+      .values({
+        workspaceId: args.workspaceId,
+        agentId: args.agentId ?? null,
+        kind: 'voice_number_month',
+        externalId,
+        quantity: 1,
+        costMicros,
+        period: args.period,
+      })
+      .returning({ id: usageEvents.id });
+    const billed = Math.ceil(costMicros * (1 + billingConfig.margin));
+    if (billed > 0) {
+      reportMeter(await billingCustomerFor(db, args.workspaceId), METER_VOICE_MICROS, billed, row?.id);
+    }
+  } catch {
+    // metering must never break flows
+  }
+}
+
 export async function recordSttUsage(
   db: Db,
   args: { workspaceId: string; agentId?: string | null; seconds: number },

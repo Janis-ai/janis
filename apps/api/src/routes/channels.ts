@@ -415,6 +415,15 @@ export function channelApiRoutes(db: Db) {
         })
         .returning();
       invalidateChannelCache();
+      // Bill month one of the hosted number now; the sweeper renews
+      // monthly (deduped per channel+period) until the channel is deleted.
+      const { recordVoiceNumberUsage } = await import('../lib/usage.js');
+      void recordVoiceNumberUsage(db, {
+        workspaceId: c.get('workspaceId'),
+        agentId: body.agent_id,
+        channelId: row.id,
+        period: new Date().toISOString().slice(0, 7),
+      });
       return c.json({ channel: toChannel(row, agent.name) }, 201);
     }
     const [row] = await db

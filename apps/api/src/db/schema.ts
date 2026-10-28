@@ -905,7 +905,7 @@ export const usageEvents = pgTable(
     agentId: uuid('agent_id').references(() => agents.id),
     conversationId: uuid('conversation_id').references(() => conversations.id),
     kind: text('kind', {
-      enum: ['llm_tokens', 'voice_seconds', 'voice_provision', 'stt_seconds'],
+      enum: ['llm_tokens', 'voice_seconds', 'voice_provision', 'voice_number_month', 'stt_seconds'],
     }).notNull(),
     // idempotency key for provider-sourced usage — 'voice:{callSid}' dedupes
     // Twilio's status-webhook retries so a call can only be billed once

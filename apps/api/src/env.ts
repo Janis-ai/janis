@@ -56,6 +56,11 @@ export const env = {
   // What a hosted voice minute costs Janis (Twilio inbound ~$0.014/min) —
   // billed to the customer at cost × (1 + BILLING_MARGIN), same as LLM.
   voiceCostMicrosPerMin: Number(process.env.VOICE_COST_MICROS_PER_MIN ?? 14_000),
+  // What a hosted number costs Janis per month (Twilio US local ~$1.15) —
+  // billed monthly per hosted voice channel at cost × (1 + BILLING_MARGIN).
+  voiceNumberCostMicrosPerMonth: Number(
+    process.env.VOICE_NUMBER_COST_MICROS_PER_MONTH ?? 1_150_000,
+  ),
   seedAdminEmail: process.env.SEED_ADMIN_EMAIL ?? 'admin@janis.local',
   seedAdminPassword: process.env.SEED_ADMIN_PASSWORD ?? 'janis-admin',
   // Email+password sign-in — OAuth is the product login; password auth stays

@@ -867,7 +867,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               </form>
               <div className="muted" style={{ marginTop: 10 }}>
                 {voiceMode === 'hosted'
-                  ? 'Janis provisions the number and wires it up — callers are transcribed turn-by-turn, the agent answers by voice, and a human takeover can bridge straight to the forward-to number. The number is included; calls bill per minute on your plan\u2019s usage meter (~1.7¢/min).'
+                  ? 'Janis provisions the number and wires it up — callers are transcribed turn-by-turn, the agent answers by voice, and a human takeover can bridge straight to the forward-to number. Billed on your plan\u2019s usage meter: ~$1.15/mo for the number plus ~1.7¢/min on calls.'
                   : 'Then in the Twilio console, set the number\'s Voice → "A call comes in" webhook to the URL on the channel card. Callers are transcribed turn-by-turn; the agent\'s reply is spoken, and when a human takes over the call can bridge straight to the forward-to number.'}
               </div>
             </details>

@@ -7,7 +7,7 @@ import * as schema from '../db/schema.js';
 import { usageEvents, workspaces } from '../db/schema.js';
 import type { Db } from '../db/client.js';
 import type Stripe from 'stripe';
-import { recordLlmUsage, recordSttUsage } from './usage.js';
+import { recordLlmUsage, recordSttUsage, recordVoiceNumberUsage } from './usage.js';
 import { rateFor } from './billing.js';
 import { setStripeClient } from './stripe.js';
 
@@ -168,5 +168,19 @@ describe('rateFor', () => {
     expect(rateFor('models/gemini-3.5-flash')).toEqual({ input: 1.5, output: 9 });
     expect(rateFor('anthropic/claude-fable-5-1')).toEqual({ input: 10, output: 50 });
     expect(rateFor('google/gemini-3.7-pro')).toEqual({ input: 2, output: 12 });
+  });
+});
+
+describe('recordVoiceNumberUsage', () => {
+  it('bills once per channel per period at number cost + margin', async () => {
+    await db.update(workspaces).set({ stripeCustomerId: 'cus_voice' }).where(eq(workspaces.id, wsId));
+    const args = { workspaceId: wsId, channelId: '11111111-2222-3333-4444-555555555555', period: '2026-10' };
+    await recordVoiceNumberUsage(db, args);
+    await recordVoiceNumberUsage(db, args);
+    const rows = await db.select().from(usageEvents).where(eq(usageEvents.kind, 'voice_number_month'));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].costMicros).toBe(1_150_000);
+    expect(rows[0].quantity).toBe(1);
+    expect(meteredEvents.filter((e) => e.event_name === 'janis.voice_micros')).toHaveLength(1);
   });
 });

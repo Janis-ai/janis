@@ -1,6 +1,6 @@
 import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { agents, alertRules, alerts, busEvents, channelBindings, conversations, knowledgeFiles, messages, pendingActions, rateLimits, slackThreads, suggestions, sweeperLocks, typingState, usageEvents, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, alertRules, alerts, busEvents, channelBindings, channels, conversations, knowledgeFiles, messages, pendingActions, rateLimits, slackThreads, suggestions, sweeperLocks, typingState, usageEvents, webhookDeliveries, workspaces } from '../db/schema.js';
 import { bus, INSTANCE_ID } from '../lib/bus.js';
 import { dispatchAlert, openAlertOnce } from '../lib/alerts.js';
 import { opsAlert } from '../lib/opsAlert.js';
@@ -95,6 +95,9 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
         console.error('sweepEmailDomainStatus error:', err),
       );
       void sweepRetention(db).catch((err) => console.error('sweepRetention error:', err));
+      void sweepVoiceNumberBilling(db).catch((err) =>
+        console.error('sweepVoiceNumberBilling error:', err),
+      );
       void sweepShopifyUsage(db).catch((err) => console.error('sweepShopifyUsage error:', err));
       void db
         .delete(busEvents)
@@ -417,6 +420,29 @@ export async function sweepSla(db: Db): Promise<number> {
  * pending_actions added and usage_events nulled so billing rows survive.
  * Bounded per tick; an expired backlog drains over successive sweeps.
  */
+/** Monthly billing pass for hosted voice numbers — emits a deduped
+ * voice_number_month usage event per hosted channel (billed at Twilio cost
+ * × margin via janis.voice_micros). Hourly gate keeps the scan cheap; the
+ * period dedupe is what actually enforces once-per-month. */
+export async function sweepVoiceNumberBilling(db: Db): Promise<void> {
+  if (new Date().getUTCMinutes() !== 0) return;
+  const period = new Date().toISOString().slice(0, 7);
+  const rows = await db
+    .select({ id: channels.id, workspaceId: channels.workspaceId, agentId: channels.agentId, credentials: channels.credentials })
+    .from(channels)
+    .where(eq(channels.kind, 'voice'));
+  const { recordVoiceNumberUsage } = await import('../lib/usage.js');
+  for (const ch of rows) {
+    if (!(ch.credentials as { hosted?: boolean } | null)?.hosted) continue;
+    await recordVoiceNumberUsage(db, {
+      workspaceId: ch.workspaceId,
+      agentId: ch.agentId,
+      channelId: ch.id,
+      period,
+    }).catch(() => {});
+  }
+}
+
 export async function sweepRetention(db: Db, perWorkspace = 25): Promise<number> {
   const policies = (await db.select({ id: workspaces.id, config: workspaces.config }).from(workspaces))
     .map((w) => ({
