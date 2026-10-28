@@ -132,6 +132,14 @@ apps/api/.env.production and redeploy — deploy-gcp.sh stores it in Secret
 Manager and attaches the Cloud SQL connector when the URL uses a
 /cloudsql/… host.
 
+NEVER `gcloud run deploy` by hand — always go through deploy-gcp.sh. The
+script carries required service flags a manual deploy silently drops:
+`--no-cpu-throttling` is load-bearing (hosted agent LLM runs, webhook retry
+timers, and the 60s sweeper all do work after the response returns — with
+request-scoped CPU they freeze or starve), plus secrets wiring, the
+pre-deploy migration, and the post-deploy probe/rollback. A manual deploy
+on 2026-10-20 dropped it for a week.
+
 Prod migrations run PRE-DEPLOY, not at boot: deploy-gcp.sh executes
 `npm run db:migrate -w apps/api` (scripts/migrate.ts — raw DATABASE_URL, same
 journal-poison fix as migrateDb) inside the build env before updating the
