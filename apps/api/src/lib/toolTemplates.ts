@@ -991,6 +991,111 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [], // filled from the `calendly` template below — one source of truth
   },
   {
+    id: 'google-sheets',
+    name: 'Google Sheets',
+    category: 'Docs & data',
+    blurb:
+      'Read rows and append to Google Sheets — Connect grants read+write on the signed-in account\u2019s spreadsheets.',
+    docs_url: 'https://developers.google.com/sheets/api',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'google',
+      label: () => 'Google',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/google/connect',
+    tools: [
+      {
+        name: 'gsheets_list',
+        label: 'List spreadsheets',
+        description:
+          'List the account\u2019s most recently modified spreadsheets — returns ids the other Sheets tools need.',
+        method: 'GET',
+        url: "https://www.googleapis.com/drive/v3/files?q=mimeType%3D'application%2Fvnd.google-apps.spreadsheet'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime+desc&pageSize=20",
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+      },
+      {
+        name: 'gsheets_read',
+        label: 'Read a range',
+        description:
+          'Read a cell range from a spreadsheet — returns the rows as a 2-D array. Range like "Sheet1!A1:D50".',
+        method: 'GET',
+        url: 'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}?majorDimension=ROWS',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: { spreadsheet_id: 'sheet id from gsheets_list', range: 'A1 range, e.g. Sheet1!A1:D50' },
+      },
+      {
+        name: 'gsheets_append',
+        label: 'Append rows',
+        description:
+          'Append rows to a sheet — values is a JSON array of rows, e.g. [["name","email"],["a","b"]].',
+        method: 'POST',
+        url: 'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}:append?valueInputOption=USER_ENTERED',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: { spreadsheet_id: 'sheet id from gsheets_list', range: 'target range, e.g. Sheet1!A1', values: 'JSON array of row arrays' },
+        bodyTemplate: '{"values": ${values}}',
+      },
+    ],
+  },
+  {
+    id: 'google-docs',
+    name: 'Google Docs',
+    category: 'Docs & data',
+    blurb:
+      'Read, create, and append to Google Docs — Connect grants access on the signed-in account\u2019s documents.',
+    docs_url: 'https://developers.google.com/docs/api',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'google',
+      label: () => 'Google',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/google/connect',
+    tools: [
+      {
+        name: 'gdocs_list',
+        label: 'List documents',
+        description:
+          'List the account\u2019s most recently modified Google Docs — returns ids the other Docs tools need.',
+        method: 'GET',
+        url: "https://www.googleapis.com/drive/v3/files?q=mimeType%3D'application%2Fvnd.google-apps.document'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime+desc&pageSize=20",
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+      },
+      {
+        name: 'gdocs_read',
+        label: 'Read a document',
+        description:
+          'Read a Google Doc — returns the document structure including its text content.',
+        method: 'GET',
+        url: 'https://docs.googleapis.com/v1/documents/{document_id}',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: { document_id: 'doc id from gdocs_list' },
+      },
+      {
+        name: 'gdocs_create',
+        label: 'Create a document',
+        description: 'Create a new empty Google Doc — returns its document_id.',
+        method: 'POST',
+        url: 'https://docs.googleapis.com/v1/documents',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: { title: 'document title' },
+        bodyTemplate: '{"title": "${title}"}',
+      },
+      {
+        name: 'gdocs_append',
+        label: 'Append text',
+        description: 'Append text to the end of a Google Doc.',
+        method: 'POST',
+        url: 'https://docs.googleapis.com/v1/documents/{document_id}:batchUpdate',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: { document_id: 'doc id', text: 'text to append' },
+        bodyTemplate: '{"requests": [{"insertText": {"endOfSegmentLocation": {}, "text": "${text}\n"}}]}',
+      },
+    ],
+  },
+  {
     id: 'itunes',
     name: 'iTunes Search',
     category: 'Media lookup',

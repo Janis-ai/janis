@@ -47,6 +47,13 @@ const PROVIDERS: Record<string, ProviderSpec> = {
     tokenUrl: () => 'https://auth.calendly.com/oauth/token',
     refreshBasic: () => [env.calendlyClientId, env.calendlyClientSecret],
   },
+  // Janis-owned Google OAuth app — same client as sign-in/Gmail. The
+  // connection stores the granted refresh token; access tokens last 1h and
+  // Google accepts HTTP Basic client auth on the token endpoint.
+  google: {
+    tokenUrl: () => 'https://oauth2.googleapis.com/token',
+    refreshBasic: () => [env.googleClientId, env.googleClientSecret],
+  },
 };
 
 /** Secret placeholder tools reference — e.g. 'zendesk-oauth' → CONN_ZENDESK_OAUTH_TOKEN. */
