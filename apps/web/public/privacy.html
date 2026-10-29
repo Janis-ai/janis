@@ -1,0 +1,37 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Privacy Policy — Janis</title>
+<style>body{font-family:system-ui,sans-serif;max-width:680px;margin:60px auto;padding:0 20px;line-height:1.6;color:#111;white-space:pre-wrap}</style>
+</head><body>Last updated: September 2026
+
+Janis ("we", "us") provides tools that let businesses monitor AI agents and hand conversations to human operators. This policy describes what we collect and how it's used.
+
+What we collect
+- Account information: name, email address, and sign-in identifiers (Google, Slack, or email/password).
+- Conversation data: messages sent to and from connected channels (Facebook Messenger, Instagram, WhatsApp, Slack, email) and any agent replies, stored so operators can view and respond to them.
+- Integration credentials: access tokens for channels you connect, used solely to send and receive messages on your behalf.
+- Google user data: if you connect a Gmail or Google Workspace mailbox, we access that mailbox's inbound mail (gmail.readonly) solely to route customer email into your Janis inbox, and send replies (gmail.send) on your behalf in the same thread. Google data is never used for advertising, sold, shared with third parties beyond operating the service, or used to train AI models. Janis's use of information received from Google APIs adheres to the Google API Services User Data Policy (https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements.
+- Usage data: message counts and AI token consumption, used for billing.
+
+How we use it
+- To operate the service: routing messages between your customers, your agent, and your team.
+- To bill you accurately for subscription and usage-based charges.
+- To send operational notices about your account.
+
+Third parties
+We share data with providers strictly as needed to run the service: Meta (channel messaging), Slack (workspace integration), Google (sign-in), Stripe (payments), and AI model providers (when a hosted agent or AI suggestion generates a reply). We do not sell your data.
+
+Retention
+Conversation and account data are retained while your account is active. Disconnecting a channel deletes its stored credentials and tokens. You may request full deletion of your account and data by contacting us.
+
+How we protect your data
+- Encryption in transit: all traffic between your browser, our servers, and third-party APIs (Google, Meta, Slack, Stripe) uses TLS/HTTPS.
+- Encryption at rest: sensitive secrets — agent API keys, OAuth client credentials, and connected-app secrets — are encrypted with AES-256-GCM before they are written to our database.
+- OAuth tokens: Google access and refresh tokens are stored server-side only and are never exposed to browsers, end users, or other workspaces. They are used exclusively by our backend to read inbound mail and send replies you or your agent initiate.
+- Access controls: conversation data, customer profiles, and integration credentials are isolated per workspace and accessible only to authenticated members of that workspace. Administrative access is restricted to authorized personnel.
+- Least privilege: we request only the narrow OAuth scopes required for the features you enable (e.g. gmail.readonly and gmail.send for the Gmail channel — we never request permission to modify or delete mail).
+- Payment data: card details are handled entirely by Stripe and never touch our servers.
+- Deletion and revocation: you can disconnect any channel at any time, which removes its stored tokens; revoking Janis's access in your Google account (myaccount.google.com/permissions) also stops all data access.
+
+Contact
+Questions: support@janis.ai
+</body></html>
