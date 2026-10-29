@@ -647,159 +647,206 @@ export function SourceList({
           )}
         </div>
       )}
-      {files.map((f) => (
-        <div key={f.id} className="row" style={{ marginTop: 8, gap: 8, flexWrap: 'nowrap' }}>
-          {/* Select-for-bulk lives OUTSIDE the card — it marks the row for
-              the toolbar action above, it is not part of the source itself. */}
-          {isAdmin && (
-            <input
-              type="checkbox"
-              checked={selected.has(f.id)}
-              aria-label={`Select ${f.name}`}
-              title="Select for bulk delete"
-              style={{ flexShrink: 0 }}
-              onChange={(e) =>
-                setSelected((prev) => {
-                  const next = new Set(prev);
-                  if (e.target.checked) next.add(f.id);
-                  else next.delete(f.id);
-                  return next;
-                })
-              }
-            />
-          )}
+      {topFiles.map((f) => {
+        const isSite = f.mime_type === 'text/url-site';
+        const kids = isSite ? childrenOf.get(f.id) ?? [] : [];
+        const renderRow = (r: KnowledgeFile, indented = false) => (
           <div
-            className="card"
-            style={{ flex: 1, minWidth: 0, padding: 10, opacity: f.enabled ? 1 : 0.55 }}
+            key={r.id}
+            className="row"
+            style={{ marginTop: 8, gap: 8, flexWrap: 'nowrap', ...(indented ? { marginLeft: 34 } : {}) }}
           >
-            <div className="row muted" style={{ fontSize: 13 }}>
-              <button
-                className="link small muted"
-                style={{ padding: 0 }}
-                aria-label={openFiles.has(f.id) ? `Hide ${f.name} contents` : `View ${f.name} contents`}
-                title={openFiles.has(f.id) ? 'Hide contents' : 'View contents'}
-                onClick={() =>
-                  setOpenFiles((prev) => {
+            {/* Select-for-bulk lives OUTSIDE the card — it marks the row for
+                the toolbar action above, it is not part of the source itself. */}
+            {isAdmin && (
+              <input
+                type="checkbox"
+                checked={selected.has(r.id)}
+                aria-label={`Select ${r.name}`}
+                title="Select for bulk delete"
+                style={{ flexShrink: 0 }}
+                onChange={(e) =>
+                  setSelected((prev) => {
                     const next = new Set(prev);
-                    if (next.has(f.id)) next.delete(f.id);
-                    else next.add(f.id);
+                    if (e.target.checked) next.add(r.id);
+                    else next.delete(r.id);
                     return next;
                   })
                 }
-              >
-                {openFiles.has(f.id) ? '▾' : '▸'}
-              </button>
-              {/* URLs-as-names are one long unbroken string — without a break
-                  opportunity the text overflows its box and paints over the
-                  row's buttons. */}
-              <span className="grow" style={{ overflowWrap: 'anywhere' }}>
-                {f.source_url ? <Globe size={13} /> : <FileText size={13} />}{' '}
-                {/* URL sources name themselves — the visible text IS the
-                    link; open the pasted page (not the normalized fetch
-                    URL, which can be an export endpoint). */}
-                {f.source_url ? (
-                  <a
-                    className="src-link"
-                    href={/^https?:\/\//i.test(f.name) ? f.name : f.source_url}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {f.name}
-                  </a>
-                ) : (
-                  f.name
-                )}
-                {f.topic ? <span className="badge" style={{ marginLeft: 6 }}>{f.topic}</span> : null}
-                <span className="muted">
-                  {' '}— {f.chars.toLocaleString()} chars (~{tok(f.chars)} tok)
+              />
+            )}
+            <div
+              className="card"
+              style={{ flex: 1, minWidth: 0, padding: 10, opacity: r.enabled ? 1 : 0.55 }}
+            >
+              <div className="row muted" style={{ fontSize: 13 }}>
+                <button
+                  className="link small muted"
+                  style={{ padding: 0 }}
+                  aria-label={openFiles.has(r.id) ? `Hide ${r.name} contents` : `View ${r.name} contents`}
+                  title={
+                    r.mime_type === 'text/url-site'
+                      ? openFiles.has(r.id)
+                        ? 'Hide pages'
+                        : 'Show pages'
+                      : openFiles.has(r.id)
+                        ? 'Hide contents'
+                        : 'View contents'
+                  }
+                  onClick={() =>
+                    setOpenFiles((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(r.id)) next.delete(r.id);
+                      else next.add(r.id);
+                      return next;
+                    })
+                  }
+                >
+                  {openFiles.has(r.id) ? '▾' : '▸'}
+                </button>
+                {/* URLs-as-names are one long unbroken string — without a break
+                    opportunity the text overflows its box and paints over the
+                    row's buttons. */}
+                <span className="grow" style={{ overflowWrap: 'anywhere' }}>
+                  {r.source_url ? <Globe size={13} /> : <FileText size={13} />}{' '}
+                  {/* URL sources name themselves — the visible text IS the
+                      link; open the pasted page (not the normalized fetch
+                      URL, which can be an export endpoint). */}
+                  {r.source_url ? (
+                    <a
+                      className="src-link"
+                      href={/^https?:\/\//i.test(r.name) ? r.name : r.source_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {r.name}
+                    </a>
+                  ) : (
+                    r.name
+                  )}
+                  {r.topic ? <span className="badge" style={{ marginLeft: 6 }}>{r.topic}</span> : null}
+                  {r.mime_type === 'text/url-site' ? (
+                    <span className="muted">
+                      {' '}— site · {kids.length} page{kids.length === 1 ? '' : 's'}
+                      {kids.some((k) => k.chars)
+                        ? ` · ~${tok(kids.reduce((n, k) => n + k.chars, 0))} tok`
+                        : ''}
+                    </span>
+                  ) : (
+                    <span className="muted">
+                      {' '}— {r.chars.toLocaleString()} chars (~{tok(r.chars)} tok)
+                    </span>
+                  )}
+                  {!r.enabled && <span className="muted"> · excluded</span>}
+                  {r.enabled && data?.budget && r.chars > data.budget.limit && (
+                    <span className="error"> · larger than the whole budget — always truncated</span>
+                  )}
+                  {r.has_headers && (
+                    <span className="badge" style={{ marginLeft: 6 }} title="Crawls with stored auth headers">
+                      auth
+                    </span>
+                  )}
+                  {r.source_url && (
+                    <span className="muted">
+                      {' '}· fetched {r.last_fetched_at ? timeAgo(r.last_fetched_at) : 'never'}
+                    </span>
+                  )}
+                  {r.source_url && r.text_changed_at && (
+                    <span className="muted"> · updated {timeAgo(r.text_changed_at)}</span>
+                  )}
+                  {r.status === 'failed' && <span className="error"> {r.error}</span>}
+                  {r.status === 'degraded' && <span className="error"> stale — {r.error}</span>}
+                  {/* A page that left the site's listing explains why it's
+                      excluded; plain user-excluded rows carry no error. */}
+                  {r.error && !r.enabled && r.status !== 'failed' && r.status !== 'degraded' && (
+                    <span className="muted"> · {r.error}</span>
+                  )}
                 </span>
-                {!f.enabled && <span className="muted"> · excluded</span>}
-                {f.enabled && data?.budget && f.chars > data.budget.limit && (
-                  <span className="error"> · larger than the whole budget — always truncated</span>
+                {/* The include/exclude checkbox read as an unlabeled third
+                    box next to the select box — exclusion stays API-only, but
+                    an already-excluded row always offers the way back. */}
+                {!r.enabled && isAdmin && (
+                  <button
+                    className="btn sm"
+                    title="Re-include this source in the agent's context"
+                    disabled={toggle.isPending}
+                    onClick={() => toggle.mutate({ fileId: r.id, enabled: true })}
+                  >
+                    Re-include
+                  </button>
                 )}
-                {f.has_headers && (
-                  <span className="badge" style={{ marginLeft: 6 }} title="Crawls with stored auth headers">
-                    auth
-                  </span>
+                {r.source_url && isAdmin && (
+                  <button
+                    className="btn sm"
+                    title={r.mime_type === 'text/url-site' ? 'Re-discover pages now' : 'Re-crawl now'}
+                    aria-label="Re-crawl now"
+                    disabled={refresh.isPending}
+                    onClick={() => refresh.mutate(r.id)}
+                  >
+                    <RefreshCw size={13} className={refresh.isPending ? 'spin-ic' : ''} />
+                  </button>
                 )}
-                {f.source_url && (
-                  <span className="muted">
-                    {' '}· fetched {f.last_fetched_at ? timeAgo(f.last_fetched_at) : 'never'}
-                  </span>
-                )}
-                {f.source_url && f.text_changed_at && (
-                  <span className="muted"> · updated {timeAgo(f.text_changed_at)}</span>
-                )}
-                {f.status === 'failed' && <span className="error"> {f.error}</span>}
-                {f.status === 'degraded' && <span className="error"> stale — {f.error}</span>}
-              </span>
-              {/* The include/exclude checkbox read as an unlabeled third
-                  box next to the select box — exclusion stays API-only, but
-                  an already-excluded row always offers the way back. */}
-              {!f.enabled && isAdmin && (
-                <button
-                  className="btn sm"
-                  title="Re-include this source in the agent's context"
-                  disabled={toggle.isPending}
-                  onClick={() => toggle.mutate({ fileId: f.id, enabled: true })}
-                >
-                  Re-include
-                </button>
-              )}
-              {f.source_url && isAdmin && (
-                <button
-                  className="btn sm"
-                  title="Re-crawl now"
-                  aria-label="Re-crawl now"
-                  disabled={refresh.isPending}
-                  onClick={() => refresh.mutate(f.id)}
-                >
-                  <RefreshCw size={13} className={refresh.isPending ? 'spin-ic' : ''} />
-                </button>
-              )}
-              {isAdmin && (
-                <button
-                  className="btn danger sm"
-                  onClick={() => remove.mutate(f.id)}
-                  aria-label="Delete source"
-                >
-                  <Trash2 size={14} />
-                </button>
-              )}
-            </div>
-            {/* Re-crawl cadence lives on its own row — the checkbox IS the
-                toggle (null = manual only), left-aligned under the globe so
-                it reads as this source's setting. */}
-            {f.source_url && (
-              <div className="row" style={{ marginTop: 6, fontSize: 12 }}>
-                {isAdmin ? (
-                  <label className="row muted" style={{ gap: 6, cursor: 'pointer' }}>
-                    <input
-                      type="checkbox"
-                      checked={f.refresh_hours != null}
-                      disabled={setRefresh.isPending}
-                      aria-label={`Auto re-check ${f.name}`}
-                      onChange={(e) =>
-                        setRefresh.mutate({
-                          fileId: f.id,
-                          refresh_hours: e.target.checked ? 24 : null,
-                        })
-                      }
-                    />
-                    Re-check every {f.refresh_hours ?? 24}h
-                    {!f.refresh_hours && <span> · manual only</span>}
-                  </label>
-                ) : (
-                  <span className="muted">
-                    {f.refresh_hours ? `Re-checks every ${f.refresh_hours}h` : 'Manual refresh only'}
-                  </span>
+                {isAdmin && (
+                  <button
+                    className="btn danger sm"
+                    onClick={() => remove.mutate(r.id)}
+                    aria-label="Delete source"
+                    title={r.mime_type === 'text/url-site' ? 'Delete site and all its pages' : 'Delete source'}
+                  >
+                    <Trash2 size={14} />
+                  </button>
                 )}
               </div>
-            )}
-            {openFiles.has(f.id) && <SourceText agentId={agentId} fileId={f.id} />}
+              {/* Re-crawl cadence lives on its own row — the checkbox IS the
+                  toggle (null = manual only), left-aligned under the globe so
+                  it reads as this source's setting. On a site row it drives
+                  re-discovery: new pages join, dead pages drop. */}
+              {r.source_url && (
+                <div className="row" style={{ marginTop: 6, fontSize: 12 }}>
+                  {isAdmin ? (
+                    <label className="row muted" style={{ gap: 6, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={r.refresh_hours != null}
+                        disabled={setRefresh.isPending}
+                        aria-label={`Auto re-check ${r.name}`}
+                        onChange={(e) =>
+                          setRefresh.mutate({
+                            fileId: r.id,
+                            refresh_hours: e.target.checked ? 24 : null,
+                          })
+                        }
+                      />
+                      {r.mime_type === 'text/url-site'
+                        ? `Re-check site every ${r.refresh_hours ?? 24}h`
+                        : `Re-check every ${r.refresh_hours ?? 24}h`}
+                      {!r.refresh_hours && <span> · manual only</span>}
+                    </label>
+                  ) : (
+                    <span className="muted">
+                      {r.refresh_hours ? `Re-checks every ${r.refresh_hours}h` : 'Manual refresh only'}
+                    </span>
+                  )}
+                </div>
+              )}
+              {openFiles.has(r.id) && r.mime_type !== 'text/url-site' && (
+                <SourceText agentId={agentId} fileId={r.id} />
+              )}
+              {openFiles.has(r.id) && isSite && kids.length === 0 && (
+                <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                  No pages under this site yet — the next re-check runs discovery again.
+                </div>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+        return (
+          <Fragment key={f.id}>
+            {renderRow(f)}
+            {isSite && openFiles.has(f.id) && kids.map((k) => renderRow(k, true))}
+          </Fragment>
+        );
+      })}
 
       {/* Help-center articles — first-party row. Published articles inject
           into the prompt like any doc, and the same text serves the public

@@ -1525,6 +1525,7 @@ function WebchatBranding({
               ...(f.greeting ? { greeting: f.greeting } : {}),
               // help_url is computed server-side — the toggle can only hide it.
               ...(f.show_help_link ? {} : { help_url: null }),
+              sms_footer: f.sms_footer,
             }}
           />
         </div>

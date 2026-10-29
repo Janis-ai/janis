@@ -999,20 +999,24 @@ describe('knowledge-import', () => {
     const res = await post(id, 'https://acme.zendesk.com/hc/en-us');
     expect(res.status).toBe(201);
     const body = await res.json();
-    // drafts skipped; both pages walked
+    // drafts skipped; both pages walked — the articles nest under one site row
     expect(body).toMatchObject({ kind: 'zendesk', discovered: 3, imported: 3, skipped: 0 });
     const files = await rows(id);
-    expect(files.map((f) => f.name).sort()).toEqual(['Returns', 'Shipping', 'Warranty']);
-    const ret = files.find((f) => f.name === 'Returns')!;
+    const site = files.find((f) => f.mimeType === 'text/url-site')!;
+    expect(site.sourceUrl).toBe('https://acme.zendesk.com/hc/en-us');
+    const kids = files.filter((f) => f.parentId === site.id);
+    expect(kids.map((f) => f.name).sort()).toEqual(['Returns', 'Shipping', 'Warranty']);
+    const ret = kids.find((f) => f.name === 'Returns')!;
     expect(ret.sourceUrl).toBe('https://acme.zendesk.com/hc/en-us/articles/1-returns');
     expect(ret.text).toContain('within 30 days');
     expect(ret.text).not.toContain('<b>');
     // normal URL-source cadence — the sweeper re-crawls it
     expect(ret.nextFetchAt!.getTime()).toBeGreaterThan(Date.now() + 20 * 3600_000);
 
+    // Re-import rides the same site row — a rediscovery, not a second site.
     const again = await post(id, 'https://acme.zendesk.com/hc/en-us');
     expect((await again.json()).skipped).toBe(3);
-    expect(await rows(id)).toHaveLength(3);
+    expect(await rows(id)).toHaveLength(4);
   });
 
   it('falls back to the sitemap and queues stub rows scoped to the pasted path', async () => {
@@ -1042,15 +1046,19 @@ describe('knowledge-import', () => {
     const res = await post(id, 'https://help.acme.com/en');
     expect(res.status).toBe(201);
     const body = await res.json();
-    expect(body).toMatchObject({ kind: 'sitemap', discovered: 2, queued: 2 });
+    // discovered counts the pasted root too — the section page indexes like
+    // any page even when the sitemap doesn't list it
+    expect(body).toMatchObject({ kind: 'sitemap', discovered: 3, queued: 3 });
     const files = await rows(id);
-    expect(files.map((f) => f.sourceUrl).sort()).toEqual([
+    const kids = files.filter((f) => f.parentId);
+    expect(kids.map((f) => f.sourceUrl).sort()).toEqual([
+      'https://help.acme.com/en',
       'https://help.acme.com/en/returns',
       'https://help.acme.com/en/shipping',
     ]);
     // stubs — no text yet, due immediately so the sweeper fills them
-    expect(files[0].text).toBe('');
-    expect(files[0].nextFetchAt!.getTime()).toBeLessThanOrEqual(Date.now());
+    expect(kids[0].text).toBe('');
+    expect(kids[0].nextFetchAt!.getTime()).toBeLessThanOrEqual(Date.now());
   });
 
   it('crawls links when there is no sitemap, staying in scope', async () => {
@@ -1090,7 +1098,8 @@ describe('knowledge-import', () => {
     const body = await res.json();
     expect(body.kind).toBe('crawl');
     const files = await rows(id);
-    expect(files.map((f) => f.sourceUrl).sort()).toEqual([
+    const kids = files.filter((f) => f.parentId);
+    expect(kids.map((f) => f.sourceUrl).sort()).toEqual([
       'https://docs.acme.com/guide',
       'https://docs.acme.com/guide/setup',
       'https://docs.acme.com/guide/start',
@@ -1123,9 +1132,13 @@ describe('knowledge-import', () => {
     );
     const res = await post(id, 'https://kb.acme.com/help');
     const body = await res.json();
-    expect(body).toMatchObject({ kind: 'sitemap', queued: 1 });
+    expect(body).toMatchObject({ kind: 'sitemap', queued: 2 });
     const files = await rows(id);
-    expect(files[0].sourceUrl).toBe('https://kb.acme.com/help/refunds');
+    const kids = files.filter((f) => f.parentId);
+    expect(kids.map((f) => f.sourceUrl).sort()).toEqual([
+      'https://kb.acme.com/help',
+      'https://kb.acme.com/help/refunds',
+    ]);
   });
 
   it('422s when the site is neither Zendesk, sitemap- nor crawl-discoverable', async () => {
@@ -1135,6 +1148,67 @@ describe('knowledge-import', () => {
     expect(res.status).toBe(422);
     expect((await res.json()).error).toContain('no pages found');
     expect(await rows(id)).toHaveLength(0);
+  });
+
+  it('re-check rediscovers the site — new pages index, gone pages mark then drop', async () => {
+    const id = await newAgent();
+    let listed = ['https://help.acme.com/en/returns', 'https://help.acme.com/en/shipping'];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (u: unknown) => {
+        const url = String(u);
+        if (url.includes('/api/v2/help_center')) return new Response('no', { status: 404 });
+        if (url.endsWith('/robots.txt')) return new Response('no', { status: 404 });
+        if (url.endsWith('/sitemap.xml'))
+          return new Response(
+            '<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' +
+              listed.map((l) => `<url><loc>${l}</loc></url>`).join('') +
+              '</urlset>',
+            { status: 200 },
+          );
+        return new Response('no', { status: 404 });
+      }),
+    );
+    const res = await post(id, 'https://help.acme.com/en');
+    expect(res.status).toBe(201);
+    let files = await rows(id);
+    const site = files.find((f) => f.mimeType === 'text/url-site')!;
+    const refresh = () =>
+      app.request(`/api/agents/${id}/knowledge/${site.id}/refresh`, {
+        method: 'POST',
+        headers: { cookie: parentCookie },
+      });
+
+    // The site changes shape: shipping is gone, refunds is new.
+    listed = ['https://help.acme.com/en/returns', 'https://help.acme.com/en/refunds'];
+    expect((await (await refresh()).json()).ok).toBe(true);
+
+    files = await rows(id);
+    const byUrl = new Map(
+      files.filter((f) => f.parentId === site.id).map((f) => [f.sourceUrl, f]),
+    );
+    // New page indexes as a due stub — the sweeper fills it next pass.
+    expect(byUrl.get('https://help.acme.com/en/refunds')!.text).toBe('');
+    expect(byUrl.get('https://help.acme.com/en/refunds')!.nextFetchAt!.getTime()).toBeLessThanOrEqual(
+      Date.now(),
+    );
+    // The gone page is marked excluded — never evicted on one thin crawl.
+    expect(byUrl.get('https://help.acme.com/en/shipping')!.enabled).toBe(false);
+    expect(byUrl.get('https://help.acme.com/en/shipping')!.error).toContain('no longer listed');
+
+    // Still gone on the next rediscovery → actually pruned.
+    await refresh();
+    files = await rows(id);
+    expect(
+      files
+        .filter((f) => f.parentId === site.id)
+        .map((f) => f.sourceUrl)
+        .sort(),
+    ).toEqual([
+      'https://help.acme.com/en',
+      'https://help.acme.com/en/refunds',
+      'https://help.acme.com/en/returns',
+    ]);
   });
 });
 
@@ -1254,6 +1328,33 @@ describe('knowledge patch + bulk delete', () => {
       .from(knowledgeFiles)
       .where(eq(knowledgeFiles.id, alien.id));
     expect(alienRow).toBeTruthy();
+  });
+
+  it('deleting a site row drops its page children with it', async () => {
+    const id = await newAgent();
+    const site = await addFile(id, {
+      name: 'https://s.example',
+      mimeType: 'text/url-site',
+      sourceUrl: 'https://s.example',
+      text: '',
+    });
+    await addFile(id, {
+      name: 'https://s.example/a',
+      sourceUrl: 'https://s.example/a',
+      parentId: site.id,
+    });
+    const keep = await addFile(id, { name: 'keep me' });
+
+    const res = await app.request(`/api/agents/${id}/knowledge/${site.id}`, {
+      method: 'DELETE',
+      headers: { cookie: parentCookie },
+    });
+    expect(res.status).toBe(200);
+    const remaining = await db
+      .select({ id: knowledgeFiles.id })
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.agentId, id));
+    expect(remaining.map((r) => r.id)).toEqual([keep.id]);
   });
 });
 

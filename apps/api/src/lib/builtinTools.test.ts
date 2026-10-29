@@ -1594,11 +1594,15 @@ describe('add_knowledge_source builtin', () => {
         .select()
         .from(schema.knowledgeFiles)
         .where(eq(schema.knowledgeFiles.agentId, bot2.id));
-      expect(files.map((f) => f.sourceUrl).filter(Boolean).sort()).toEqual([
+      // One site parent + per-page children under it.
+      const kids = files.filter((f) => f.parentId);
+      expect(kids.map((f) => f.sourceUrl).sort()).toEqual([
         'https://docs.acme.com/guide',
         'https://docs.acme.com/guide/a',
       ]);
-      for (const f of files) {
+      expect(files.some((f) => f.mimeType === 'text/url-site')).toBe(true);
+      // children first — the self-FK blocks deleting the parent under them
+      for (const f of [...files].sort((a) => (a.parentId ? -1 : 1))) {
         if (f.sourceUrl?.includes('docs.acme.com')) {
           await db.delete(schema.knowledgeFiles).where(eq(schema.knowledgeFiles.id, f.id));
         }

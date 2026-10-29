@@ -56,7 +56,8 @@ export function HelpCenter({ agent }: { agent: Agent }) {
       api<{ files: KnowledgeFile[] }>(`/api/agents/${agent.id}/knowledge`),
   });
   const draftableFiles = (knowledgeData?.files ?? []).filter(
-    (f) => f.status === 'ready',
+    // Site rows are containers — no text of their own to draft from.
+    (f) => f.status === 'ready' && f.chars > 0,
   );
   const draftArticle = useMutation({
     mutationFn: () =>

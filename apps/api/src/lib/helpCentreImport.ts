@@ -310,6 +310,8 @@ export async function syncSiteChildren(
           .set({ enabled: true, error: null, refreshHours: site.refreshHours, nextFetchAt: now })
           .where(eq(knowledgeFiles.id, child.id));
         out.restored++;
+      } else {
+        out.skipped++;
       }
       continue;
     }
