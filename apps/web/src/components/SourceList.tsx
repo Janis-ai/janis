@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Agent, AgentConfig, HelpArticle } from '@janis/shared';
 import { api } from '../api/client';
@@ -335,6 +335,22 @@ export function SourceList({
 
   const overBudget = (data?.budget.used_chars ?? 0) > (data?.budget.limit ?? Infinity);
   const files = (data?.files ?? []).sort((a, b) => (overBudget ? b.chars - a.chars : 0));
+  // Whole-site crawls land as a site row + one child per discovered page.
+  // Children hide inside the parent's "site — N pages" expander rather
+  // than listing flat; an orphaned child (parent already gone) falls back
+  // to top-level so it never becomes unreachable.
+  const siteIds = new Set(
+    files.filter((f) => f.mime_type === 'text/url-site').map((f) => f.id),
+  );
+  const childrenOf = new Map<string, KnowledgeFile[]>();
+  for (const f of files) {
+    if (!f.parent_id || !siteIds.has(f.parent_id)) continue;
+    const list = childrenOf.get(f.parent_id) ?? [];
+    list.push(f);
+    childrenOf.set(f.parent_id, list);
+  }
+  for (const list of childrenOf.values()) list.sort((a, b) => a.name.localeCompare(b.name));
+  const topFiles = files.filter((f) => !f.parent_id || !siteIds.has(f.parent_id));
   const notesChars = notes.reduce((n, l) => n + l.length, 0);
 
   return (
@@ -411,47 +427,52 @@ export function SourceList({
           <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
             Links become website sources — anything else saves as a note. Drop
             files anywhere on this panel.
-            {' · '}
-            <button
-              className="link small muted"
-              onClick={() => {
-                // The crawl field is its own state — opening it seeds from
-                // a pasted URL so "paste link → crawl whole site" still
-                // flows, without the two inputs mirroring every keystroke.
-                if (!importOpen && looksLikeUrl(input.trim())) setImportUrl(input.trim());
-                setImportOpen((v) => !v);
-              }}
-            >
-              Crawl a whole website
-            </button>
           </div>
-          {importOpen && (
-            <div className="card" style={{ marginTop: 8 }}>
-              <div className="muted" style={{ fontSize: 12 }}>
-                Zendesk/Intercom-style centers import via their articles API;
-                other sites are discovered through the sitemap or by
-                following links from the page you paste — each page lands as
-                its own row you can keep or drop.
+          {importMsg && !error && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{importMsg}</div>
+          )}
+          {pendingUrl && (
+            <Modal title="Add this link" onClose={() => setPendingUrl(null)} width={480}>
+              <div className="muted" style={{ fontSize: 13, overflowWrap: 'anywhere' }}>
+                {pendingUrl}
               </div>
-              <div className="row" style={{ marginTop: 8, gap: 8 }}>
-                <input
-                  className="input grow"
-                  placeholder="https://help.example.com"
-                  value={importUrl}
-                  onChange={(e) => setImportUrl(e.target.value)}
-                />
+              <div style={{ fontSize: 13, marginTop: 10 }}>
+                Crawl just this page, or the whole site under it?
+              </div>
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                A whole-site crawl follows the sitemap or the site's own links and
+                lands as one site row with a source per page — re-checked on
+                schedule, so new pages join and dead pages drop on their own.
+              </div>
+              {error && (
+                <div className="error" style={{ marginTop: 8 }}>
+                  {error}
+                </div>
+              )}
+              <div className="row" style={{ marginTop: 14, gap: 8, justifyContent: 'flex-end' }}>
+                <button
+                  className="btn ghost"
+                  onClick={() => setPendingUrl(null)}
+                  disabled={addUrl.isPending || importCentre.isPending}
+                >
+                  Cancel
+                </button>
                 <button
                   className="btn"
-                  disabled={!looksLikeUrl(importUrl.trim()) || importCentre.isPending}
-                  onClick={() => importCentre.mutate(importUrl.trim())}
+                  disabled={addUrl.isPending || importCentre.isPending}
+                  onClick={() => addUrl.mutate({ url: pendingUrl, auth: authHeader.trim() })}
                 >
-                  {importCentre.isPending ? 'Importing…' : 'Import'}
+                  {addUrl.isPending ? 'Adding…' : 'Just this page'}
+                </button>
+                <button
+                  className="btn"
+                  disabled={addUrl.isPending || importCentre.isPending}
+                  onClick={() => importCentre.mutate({ url: pendingUrl, auth: authHeader.trim() })}
+                >
+                  {importCentre.isPending ? 'Discovering…' : 'Crawl the whole site'}
                 </button>
               </div>
-              {importMsg && (
-                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{importMsg}</div>
-              )}
-            </div>
+            </Modal>
           )}
         </>
       )}
