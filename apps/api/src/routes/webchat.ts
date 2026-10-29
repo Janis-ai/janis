@@ -542,7 +542,7 @@ export function webchatRoutes(db: Db) {
       // 'Text us' footer line — only when an SMS channel exists on this
       // agent and the channel hasn't switched the line off.
       sms_number:
-        creds.sms_footer === false
+        creds.sms_footer !== true
           ? null
           : ((await db
               .select({ p: sql<string>`${channels.credentials}->>'phone_number'` })

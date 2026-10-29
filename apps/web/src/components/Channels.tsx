@@ -919,7 +919,7 @@ function WebchatBranding({
     theme: b.theme ?? 'light',
     hide_powered_by: b.hide_powered_by === true,
     show_help_link: b.show_help_link !== false,
-    sms_footer: b.sms_footer !== false,
+    sms_footer: b.sms_footer === true,
     dictation: b.dictation === true,
     // absent on channels saved before the engine switch — 'llm' matches
     // the server default so their behaviour is preserved
