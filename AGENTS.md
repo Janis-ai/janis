@@ -287,6 +287,9 @@ is a day on launch)*
     suggested_channels drop gmail (the "Email" sorter pick falls back to
     the forwarding channel), existing gmail channels keep polling/sending
     on stored refresh tokens. Re-enable: unset the flag + redeploy.
+    NB: this parked item is the RESTRICTED-scope path (Gmail,
+    drive.readonly). The Google files connector's sensitive-scope
+    verification is separately IN FLIGHT — see #15.
 12. Azure — app reg + MS_* envs DONE (A6); publisher verification in
     Partner Center may still be open — confirm status.
 13. LLM pro accounts — paid/raised-tier API accounts for
@@ -298,6 +301,16 @@ is a day on launch)*
     API — so the denial breaks nothing. Reapply only with a concrete
     feature consuming it (e.g., public IG profile enrichment of
     senders) + a screencast of that flow; generic asks get denied.
+15. Google OAuth verification (sensitive scopes) — IN FLIGHT, awaiting
+    approval (2026-10-29, per Mike). Covers the Google files connector
+    (routes/googleConnect.ts): spreadsheets + documents + drive.file —
+    deliberately non-restricted scopes (drive.file picker + app-created
+    files) so no CASA assessment applies; drive.readonly was dropped for
+    exactly that reason (5c1a663). Until verified, the consent screen
+    shows "unverified app" + the 100-test-user cap. Shipped feature set
+    (fa8d200…fec31f6): per-card install, post-consent Drive picker with
+    per-agent file set, Sheets/Docs read+append+create, Slides, Office
+    MIME→Google convert, per-row unshare.
 
 *B. Quick wins — ALL DONE or moot* (10 plan-meter + /billing/status ✓,
 11 Agents View/Manage ✓, 12 per-event notify prefs grid ✓, 13 DB_POOL_MAX
