@@ -1185,3 +1185,16 @@ Build notes if revisited: ~$12/yr dedicated domain (quarantine customer
 content from apex email reputation), CF wildcard `*` CNAME + worker
 route → same origin, ChatDomain resolves subdomain→channel-id (uuid
 slug = no uniqueness machinery), suspend/delete → 404, noindex.
+
+## Open work — site-crawl sources (decided 2026-10-29)
+
+Crawls currently expand to per-page source rows at add-time; discovery
+never re-runs (new site pages are invisible until manual re-add). Decided
+shape: the SITE is the KB row — knowledge_files gains parent_id;
+discovered pages hang as children under the root (list shows
+"site — N pages", expandable). 24h re-check on a site row re-runs
+DISCOVERY (new pages index as children, dead children prune/mark) not
+just per-page refetch. Add flow: paste URL → Add → popup asks "crawl
+whole site or just this page?" (no second button — the '· Crawl a whole
+website' text link goes away). Sweeper already batches page fetches —
+reuse it for child rows.
