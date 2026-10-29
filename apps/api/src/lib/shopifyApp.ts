@@ -1301,10 +1301,12 @@ async function subscriptionUsageState(
   const res = await shopifyGraphql(
     row.shop,
     token,
-    `{ appSubscription(id: ${JSON.stringify(shopBilling(row).subscriptionId!)}) { currentPeriodEnd lineItems { id } } }`,
+    `{ appSubscription(id: ${JSON.stringify(shopBilling(row).subscriptionId!)}) { lineItems { id } } }`,
   );
   const sub = (res.data as {
     appSubscription?: { currentPeriodEnd?: string; lineItems?: { id: string }[] };
+  // currentPeriodEnd was removed in 2026-10 — period tracking falls back
+  // to null and the cap keeps counting (graceful, no spam query).
   })?.appSubscription;
   return {
     periodEnd: sub?.currentPeriodEnd ?? null,
