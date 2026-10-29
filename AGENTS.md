@@ -1171,3 +1171,17 @@ only and partner orgs aren't auto-bridged — NOT needed on dev stores
 (get full PCD anyway), needed for phase 6; org rename has no UI —
 "My Store" shows under the app name on the merchant install screen, fix
 via support ticket or org transfer before listing.
+
+## Deferred — hosted chat subdomains (decided 2026-10-28)
+
+Every bubble already gets a shareable hosted page: channelChatUrl falls
+back to ${apiOrigin}/chat/{channel-id}/page when no widget_domain is set,
+rendered as "Open chat as a customer" on the channel card. A
+`*.janis.chat`-style branded subdomain was evaluated and deferred — the
+ugly-URL link covers the function (email sigs, social bios) for ~$0;
+the wildcard buys aesthetics on a niche feature. Revisit when a customer
+asks for prettier links or it bundles with per-agent help-center domains.
+Build notes if revisited: ~$12/yr dedicated domain (quarantine customer
+content from apex email reputation), CF wildcard `*` CNAME + worker
+route → same origin, ChatDomain resolves subdomain→channel-id (uuid
+slug = no uniqueness machinery), suspend/delete → 404, noindex.
