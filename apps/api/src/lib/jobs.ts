@@ -178,6 +178,44 @@ async function runKnowledgeRefresh(db: Db, workspaceId: string, p: { fileId?: st
   await refreshKnowledgeSource(db, file);
 }
 
+/** Fill a site row's stub children in one pass — a fresh import (or newly
+ *  discovered pages on rediscovery) is usable in seconds, not ~20 minutes
+ *  of polite 5-per-tick sweeper claims. Each child keeps the per-page
+ *  contract (success fills text + schedules, failure degrades it alone);
+ *  a crashed job re-runs and skips children already filled. The sweeper's
+ *  per-stub claims stay as the fallback if this job never lands. */
+async function runKnowledgeFill(db: Db, workspaceId: string, p: { siteId?: string }) {
+  const [site] = await db
+    .select()
+    .from(knowledgeFiles)
+    .where(eq(knowledgeFiles.id, p.siteId ?? ''))
+    .limit(1);
+  if (!site || site.workspaceId !== workspaceId) {
+    throw new Error('knowledge site gone or wrong workspace');
+  }
+  const stubs = await db
+    .select()
+    .from(knowledgeFiles)
+    .where(
+      and(
+        eq(knowledgeFiles.parentId, site.id),
+        eq(knowledgeFiles.enabled, true),
+        eq(knowledgeFiles.text, ''),
+      ),
+    );
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(JOB_CONCURRENCY, stubs.length) }, async () => {
+      while (next < stubs.length) {
+        const stub = stubs[next++];
+        // refreshKnowledgeSource already swallows fetch errors into the
+        // row's degrade/failed state — the catch guards the unexpected.
+        await refreshKnowledgeSource(db, stub).catch(() => {});
+      }
+    }),
+  );
+}
+
 type JobRow = typeof jobs.$inferSelect;
 const HANDLERS: Record<
   string,
@@ -185,6 +223,7 @@ const HANDLERS: Record<
 > = {
   'outbound.send': (db, ws, p) => runOutboundSend(db, ws, p as unknown as OutboundSendJob),
   'knowledge.refresh': (db, ws, p) => runKnowledgeRefresh(db, ws, p as { fileId?: string }),
+  'knowledge.fill': (db, ws, p) => runKnowledgeFill(db, ws, p as { siteId?: string }),
   'campaign.step': async (db, ws, p) => {
     const { campaignId, stepIndex } = p as { campaignId: string; stepIndex: number };
     // Paused campaigns hold their step chain — re-check rather than

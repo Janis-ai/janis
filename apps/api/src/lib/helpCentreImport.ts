@@ -2,6 +2,7 @@ import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { knowledgeFiles } from '../db/schema.js';
 import { fetchPublic, htmlToText, SITE_SOURCE_MIME } from './urlSource.js';
+import { enqueueJob } from './jobs.js';
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_ARTICLE_CHARS = 80_000;
@@ -377,7 +378,23 @@ export async function refreshSiteSource(
 ): Promise<{ kind: HelpCentreImport['kind'] } & Omit<HelpCentreImport, 'site' | 'kind' | 'discovered'>> {
   const disc = await discoverSite(new URL(site.sourceUrl!), authHeaders);
   const sync = await syncSiteChildren(db, site, disc.pages);
+  await maybeEnqueueFill(db, site, sync);
   return { kind: disc.kind, ...sync };
+}
+
+/** New stubs → one knowledge.fill job drains them all in a single pass —
+ *  the sweeper's per-stub claims stay only as the fallback. */
+async function maybeEnqueueFill(
+  db: Db,
+  site: typeof knowledgeFiles.$inferSelect,
+  sync: { queued: number },
+): Promise<void> {
+  if (sync.queued <= 0) return;
+  await enqueueJob(db, {
+    workspaceId: site.workspaceId,
+    type: 'knowledge.fill',
+    payload: { siteId: site.id },
+  });
 }
 
 /** Import a whole site as ONE knowledge row: the site is the parent,
@@ -434,5 +451,6 @@ export async function importHelpCentre(
       .returning();
   }
   const sync = await syncSiteChildren(db, site, disc.pages);
+  await maybeEnqueueFill(db, site, sync);
   return { site: site.id, kind: disc.kind, discovered: disc.pages.length, ...sync };
 }

@@ -957,7 +957,7 @@ function WebchatBranding({
   // channel on the agent.
   const { data: wcfg } = useQuery({
     queryKey: ['webchat-config', channel.id],
-    queryFn: () => api<{ help_url: string | null; sms_number: string | null }>(`/api/webchat/${channel.id}`),
+    queryFn: () => api<{ help_url: string | null; sms_number: string | null }>(`/chat/${channel.id}`),
     staleTime: 30_000,
   });
   // An agent-level external help link shows the button even with no
