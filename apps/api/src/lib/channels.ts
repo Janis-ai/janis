@@ -1780,6 +1780,11 @@ export async function setGetStartedButton(
 export function channelChatUrl(channel: ChannelRow): string | undefined {
   const c = channel.credentials as ChannelCredentials;
   if (channel.kind === 'webchat' && c.widget_domain) return `https://${c.widget_domain}`;
+  // Every bubble gets a shareable hosted page by default — the concierge
+  // already tells visitors this link exists; make it true without a
+  // custom domain. /chat/:id/page is the same unauthenticated page the
+  // bubble preview iframe loads.
+  if (channel.kind === 'webchat') return `${env.apiOrigin}/chat/${channel.id}/page`;
   if (channel.kind === 'messenger' && c.page_id) return `https://m.me/${c.page_id}`;
   if (channel.kind === 'instagram' && c.username) return `https://ig.me/m/${c.username}`;
   if (channel.kind === 'whatsapp' && c.phone_number) return `https://wa.me/${c.phone_number}`;
