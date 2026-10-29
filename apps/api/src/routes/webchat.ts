@@ -511,13 +511,13 @@ export function webchatRoutes(db: Db) {
           .from(agentWidgets)
           .where(and(eq(agentWidgets.agentId, agent.id), eq(agentWidgets.autoGreet, true)))
       : [];
+    // help_url emits whenever a destination exists — the toggle rides as
+    // show_help_link so the console preview can flip it live.
     const helpUrl =
-      creds.show_help_link === false
-        ? null
-        : externalHelp ??
-          (helpCount > 0
-            ? `${helpHost ? `https://${helpHost}` : env.webOrigin}/help/${channel.agentId}`
-            : null);
+      externalHelp ??
+      (helpCount > 0
+        ? `${helpHost ? `https://${helpHost}` : env.webOrigin}/help/${channel.agentId}`
+        : null);
     return c.json({
       name: channel.name,
       agent_name: agent?.name ?? 'Assistant',
@@ -539,6 +539,7 @@ export function webchatRoutes(db: Db) {
       // channel-level override wins; agent config is the default
       quick_replies: creds.quick_replies?.length ? creds.quick_replies : agentReplies,
       help_url: helpUrl,
+      show_help_link: creds.show_help_link !== false,
       // 'Text us' footer — the number emits whenever an SMS channel exists
       // (the preview needs it even before the toggle is saved on);
       // sms_footer carries the toggle and gates the render.

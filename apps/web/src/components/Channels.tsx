@@ -951,6 +951,15 @@ function WebchatBranding({
       ),
   });
   const hasHelp = (articles?.articles ?? []).some((a) => a.status === 'published');
+  // The widget's own bootstrap — gates the conditional toggles (a switch
+  // that can never render anything shouldn't show at all). help_url covers
+  // articles OR the agent's external help link; sms_number needs an SMS
+  // channel on the agent.
+  const { data: wcfg } = useQuery({
+    queryKey: ['webchat-config', channel.id],
+    queryFn: () => api<{ help_url: string | null; sms_number: string | null }>(`/api/webchat/${channel.id}`),
+    staleTime: 30_000,
+  });
   // An agent-level external help link shows the button even with no
   // published articles — the preview should reflect that.
   const { data: agents } = useAgents();
@@ -1440,6 +1449,7 @@ function WebchatBranding({
               checked={f.sound}
               onChange={(v) => setF({ ...f, sound: v })}
             />
+            {wcfg?.help_url && (
             <BubSwitch
               label="Help link"
               hint={
@@ -1452,12 +1462,15 @@ function WebchatBranding({
               checked={f.show_help_link}
               onChange={(v) => setF({ ...f, show_help_link: v })}
             />
+            )}
+            {wcfg?.sms_number && (
             <BubSwitch
               label="Show 'Text us' line"
               hint="widget footer shows your SMS number — only when this agent has an SMS channel"
               checked={f.sms_footer}
               onChange={(v) => setF({ ...f, sms_footer: v })}
             />
+            )}
             <BubSwitch
               label="Microphone dictation"
               hint="visitors can dictate — free via the browser (Chrome/Edge)"
@@ -1525,6 +1538,7 @@ function WebchatBranding({
               ...(f.greeting ? { greeting: f.greeting } : {}),
               // help_url is computed server-side — the toggle can only hide it.
               ...(f.show_help_link ? {} : { help_url: null }),
+              show_help_link: f.show_help_link,
               sms_footer: f.sms_footer,
             }}
           />

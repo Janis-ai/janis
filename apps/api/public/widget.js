@@ -3049,7 +3049,7 @@
       bubble.appendChild(badgeEl);
       var helpLink = panel.querySelector('#janis-help');
       helpLink.href = cfg.help_url || '#';
-      helpLink.style.display = cfg.help_url ? '' : 'none';
+      helpLink.style.display = cfg.help_url && cfg.show_help_link !== false ? '' : 'none';
       applyTheme();
       var smsEl = panel.querySelector('#janis-sms');
       if (!smsEl && cfg.sms_number && cfg.sms_footer) {
