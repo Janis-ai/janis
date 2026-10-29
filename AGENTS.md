@@ -42,6 +42,12 @@ Emails michael.nathanson@gmail.com from janis@inbound.janis.ai and fires a
 'custom' alert on the concierge rail conversation (lands in the Janis Inbox,
 as a push notification, and on the workspace Slack alert channel).
 
+**Doc discipline (non-negotiable):** before ending ANY session that
+shipped or learned something, update the tracker entry AND a
+"recently shipped"/architecture note in this file or HANDOFF.md — not
+just the email. Sessions kept skipping it (reconciled from git log
+2026-10-29) and the tracker drifted a full week behind the code.
+
 ## Verify after every change
 
 1. `npm run typecheck` (root — all workspaces)
@@ -419,8 +425,16 @@ drizzle-kit/workbox-build, nothing to drop directly).
     preview/CTA → app.janis.ai.
 34. docs/marketing/reactivation/RUNBOOK.md exists — verify against the
     checklist (export steps, send tool, UTMs, community posts,
-    import-legacy workflow, metrics).
-35. Agency economics decision — "what does my 12th client cost?"
+    import-legacy workflow, metrics). NB: its 3-email drip send plan is
+    SUPERSEDED by ~/Documents/janis-campaign/campaign.md (2026-10-20):
+    first send is a re-permission ask, NOT a drip — waves A1→A2→B→C→D,
+    verify-first (DONE — *_verified.csv = 18,130 of 18,819), send from
+    mail.janis.ai, A1 hand-personalized from Mike's real address.
+35. Agency economics decision — "what does my 12th client cost?" —
+    ANALYSIS WRITTEN (docs/marketing/agency-economics.md): keep Connect
+    wholesale/retail, no separate agency plan, retail ≥ wholesale already
+    enforced, per-agent member scoping stays gated until a real agency
+    asks. Only remaining: founder sign-off on the recommended posture.
 36. Proof assets — 2–3 testimonials, logo wall, vs-Chatbase/Intercom
     comparison pages, trust/security page.
 37. `/for/:slug` landing variants — copy written; ship when campaign
@@ -544,6 +558,11 @@ drizzle-kit/workbox-build, nothing to drop directly).
   Create: BYO sid/token/number or `from_voice_channel_id` (clones creds,
   setSmsWebhook auto-wires SmsUrl by number-SID lookup — hosted + BYO).
   Deleting a hosted voice channel cascades its SMS sibling.
+  A2P evidence surface (2026-10-29): static /sms-optin consent page +
+  hosted evidence screenshot, /terms.html + /privacy.html statics for
+  crawler review (Twilio AND Google verify), widget 'Text us' footer
+  shows the channel's SMS number via branding.sms_footer (opt-in toggle,
+  default off; serialized in channel branding so the toggle reads back).
 - Shared email addresses: PARTIAL — answer_rules on every email channel
   (PATCH /api/channels/:id {email_filters, from_address, gmail_query}):
   answer_addresses allowlist (mail To/Cc/Delivered-To a listed address
@@ -572,7 +591,13 @@ drizzle-kit/workbox-build, nothing to drop directly).
   {name,language,body_params}; required outside the 24h window — enforced on
   new threads). Still missing: template management/submission UI, business
   verification flow.
-- Voice: voicemail routing, IVR ("press 1 for a human"), call-recording consent,
+- Voice: DONE 2026-10-28 — neural TTS + `<Gather bargeIn>` (callers
+  interrupt mid-reply), hosted numbers billed monthly via
+  voice_number_month usage events (Twilio cost + margin, sweeper-issued),
+  free-plan upsell UX (tappable locked tab, dimmed fields — BYO Twilio
+  stays usable on free), voice/SMS channel sections gated behind
+  TWILIO_CHANNELS_LIVE until A2P clears. Still missing: voicemail
+  routing, IVR ("press 1 for a human"), call-recording consent,
   call transcripts rendered in the transcript view.
 - Widget polish: unread badges, proactive messages, file uploads, sound,
   per-agent branding, chat-on-article-page.
@@ -966,7 +991,11 @@ drizzle-kit/workbox-build, nothing to drop directly).
   (name/greeting/CSAT/quick_replies/help_url), change_plan; all park
   concierge approval cards (parkConciergeAction) that never page Slack.
   Reads: web_search, account_status, workspace_stats, debug_conversation,
-  knowledge_gaps. SSE: agent events invalidate agents/channels/channel/
+  knowledge_gaps. Visitor gating (2026-10-28): create_agent + all
+  workspace-bound tools (error_reports etc.) are hidden from unverified
+  visitors, and the concierge is told upfront when the visitor isn't
+  signed in — it can't promise actions it can't take. SSE: agent events
+  invalidate agents/channels/channel/
   knowledge/knowledge-gaps/rules/ask-janis-config; workspace events
   invalidate workspace/me/billing/billing-status.
 - Queued — cheap (config allowlist, same card path): widget accent colour
@@ -1098,7 +1127,11 @@ gate + provisioning caps, Stripe voice meter in checkout, email answer rules + s
  List-Id group-mail fix), contacts spine +
 merge UI, webhook replay/DLQ UI, /status probe, audit log, outbound send +
 broadcast, campaigns v1, STOP opt-out, jobs queue, trials + annual billing,
-WorkOS SSO + Outlook channel (both behind env creds).
+WorkOS SSO + Outlook channel (both behind env creds), named per-agent
+API keys (agent_api_keys, migration 0118 — create/list/revoke/last_used
+at /api/agents/:id/api-keys, legacy key revocable), Google files
+connector (see own section), hosted chat page per bubble
+(channelChatUrl /chat/:id/page fallback).
 
 ## Shopify App Store track (started 2026-10-13)
 
@@ -1218,6 +1251,31 @@ Add flow: paste URL → Add → popup "page or whole
 site?" — the buried text link is gone; auth header + topic ride both
 choices. Empty-text rows (site parents, unfilled stubs) no longer inject
 into the prompt. Concierge kind=site unchanged (same endpoint).
+
+## Google files connector — shipped 2026-10-28
+
+Sheets/Docs/Slides/Drive tool templates (google-sheets/-docs/-slides/
+-drive in toolTemplates.ts) backed by ONE OAuth connection per agent.
+
+- routes/googleConnect.ts: authorization-code flow on the Janis-owned
+  Google client (same client_id as sign-in/Gmail). Refresh token lands on
+  agent_connections (provider 'google'); connections.ts mints short-lived
+  access tokens per run. Scopes deliberately non-restricted —
+  spreadsheets + documents + drive.file. drive.readonly was dropped
+  (5c1a663): it lands in Google's restricted tier → CASA assessment.
+  drive.file covers files the user picks in the Drive picker plus files
+  the app creates — enough for every tool surface.
+- Per-card install: each tool template's Connect button carries ?tpl=
+  through the OAuth state; post-consent prompt offers pick OR create.
+  google_tpl flash param auto-opens the picker after redirect.
+- Per-agent picked file set on the connection row — Drive picker adds,
+  per-row unshare removes; picks + unshares survive reconsent. The
+  picker scopes to the card's file type (sheets pick sheets). Office
+  MIMEs auto-convert to Google format.
+- create-file makes app-created docs that are visible to the tools under
+  drive.file automatically; the new file joins the picked set.
+- External gate: sensitive-scope OAuth verification IN FLIGHT (#15) —
+  until approved, consent shows "unverified app" + 100-test-user cap.
 
 ## Gotcha — deploy path
 

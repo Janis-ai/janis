@@ -2,24 +2,38 @@
 
 ## Prerequisites (all external)
 
-- [ ] `www.janis.ai` cutover complete — campaign traffic must NOT land on the
-      legacy site. Verify: curl -I https://www.janis.ai → serves the new app,
-      OAuth redirects (Google/Slack/Meta) re-registered, Stripe webhook
-      re-pointed, old app still up for legacy clients.
-- [ ] Legacy list exported — `scripts/export-legacy-bots.mjs` → ~17k contacts
-      (email, name, last-seen). Verify the export actually produces the file
-      before scheduling anything.
+- [x] `www.janis.ai` cutover complete — DONE 2026-10-23 via CF worker
+      (AGENTS.md launch item A1). Campaign traffic lands on the new app.
+- [x] Legacy list exported — done a different way (2026-10-20): archived
+      in-place on the wordhopapi cluster
+      (scripts/archive-legacy-collections.mjs) then segmented into
+      ~/Documents/janis-campaign/ — 18,819 contacts in 5 segments;
+      *_verified.csv = 18,130 after email verification.
 - [ ] Suppression list applied — merge any prior unsubscribes/bounces into
-      the contacts suppression table before the first send.
-- [ ] Resend events webhook live — `email.delivered/bounced/complained` →
-      `/channels/email/events` (already configured 2026-09). Bounces feed
+      the contacts suppression table before the first send. (23 prior
+      unsubscribes already excluded from the campaign CSVs at build time —
+      still load them into the suppressions table.)
+- [x] Resend events webhook live — `email.delivered/bounced/complained` →
+      `/channels/email/events` (configured 2026-09). Bounces feed
       suppression automatically; complaints must kill the sequence for that
       contact.
-- [ ] Sending domain verified — custom Resend domain with SPF/DKIM green on
-      the email channel's page (Channels → the channel → sending domain).
-- [ ] GA4 funnel live — signup/first_agent/first_conversation events fire.
+- [x] Sending domain verified — `mail.janis.ai` is the verified campaign
+      domain on Resend (janis.ai = send-only transactional, apex MX stays
+      Google). Send campaigns from mail.janis.ai, NOT the primary domain.
+- [x] GA4 funnel live — signup/first_agent/first_conversation/
+      channel_connected/first_takeover fire server-side on transition
+      (lib/analytics.ts, localStorage-deduped).
 
 ## Send plan
+
+> **Superseded on strategy (2026-10-20):** the real send plan lives in
+> `~/Documents/janis-campaign/campaign.md`. Key changes from what follows:
+> the first send IS the re-permission ask — do NOT drip into a cold list;
+> send in segment waves (A1 → A2 → B in ~1k batches → C → D) not a full-
+> list blast; A1/A2 are small enough to hand-send from Mike's real
+> address. The prerequisites + kill conditions below still stand;
+> the 3-email README sequence is the *post-opt-in* sequence, not the
+> opener. Verification already ran — `*_verified.csv` (18,130 contacts).
 
 Three emails (`README.md`), one week apart:
 

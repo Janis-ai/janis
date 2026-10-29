@@ -114,6 +114,51 @@ keep the deterministic "Done — …" line. Also: agent/workspace delete now
 cascades every agent-keyed table via `lib/agentCleanup.ts` (`shopify_shops`
 was the FK that 500'd deletes).
 
+2026-10-28/29 — undocumented until now (reconciled from git history):
+
+- **Google files connector** — `routes/googleConnect.ts` + four tool
+  templates (`google-sheets`/`google-docs`/`google-slides`/`google-drive`
+  in toolTemplates.ts). OAuth auth-code flow on the Janis-owned Google
+  client; refresh token lands on `agent_connections` (provider 'google'),
+  access tokens minted per run. Scopes are deliberately non-restricted:
+  spreadsheets + documents + drive.file (drive.readonly dropped 5c1a663 —
+  it would trip CASA). Drive picker = Google Picker per card, per-agent
+  picked file set, preserves unshare/picks across reconsent; create-file
+  adds the new file to the picked set; Office MIMEs convert to Google
+  format. Post-consent prompt offers pick OR create. Per-row unshare.
+  Sensitive-scope OAuth verification IN FLIGHT (AGENTS.md #15) — until
+  it clears, "unverified app" screen + 100-test-user cap.
+- **Voice upgrades** — neural TTS + `<Gather bargeIn>` (caller can
+  interrupt mid-reply); hosted numbers bill monthly via
+  `voice_number_month` usage events (cost+margin, swept by sweeper);
+  paid-plan upsell for free workspaces (tappable locked tab, dimmed
+  fields — BYO Twilio stays open on free); Voice/SMS channel sections
+  gated behind `TWILIO_CHANNELS_LIVE` until A2P clears.
+- **A2P evidence surface** — static `/sms-optin` page with consent
+  disclosures + T&C/privacy links, hosted evidence screenshot,
+  `/terms.html` + `/privacy.html` statics for crawlers (Twilio + Google
+  verify both need them). Widget 'Text us' footer shows the SMS number
+  (`branding.sms_footer` — serializer emits it; opt-in toggle default
+  off); help-link/'Text us' toggles hide when they can't render.
+- **Hosted chat page for every bubble** — `channelChatUrl` falls back to
+  `${apiOrigin}/chat/{id}/page`; branded `*.janis.chat` deferred (see
+  AGENTS.md deferred section).
+- **Concierge visitor gating** — create_agent is signed-in-only;
+  workspace-bound tools (error_reports etc.) hidden from unverified
+  visitors; the concierge is told upfront when the visitor isn't
+  signed in.
+- **Named API keys** — `agent_api_keys` table (migration 0118): multiple
+  keys per agent, create/list/revoke/last_used via
+  `/api/agents/:id/api-keys`; legacy single key revocable at
+  `/api-keys/legacy/revoke`.
+- Misc: GA4 event on hosted-chat link click; dictation mic hidden on
+  iOS (webkitSpeechRecognition returns nothing); ops alert on first
+  external adoption of a non-default LLM vendor; Abilities tab
+  per-suggestion dismiss + honest unmet count; console links emit
+  www.janis.ai; concierge nav persists on the reply; concierge KB +
+  persona refreshed to the live product; Shopify GraphQL
+  currentPeriodEnd removal + return line-item quantity fix.
+
 ## How Mike likes things (worked examples — honor these)
 
 - **Concise.** Bulleted UI copy over prose paragraphs ("be most concise").
