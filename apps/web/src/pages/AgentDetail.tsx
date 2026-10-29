@@ -3043,9 +3043,19 @@ function IntegrationCards({
   const [params, setParams] = useSearchParams();
 
   const openGooglePicker = async (tplId: string) => {
-    const boot = await api<{ access_token: string; developer_key: string; app_id: string }>(
-      `/api/google/picker-token?agent_id=${agentId}`,
-    );
+    let boot: { access_token: string; developer_key: string; app_id: string };
+    try {
+      boot = await api<{ access_token: string; developer_key: string; app_id: string }>(
+        `/api/google/picker-token?agent_id=${agentId}`,
+      );
+    } catch (e) {
+      setErr(`Couldn't open the file picker: ${(e as Error).message}`);
+      return;
+    }
+    if (!boot.developer_key) {
+      setErr('Google picker is not configured (no API key) — connect still works, files can be linked by pasting their URL.');
+      return;
+    }
     const w = window as any;
     const open = () => {
       const MIME: Record<string, string> = {
@@ -3084,6 +3094,7 @@ function IntegrationCards({
         const sc = document.createElement('script');
         sc.src = 'https://apis.google.com/js/api.js';
         sc.onload = ensure;
+        sc.onerror = () => setErr('Failed to load the Google picker — check the connection and try again.');
         document.head.appendChild(sc);
       }
     } else open();
