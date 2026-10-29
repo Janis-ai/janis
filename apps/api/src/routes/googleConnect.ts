@@ -300,7 +300,7 @@ export function googlePublicRoutes(db: Db) {
     }
     const done = (msg: string, ok = false) =>
       c.redirect(
-        `${requestWebOrigin(c)}/agents/${intent.a}/integrations?${ok ? 'google_connect' : 'google_error'}=${encodeURIComponent(msg)}`,
+        `${requestWebOrigin(c)}/agents/${intent.a}/integrations?${ok ? 'google_connect' : 'google_error'}=${encodeURIComponent(msg)}${ok ? `&google_tpl=${intent.t}` : ''}`,
       );
 
     const code = c.req.query('code');
