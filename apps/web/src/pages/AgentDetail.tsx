@@ -3143,13 +3143,14 @@ function IntegrationCards({
     }
     setParams(params, { replace: true });
   };
-  // Back from Google consent — prompt a file pick for the card that connected.
+  const [pickPrompt, setPickPrompt] = useState<string | null>(null);
+  // Back from Google consent — offer pick-or-create for the card that connected.
   useEffect(() => {
     const tpl = params.get('google_tpl');
     if (!tpl) return;
     params.delete('google_tpl');
     setParams(params, { replace: true });
-    void openGooglePicker(tpl);
+    setPickPrompt(tpl);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.get('google_tpl')]);
 
@@ -3463,6 +3464,30 @@ function IntegrationCards({
           style={{ display: 'inline-block', marginBottom: 10 }}
         >
           {flash.msg}
+        </div>
+      )}
+      {pickPrompt && (
+        <div className="card" style={{ padding: 12, marginBottom: 12 }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>
+            Connected — which file should the agent use?
+          </div>
+          <div className="row">
+            <button
+              className="btn primary"
+              onClick={() => { setPickPrompt(null); void openGooglePicker(pickPrompt); }}
+            >
+              Pick existing files…
+            </button>
+            <button
+              className="btn"
+              onClick={() => { setPickPrompt(null); void createGoogleFile(pickPrompt); }}
+            >
+              Create new…
+            </button>
+            <button className="btn" onClick={() => setPickPrompt(null)}>
+              Skip
+            </button>
+          </div>
         </div>
       )}
       {builtin?.tools.length ? (
