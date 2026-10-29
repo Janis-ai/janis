@@ -250,7 +250,7 @@ export function SourceList({
       setImportMsg(
         r.kind === 'zendesk'
           ? `Imported ${r.imported} article${r.imported === 1 ? '' : 's'} from the Zendesk API${dup} — they nest under the site row and re-crawl on this schedule.`
-          : `Found ${r.discovered} pages${r.kind === 'crawl' ? ' by following links' : ''}${dup} — ${r.queued} queued under the site row; the sweeper fetches them in batches. New pages join and dead pages drop on each re-check.`,
+          : `Found ${r.discovered} pages${r.kind === 'crawl' ? ' by following links' : ''}${dup} — ${r.queued} queued under the site row and fetching now; sizes appear per page shortly. New pages join and dead pages drop on each re-check.`,
       );
       invalidate();
       if (forTopic) onTopicSettled?.();

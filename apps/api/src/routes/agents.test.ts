@@ -6,7 +6,7 @@ import { and, eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentConnections, agentSecrets, agents, agentTests, channelBindings, channels, conversations, knowledgeFiles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
+import { agentConnections, agentSecrets, agents, agentTests, channelBindings, channels, conversations, jobs, knowledgeFiles, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { generateSessionToken } from '../lib/crypto.js';
 import { generateKeyPairSync } from 'node:crypto';
 import { encryptSecret } from '../lib/secrets.js';
@@ -1209,6 +1209,53 @@ describe('knowledge-import', () => {
       'https://help.acme.com/en/refunds',
       'https://help.acme.com/en/returns',
     ]);
+  });
+
+  it('enqueues one knowledge.fill job that fills the stubs in a single pass', async () => {
+    const id = await newAgent();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (u: unknown) => {
+        const url = String(u);
+        if (url.includes('/api/v2/help_center')) return new Response('no', { status: 404 });
+        if (url.endsWith('/robots.txt')) return new Response('no', { status: 404 });
+        if (url.endsWith('/sitemap.xml'))
+          return new Response(
+            '<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' +
+              '<url><loc>https://help.acme.com/en/returns</loc></url>' +
+              '<url><loc>https://help.acme.com/en/shipping</loc></url>' +
+              '</urlset>',
+            { status: 200 },
+          );
+        // page fetches — every stub resolves to real text
+        return new Response(`<html><body><p>Body for ${url}.</p></body></html>`, {
+          status: 200,
+          headers: { 'content-type': 'text/html' },
+        });
+      }),
+    );
+    const res = await post(id, 'https://help.acme.com/en');
+    expect(res.status).toBe(201);
+
+    // One job for the whole site — not one job per stub.
+    const files0 = await rows(id);
+    const siteId = files0.find((f) => f.mimeType === 'text/url-site')!.id;
+    const fillJobs = (await db.select().from(jobs).where(eq(jobs.type, 'knowledge.fill'))).filter(
+      (j) => (j.payload as { siteId?: string }).siteId === siteId,
+    );
+    expect(fillJobs).toHaveLength(1);
+
+    const { runJobs } = await import('../lib/jobs.js');
+    await runJobs(db);
+
+    const files = await rows(id);
+    const kids = files.filter((f) => f.parentId);
+    expect(kids.length).toBe(3);
+    expect(kids.every((f) => f.text.length > 0 && f.status === 'ready')).toBe(true);
+    // filled children are on the normal refresh cadence, not due again
+    expect(kids.every((f) => f.nextFetchAt!.getTime() > Date.now() + 20 * 3600_000)).toBe(true);
+    const [fill] = await db.select().from(jobs).where(eq(jobs.id, fillJobs[0].id));
+    expect(fill.status).toBe('done');
   });
 });
 

@@ -199,3 +199,8 @@ Whole-site sources are now ONE row, not N flat page rows.
   (Modal; the buried '· Crawl a whole website' link is gone). List shows
   "site — N pages · ~X tok", expandable; marked-gone children explain
   their exclusion. Empty-text rows never inject into the prompt.
+- Follow-up (same day): stub fills were polite (5/tick ≈ 20min/100pg).
+  syncSiteChildren now enqueues one 'knowledge.fill' job whenever it
+  creates stubs (import + rediscovery) — runKnowledgeFill drains all
+  unfetched children JOB_CONCURRENCY-wide on the next tick. Sweeper's
+  per-stub claims remain the fallback if the job never lands.

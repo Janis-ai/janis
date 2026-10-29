@@ -1198,7 +1198,10 @@ sweeper fills, gone URLs disable+mark (LEFT_SITE error; off the re-crawl
 queue so a lucky refetch can't clear the mark) and drop on the NEXT pass
 if still gone, returned pages restore. Zendesk API → sitemap → link BFS
 shared by import + recrawl; re-import of the same root rides the
-existing site row. Add flow: paste URL → Add → popup "page or whole
+existing site row. New stubs enqueue ONE 'knowledge.fill' job — drains
+every unfetched child at JOB_CONCURRENCY width on the next tick (~seconds
+for 100 pages); the sweeper's 5/tick stub claims stay as fallback only.
+Add flow: paste URL → Add → popup "page or whole
 site?" — the buried text link is gone; auth header + topic ride both
 choices. Empty-text rows (site parents, unfilled stubs) no longer inject
 into the prompt. Concierge kind=site unchanged (same endpoint).
