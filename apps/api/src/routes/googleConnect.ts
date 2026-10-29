@@ -160,9 +160,38 @@ export function googleApiRoutes(db: Db) {
       { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10_000) },
     );
     const data = (await res.json().catch(() => ({}))) as { files?: { id: string }[] };
+    // Per-agent sharing: only files explicitly picked on THIS connection
+    // (minus unshared) — Drive grants are account-level, so unpicked files
+    // from other agents/flows stay hidden here.
+    const picked = pickedFiles(conn);
     const excl = excludedFiles(conn);
-    return c.json({ files: (data.files ?? []).filter((f) => !excl.has(f.id)) });
+    return c.json({
+      files: (data.files ?? []).filter((f) => picked.has(f.id) && !excl.has(f.id)),
+    });
   });
+
+  // Record files the operator picked in the console picker — the per-agent
+  // share set. Picker access itself comes from the Google-side grant; this
+  // list governs what THIS agent surfaces.
+  app.post(
+    '/pick',
+    adminOnly,
+    zValidator('json', z.object({ agent_id: z.string(), file_ids: z.array(z.string()).max(100) })),
+    async (c) => {
+      const { agent_id, file_ids } = c.req.valid('json');
+      const conn = await googleConn(db, agent_id, c.get('workspaceId'));
+      if (!conn) return c.json({ error: 'connect Google first' }, 404);
+      const creds = connectionCreds(conn);
+      const picked = pickedFiles(conn);
+      for (const id of file_ids) picked.add(id);
+      creds.picked = [...picked].join(',');
+      await db
+        .update(agentConnections)
+        .set({ credentialsEnc: encryptSecret(JSON.stringify(creds)), updatedAt: new Date() })
+        .where(eq(agentConnections.id, conn.id));
+      return c.json({ ok: true });
+    },
+  );
 
   // Unshare a file — drop it from the connection's exclusion-aware listings.
   // drive.file access is scope-level (no per-file Google revoke), so the
@@ -180,6 +209,9 @@ export function googleApiRoutes(db: Db) {
       const excl = excludedFiles(conn);
       excl.add(file_id);
       creds.excluded = [...excl].join(',');
+      const picked = pickedFiles(conn);
+      picked.delete(file_id);
+      creds.picked = [...picked].join(',');
       await db
         .update(agentConnections)
         .set({ credentialsEnc: encryptSecret(JSON.stringify(creds)), updatedAt: new Date() })
@@ -213,6 +245,12 @@ export function googleApiRoutes(db: Db) {
   );
 
   return app;
+}
+
+/** File ids the operator picked on this connection — the per-agent share set. */
+function pickedFiles(conn: typeof agentConnections.$inferSelect): Set<string> {
+  const raw = connectionCreds(conn).picked ?? '';
+  return new Set(raw.split(',').filter(Boolean));
 }
 
 /** File ids the operator unshared — stored on the connection creds. */
@@ -296,7 +334,25 @@ export function googlePublicRoutes(db: Db) {
     const label = me?.email || me?.name || 'Google account';
 
     const expiresAt = new Date(Date.now() + (tok.expires_in ?? 3600) * 1000);
-    const creds = JSON.stringify({ refresh_token: tok.refresh_token });
+    // Preserve the operator's picked/excluded file lists across reconsents —
+    // the upsert overwrites credentialsEnc wholesale otherwise and "unshare"
+    // decisions silently resurrect on reconnect.
+    const [priorConn] = await db
+      .select()
+      .from(agentConnections)
+      .where(
+        and(
+          eq(agentConnections.agentId, agent.id),
+          eq(agentConnections.provider, 'google'),
+        ),
+      )
+      .limit(1);
+    const prior = priorConn ? connectionCreds(priorConn) : {};
+    const creds = JSON.stringify({
+      refresh_token: tok.refresh_token,
+      ...(prior.excluded ? { excluded: prior.excluded } : {}),
+      ...(prior.picked ? { picked: prior.picked } : {}),
+    });
     const [conn] = await db
       .insert(agentConnections)
       .values({

@@ -3065,8 +3065,13 @@ function IntegrationCards({
         .addView(view)
         .setCallback((data: { action: string; docs?: { name: string }[] }) => {
           if (data.action === 'picked') {
-            setErr(`Picked ${data.docs?.length ?? 0} item(s) — the agent can now see them.`);
-            gfiles.refetch();
+            const ids = ((data as { docs?: { id: string }[] }).docs ?? []).map((d) => d.id);
+            setErr(`Picked ${ids.length} item(s) — the agent can now see them.`);
+            if (ids.length)
+              void api('/api/google/pick', {
+                method: 'POST',
+                body: JSON.stringify({ agent_id: agentId, file_ids: ids }),
+              }).then(() => gfiles.refetch());
           }
         })
         .build();
