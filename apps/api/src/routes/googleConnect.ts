@@ -240,7 +240,19 @@ export function googleApiRoutes(db: Db) {
         signal: AbortSignal.timeout(10_000),
       });
       if (!res.ok) return c.json({ error: `drive create failed (${res.status})` }, 502);
-      return c.json({ file: await res.json() });
+      const file = (await res.json()) as { id?: string };
+      // App-created files join the picked set so the card lists them.
+      if (file.id) {
+        const creds = connectionCreds(conn);
+        const picked = pickedFiles(conn);
+        picked.add(file.id);
+        creds.picked = [...picked].join(',');
+        await db
+          .update(agentConnections)
+          .set({ credentialsEnc: encryptSecret(JSON.stringify(creds)), updatedAt: new Date() })
+          .where(eq(agentConnections.id, conn.id));
+      }
+      return c.json({ file });
     },
   );
 
