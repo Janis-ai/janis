@@ -1205,3 +1205,12 @@ Add flow: paste URL → Add → popup "page or whole
 site?" — the buried text link is gone; auth header + topic ride both
 choices. Empty-text rows (site parents, unfilled stubs) no longer inject
 into the prompt. Concierge kind=site unchanged (same endpoint).
+
+## Gotcha — deploy path
+
+`deploy-gcp.sh` must run from the repo ROOT (`./scripts/deploy-gcp.sh` —
+it's not under apps/). Running it from apps/ or after a `cd ..` chain
+silently no-ops ("No such file or directory" in the log). After kicking
+off a deploy, confirm a build was actually created — check the log's
+first lines for `gcloud builds` output, not just that the command
+returned.
