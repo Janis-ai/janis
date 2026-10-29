@@ -1537,7 +1537,7 @@ function WebchatBranding({
               // value survives; the field only overrides when non-empty.
               ...(f.greeting ? { greeting: f.greeting } : {}),
               // help_url is computed server-side — the toggle can only hide it.
-              ...(f.show_help_link ? {} : { help_url: null }),
+              help_url: f.show_help_link ? (wcfg?.help_url ?? null) : null,
               show_help_link: f.show_help_link,
               sms_footer: f.sms_footer,
             }}
