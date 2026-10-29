@@ -942,7 +942,7 @@ export function systemPrompt(
   } else {
     parts.push(
       (opts.operator
-        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When you link to a console page, link it (https://app.janis.ai/…) — never leave a destination as bare bold text; use a URL a tool returned verbatim, or build it from ids in your context: agents are listed as Name {agent-id} (kind:{channel-id}, …), and current_agent_id covers the selected agent. Agent pages live at /agents/{agent-id}/{section} — sections: behavior (?sub=instructions (covers greeting + quick replies too), components — sidebar label 'Behavior'), knowledge (?sub=sources, gaps — articles manage as a row inside Sources), channels (/{channel-id} for one channel), integrations ('Actions'), components, tests ('Test'), settings (?sub=general, csat, escalation, team) — plus /agents/{agent-id}/inbox (/{conv-id} for a thread), /contacts, /campaigns, /reports; workspace-wide: /conversations (/{conv-id}), /contacts (/{id}), /campaigns, /reports, /errors, /billing, /settings?section=workspace|me|csat|escalation|team, /docs, and setup steps at /agents/new/{agent-id}?step=teach|guide|abilities|try|deploy. Every {…} slot carries a real uuid from your context — substitute it, never emit the placeholder itself or a slug or a kind name in an id slot, and when the context names no specific agent never emit an agent-scoped URL at all (link to https://app.janis.ai/agents or describe where to click in words). The console is a single-page app but every route above is a real browser deep link — never claim deep links don't exist or that the address bar can't reach them, and emit the full https URL, not a relative path or a code span. When the operator asks for a link, give the deep link — do not reply with click-path instructions instead. Never point the operator at a Google search or external docs for console navigation — you are the product's help desk; if you truly cannot construct a URL, say so plainly rather than outsourcing the answer to a search engine. Pick tools by domain: questions about an agent's setup, knowledge, channels or settings are answered by inspect_agent — never by billing or catalogue tools; stripe_*/product/price lookups exist only for billing, plan and charge questions about the workspace's own subscription, and a 'show me the knowledge' ask is never a product list. Never call a tool just to have a widget or cards to show — widgets come only from tools whose data the question itself asked for." +
+        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When you link to a console page, link it (https://www.janis.ai/…) — never leave a destination as bare bold text; use a URL a tool returned verbatim, or build it from ids in your context: agents are listed as Name {agent-id} (kind:{channel-id}, …), and current_agent_id covers the selected agent. Agent pages live at /agents/{agent-id}/{section} — sections: behavior (?sub=instructions (covers greeting + quick replies too), components — sidebar label 'Behavior'), knowledge (?sub=sources, gaps — articles manage as a row inside Sources), channels (/{channel-id} for one channel), integrations ('Actions'), components, tests ('Test'), settings (?sub=general, csat, escalation, team) — plus /agents/{agent-id}/inbox (/{conv-id} for a thread), /contacts, /campaigns, /reports; workspace-wide: /conversations (/{conv-id}), /contacts (/{id}), /campaigns, /reports, /errors, /billing, /settings?section=workspace|me|csat|escalation|team, /docs, and setup steps at /agents/new/{agent-id}?step=teach|guide|abilities|try|deploy. Every {…} slot carries a real uuid from your context — substitute it, never emit the placeholder itself or a slug or a kind name in an id slot, and when the context names no specific agent never emit an agent-scoped URL at all (link to https://www.janis.ai/agents or describe where to click in words). The console is a single-page app but every route above is a real browser deep link — never claim deep links don't exist or that the address bar can't reach them, and emit the full https URL, not a relative path or a code span. When the operator asks for a link, give the deep link — do not reply with click-path instructions instead. Never point the operator at a Google search or external docs for console navigation — you are the product's help desk; if you truly cannot construct a URL, say so plainly rather than outsourcing the answer to a search engine. Pick tools by domain: questions about an agent's setup, knowledge, channels or settings are answered by inspect_agent — never by billing or catalogue tools; stripe_*/product/price lookups exist only for billing, plan and charge questions about the workspace's own subscription, and a 'show me the knowledge' ask is never a product list. Never call a tool just to have a widget or cards to show — widgets come only from tools whose data the question itself asked for." +
             slackSurfaceNote(conv)
         : '') +
         (handoffOff
@@ -1069,7 +1069,7 @@ const AGENT_SUBS = new Set([
 ]);
 
 function consoleHosts(): Set<string> {
-  const hosts = new Set(['app.janis.ai']);
+  const hosts = new Set(['app.janis.ai', 'www.janis.ai']);
   try {
     hosts.add(new URL(env.webOrigin).host);
   } catch { /* unset origin — app.janis.ai still counts */ }
@@ -1222,7 +1222,7 @@ export async function guardReplyLinks(
     try {
       return new URL(env.webOrigin).origin;
     } catch {
-      return 'https://app.janis.ai';
+      return 'https://www.janis.ai';
     }
   })();
   const consoleRoots = [...CONSOLE_PAGES, 'agents', 'help', 'llm'].join('|');
@@ -5589,7 +5589,7 @@ async function replyAsHostedAgent(
           "\nThe embedded app itself covers the basics: the Agent tab edits the agent's name, purpose, greeting and quick replies, and the Inbox tab is the shopper inbox — for 'how do I set you up / change the greeting' asks, point at that tab or make the change yourself with an approval card." +
           (merchantAskClaimed
             ? ''
-            : " This store's workspace isn't claimed into a Janis account yet — console links (app.janis.ai/…) land on a login wall, so never emit them; prefer the embed's own tabs and your tools.")
+            : " This store's workspace isn't claimed into a Janis account yet — console links (www.janis.ai/…) land on a login wall, so never emit them; prefer the embed's own tabs and your tools.")
         : '') +
       // web_search sits in the schema but small models never look there on
       // an out-of-domain ask — they disclaim "no real-time data" instead.
