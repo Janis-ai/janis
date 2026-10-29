@@ -3122,6 +3122,21 @@ function IntegrationCards({
     }
   };
 
+  const dismissedTpls = new Set(cfg.builder?.dismissed_templates ?? []);
+  const dismissTemplate = (id: string) => {
+    const config: AgentConfig = {
+      ...cfg,
+      builder: {
+        ...cfg.builder,
+        dismissed_templates: [...dismissedTpls, id],
+      },
+    };
+    void api(`/api/agents/${agentId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ config }),
+    }).then(() => { setCfg(config); invalidate(); });
+  };
+
   // google_* files visible under a card — filtered to the card's file type.
   const gfilesFor = (tplId: string) => {
     const mime = GFILE_MIME[tplId]?.[0];
@@ -3257,7 +3272,21 @@ function IntegrationCards({
         >
           <div className="row" style={{ alignItems: 'center' }}>
             <strong>{t.name}</strong>
-            {sugOrder.has(t.id) && <span className="badge human">suggested</span>}
+            {sugOrder.has(t.id) && !dismissedTpls.has(t.id) && (
+              <span className="badge human">
+                suggested
+                {!installed(t) && (
+                  <button
+                    className="btn sm"
+                    style={{ marginLeft: 4, padding: '0 4px', fontSize: 10 }}
+                    title="Not needed — stop suggesting this"
+                    onClick={(e) => { e.preventDefault(); dismissTemplate(t.id); }}
+                  >
+                    ×
+                  </button>
+                )}
+              </span>
+            )}
             {t.auth === 'oauth' && <span className="badge">oauth</span>}
             <span className="badge" style={{ marginLeft: 'auto' }}>{t.category}</span>
           </div>

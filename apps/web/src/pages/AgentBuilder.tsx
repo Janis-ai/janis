@@ -2085,7 +2085,7 @@ export default function AgentBuilder() {
                     )}
                 </div>
               )}
-              {isAdmin && status && status.steps.abilities !== 'done' && (
+              {isAdmin && status && status.steps.abilities !== 'done' && status.abilities === 0 && (
                 <div className="card" style={{ marginTop: 10 }}>
                   <div className="muted" style={{ fontSize: 13 }}>
                     If your agent only needs to answer questions — no lookups,
@@ -2402,7 +2402,7 @@ export default function AgentBuilder() {
                           : status.steps.abilities === 'done'
                             ? 'Abilities: none connected (marked as not needed)'
                             : status.steps.abilities === 'partial'
-                              ? 'Abilities: suggested — none connected'
+                              ? (status.abilities_unmet ?? 0) > 0 ? `Abilities: suggested — ${status.abilities_unmet} unconnected` : 'Abilities: suggested — none connected'
                               : 'Abilities: none connected',
                       to: stepLink('abilities'),
                     },

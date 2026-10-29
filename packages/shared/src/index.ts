@@ -482,6 +482,9 @@ export const AgentConfig = z.object({
       // or clicked "Looks good"; Abilities ✓ on connect or "none needed".
       guide_confirmed: z.boolean().optional(),
       abilities_confirmed: z.boolean().optional(),
+      // Operator-dismissed suggestion ids — dropped from unmet counts;
+      // distinct from abilities_confirmed which means 'none needed at all'.
+      dismissed_templates: z.array(z.string().max(60)).max(20).optional(),
       // The draft's call on whether this agent needs operator-supplied
       // knowledge at all — drives Teach it's banner and whether an empty
       // knowledge base reads as a gap or as correct. Classification is

@@ -107,7 +107,7 @@ export function stepSubtitle(key: string, status: BuildStatus): string {
           ? // 'done' with zero tools = marked none needed, say so.
             'marked as not needed'
           : st === 'partial'
-            ? 'suggested — none connected'
+            ? (status.abilities_unmet ?? 0) > 0 ? `suggested — ${status.abilities_unmet} unconnected` : 'suggested — none connected'
             : st === 'na'
               ? 'none needed'
               : 'nothing connected';

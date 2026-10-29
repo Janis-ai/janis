@@ -1176,8 +1176,9 @@ export function agentRoutes(db: Db) {
     // Suggested templates the owner never installed — a builtin tool like
     // web_search must not mask these or the step lies ✓ while the brief's
     // integrations sit unconnected.
+    const dismissedT = new Set(cfg.builder?.dismissed_templates ?? []);
     const unmetTemplates = (cfg.builder?.suggested_templates ?? []).filter(
-      (t) => !(cfg.tools ?? []).some((x) => x.template === t.id),
+      (t) => !dismissedT.has(t.id) && !(cfg.tools ?? []).some((x) => x.template === t.id),
     ).length;
     // Cached gaps only — build-status must never trigger a detection run.
     const gapCache = readGapsCache(cfg);
@@ -1254,6 +1255,7 @@ export function agentRoutes(db: Db) {
       },
       teach_skipped: !!cfg.builder?.teach_skipped,
       abilities,
+      abilities_unmet: unmetTemplates,
       channels: publicCount,
       launched_at: firstChan?.createdAt.toISOString() ?? null,
       launched_via: firstChan ? { name: firstChan.name, kind: firstChan.kind } : null,

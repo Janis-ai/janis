@@ -166,6 +166,7 @@ export interface BuildStatus {
   help_center?: { total: number; published: number };
   live_conversations: number;
   abilities: number;
+      abilities_unmet?: number;
   test_conversations: number;
   open_gaps: number;
   // Try-it scenario checklist — effective outcomes: a human verdict
