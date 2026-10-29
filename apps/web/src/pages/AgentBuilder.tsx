@@ -417,7 +417,7 @@ export default function AgentBuilder() {
         guide: status?.steps.guide === 'partial' ? 'drafted — take a look' : 'nothing there yet',
         abilities:
           status?.steps.abilities === 'partial'
-            ? 'suggested — none connected'
+            ? (status.abilities_unmet ?? 0) > 0 ? `suggested — ${status.abilities_unmet} unconnected` : 'suggested — none connected'
             : 'nothing connected yet',
         try:
           status && status.test_conversations > 0
