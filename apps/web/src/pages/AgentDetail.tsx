@@ -3160,6 +3160,10 @@ function IntegrationCards({
     // Installs/removals change the Abilities mark — "suggested — none
     // connected" can't linger after a tool lands.
     void qc.invalidateQueries({ queryKey: ['build-status', agentId] });
+    // Google cards key off these — a dropped connection must flip 'Add'
+    // back to 'Connect', and the file list follows the connection.
+    void qc.invalidateQueries({ queryKey: ['google-conn', agentId] });
+    void qc.invalidateQueries({ queryKey: ['google-files', agentId] });
   };
 
   const install = useMutation({
