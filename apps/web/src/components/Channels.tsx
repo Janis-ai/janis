@@ -7,6 +7,7 @@ import { useAgents } from '../api/hooks';
 import { CodeBlock } from './bits';
 import { useConfirm } from './Prompt';
 import { friendlyError } from '../lib/friendlyError';
+import { track } from '../lib/analytics';
 
 interface BoundAsset {
   workspace_name: string;
@@ -201,7 +202,12 @@ export function ChannelCard({
       )}
       {ch.meta.chat_url && (
         <div style={{ marginTop: 6 }}>
-          <a href={ch.meta.chat_url} target="_blank" rel="noreferrer">
+          <a
+            href={ch.meta.chat_url}
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => track('hosted_chat_open', { channel: ch.id, kind: ch.kind })}
+          >
             Open chat as a customer ↗
           </a>
         </div>
