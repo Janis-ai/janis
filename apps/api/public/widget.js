@@ -2601,7 +2601,12 @@
   // override (gemini|openai|webspeech).
   var sttOverride = (script.getAttribute('data-janis-stt') ||
     new URLSearchParams(location.search).get('janis_stt') || '').toLowerCase();
-  var hasSpeechRec = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  // iOS Safari exposes webkitSpeechRecognition but silently never returns
+  // results with continuous=false + stop() — treat it as unavailable so
+  // the mic hides instead of recording-to-nowhere.
+  var isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  var hasSpeechRec = !isIOS && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   function dictEngine() {
     if (sttOverride === 'gemini' || sttOverride === 'openai' || sttOverride === 'webspeech')
       return sttOverride;
