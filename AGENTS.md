@@ -1186,15 +1186,19 @@ content from apex email reputation), CF wildcard `*` CNAME + worker
 route → same origin, ChatDomain resolves subdomain→channel-id (uuid
 slug = no uniqueness machinery), suspend/delete → 404, noindex.
 
-## Open work — site-crawl sources (decided 2026-10-29)
+## Site-crawl sources — DONE 2026-10-29
 
-Crawls currently expand to per-page source rows at add-time; discovery
-never re-runs (new site pages are invisible until manual re-add). Decided
-shape: the SITE is the KB row — knowledge_files gains parent_id;
-discovered pages hang as children under the root (list shows
-"site — N pages", expandable). 24h re-check on a site row re-runs
-DISCOVERY (new pages index as children, dead children prune/mark) not
-just per-page refetch. Add flow: paste URL → Add → popup asks "crawl
-whole site or just this page?" (no second button — the '· Crawl a whole
-website' text link goes away). Sweeper already batches page fetches —
-reuse it for child rows.
+The SITE is the KB row: knowledge_files.parent_id nests discovered pages
+under one mime_type 'text/url-site' parent (migration 0119). The list
+shows "site — N pages", expandable; delete/bulk-delete on a site row
+takes children with it (same-statement, the self-FK sees the set).
+Re-check on a site row re-runs DISCOVERY via refreshSiteSource →
+syncSiteChildren (helpCentreImport): new URLs land as stub children the
+sweeper fills, gone URLs disable+mark (LEFT_SITE error; off the re-crawl
+queue so a lucky refetch can't clear the mark) and drop on the NEXT pass
+if still gone, returned pages restore. Zendesk API → sitemap → link BFS
+shared by import + recrawl; re-import of the same root rides the
+existing site row. Add flow: paste URL → Add → popup "page or whole
+site?" — the buried text link is gone; auth header + topic ride both
+choices. Empty-text rows (site parents, unfilled stubs) no longer inject
+into the prompt. Concierge kind=site unchanged (same endpoint).

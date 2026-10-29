@@ -176,3 +176,26 @@ the model saw no session state and behaved worse than live. Now:
   context" under the source-conversation link.
 - Identity is save-time state: emails verified AFTER the checkpoint save
   are included — no per-turn versioning exists. Acceptable drift.
+
+## Site-crawl knowledge sources (built 2026-10-29)
+
+Whole-site sources are now ONE row, not N flat page rows.
+- knowledge_files.parent_id + mime_type 'text/url-site' (migration 0119):
+  the site is the parent, discovered pages hang underneath as ordinary
+  re-crawled url-source children (sweeper fills stubs, per-page refresh
+  unchanged). Row deletes are app-ordered — deleting a site takes its
+  children in the same statement; no ON DELETE CASCADE anywhere.
+- Recrawl = rediscovery: the site row's refresh cadence calls
+  refreshSiteSource → discoverSite (Zendesk API → sitemap → link BFS,
+  shared with the import path) then syncSiteChildren diffs: new URLs →
+  stubs due now; gone URLs → enabled=false + LEFT_SITE mark (refresh
+  nulled so refetches can't clear it), deleted on the next absence;
+  returned → re-enabled. Total discovery failure degrades the site row
+  and children keep serving last-good — same rot philosophy as pages.
+- Re-importing the same root reuses the site row (it's a rediscovery).
+  The pasted root URL indexes as a child too — sitemaps don't always
+  list it. Children inherit the site's auth headers, cadence, topic.
+- UI: paste URL → Add → popup "just this page or crawl the whole site"
+  (Modal; the buried '· Crawl a whole website' link is gone). List shows
+  "site — N pages · ~X tok", expandable; marked-gone children explain
+  their exclusion. Empty-text rows never inject into the prompt.
