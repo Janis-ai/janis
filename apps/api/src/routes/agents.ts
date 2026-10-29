@@ -1,7 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { AgentConfig, catalogModel, friendlyName, vendorForBaseUrl } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import { agents, agentApiKeys, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, campaignSends, campaigns, channelBindings, channels, contactIdentities, conversations, evalSuggestions, helpArticles, helpSearchLog, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
@@ -915,6 +915,7 @@ export function agentRoutes(db: Db) {
         status: r.status,
         error: r.error,
         source_url: r.sourceUrl,
+        parent_id: r.parentId,
         topic: r.topic,
         enabled: r.enabled,
         refresh_hours: r.refreshHours,
@@ -995,7 +996,8 @@ export function agentRoutes(db: Db) {
   );
 
   // Bulk delete — the "drop this whole crawl" path. Scoped to the agent;
-  // ids that don't match just don't count.
+  // ids that don't match just don't count. Selecting a site row takes its
+  // page children with it (one statement — the self-FK sees the whole set).
   app.post(
     '/:id/knowledge/bulk-delete',
     agentAdmin,
@@ -1006,7 +1008,12 @@ export function agentRoutes(db: Db) {
       const { ids } = c.req.valid('json');
       const rows = await db
         .delete(knowledgeFiles)
-        .where(and(eq(knowledgeFiles.agentId, agent.id), inArray(knowledgeFiles.id, ids)))
+        .where(
+          and(
+            eq(knowledgeFiles.agentId, agent.id),
+            or(inArray(knowledgeFiles.id, ids), inArray(knowledgeFiles.parentId, ids)),
+          ),
+        )
         .returning({ id: knowledgeFiles.id });
       return c.json({ deleted: rows.length });
     },
@@ -1420,19 +1427,29 @@ export function agentRoutes(db: Db) {
     return c.json({ file: { id: row.id } }, 201);
   });
 
-  // Whole-centre import — paste a help centre root and we fan it out into
-  // per-article URL sources. Zendesk centres fill rows inline from the
-  // articles API; everything else falls back to the sitemap and the
-  // sweeper's bounded re-crawl fills the stub rows.
+  // Whole-site import — paste a root and it lands as ONE site row with
+  // discovered pages hanging underneath. Zendesk centres fill children
+  // inline from the articles API; everything else falls back to the
+  // sitemap and the sweeper's bounded re-crawl fills the stub children.
+  // The site row's own cadence re-runs discovery (new pages index in,
+  // dead pages mark then drop).
   app.post('/:id/knowledge-import', agentAdmin, zValidator('json', urlBody), async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
-    const { url, refresh_hours, headers } = c.req.valid('json');
+    const { url, refresh_hours, topic, headers } = c.req.valid('json');
     try {
-      const result = await importHelpCentre(db, c.get('workspaceId'), agent.id, url, refresh_hours, {
-        headers,
-        headersEnc: headers ? encryptSecret(JSON.stringify(headers)) : undefined,
-      });
+      const result = await importHelpCentre(
+        db,
+        c.get('workspaceId'),
+        agent.id,
+        url,
+        refresh_hours,
+        {
+          headers,
+          headersEnc: headers ? encryptSecret(JSON.stringify(headers)) : undefined,
+        },
+        { topic },
+      );
       return c.json(result, 201);
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : 'import failed' }, 422);
@@ -2110,14 +2127,21 @@ export function agentRoutes(db: Db) {
 
   app.delete('/:id/knowledge/:fileId', agentAdmin, async (c) => {
     if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
-    const [row] = await db
+    // Deleting a site row drops its page children too — the site IS the
+    // source; orphaned pages serving stale text are worse than none. One
+    // statement, so the self-FK sees parent and children leave together.
+    const fileId = c.req.param('fileId');
+    const rows = await db
       .delete(knowledgeFiles)
       .where(
-        and(eq(knowledgeFiles.id, c.req.param('fileId')), eq(knowledgeFiles.agentId, c.req.param('id'))),
+        and(
+          eq(knowledgeFiles.agentId, c.req.param('id')),
+          or(eq(knowledgeFiles.id, fileId), eq(knowledgeFiles.parentId, fileId)),
+        ),
       )
-      .returning();
-    if (!row) return c.json({ error: 'not found' }, 404);
-    return c.json({ ok: true });
+      .returning({ id: knowledgeFiles.id });
+    if (!rows.length) return c.json({ error: 'not found' }, 404);
+    return c.json({ ok: true, deleted: rows.length });
   });
 
   // Classic → hosted upgrade for migrated bots: pull the Dialogflow agent's

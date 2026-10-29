@@ -62,6 +62,18 @@ To the maximum extent permitted by law, Janis is not liable for indirect or cons
 
 Contact
 Questions: support@janis.ai
+
+
+SMS messaging
+-------------
+
+When you opt in to text messages from a Janis-powered assistant, we use your
+phone number and message content only to operate that conversation. Mobile
+information is not shared with third parties or affiliates for marketing or
+promotional purposes. All categories exclude text messaging originator
+opt-in data and consent; this information will not be shared with any third
+parties. You can reply STOP at any time to end messages, or HELP for help.
+Msg & data rates may apply; message frequency varies by conversation.
 `;
 
 function Doc({ title, body }: { title: string; body: string }) {

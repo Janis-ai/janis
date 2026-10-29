@@ -946,6 +946,12 @@ export const knowledgeFiles = pgTable(
     // URL sources — the row's text is re-crawled from source_url on a
     // refresh_hours cadence (null = manual only, like an uploaded file).
     sourceUrl: text('source_url'),
+    // Site sources nest: a whole-site import (mime_type 'text/url-site')
+    // is the parent row and every discovered page hangs under it. The
+    // parent's cadence drives re-DISCOVERY (new pages index in, dead pages
+    // mark then drop); each child still re-fetches its own text. Deletes
+    // are app-ordered (children first or same statement), not cascades.
+    parentId: uuid('parent_id').references((): AnyPgColumn => knowledgeFiles.id),
     // Per-source request headers for authenticated sources (Notion tokens,
     // private docs) — AES-256-GCM encrypted JSON like agent_secrets.
     // Write-only: never projected to the console (has_headers signals it).
@@ -972,6 +978,7 @@ export const knowledgeFiles = pgTable(
   (t) => [
     index('knowledge_files_agent').on(t.agentId),
     index('knowledge_files_due').on(t.nextFetchAt),
+    index('knowledge_files_parent').on(t.parentId),
   ],
 );
 

@@ -1,7 +1,7 @@
-import { and, eq, isNotNull } from 'drizzle-orm';
+import { and, eq, isNotNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { knowledgeFiles } from '../db/schema.js';
-import { fetchPublic, htmlToText } from './urlSource.js';
+import { fetchPublic, htmlToText, SITE_SOURCE_MIME } from './urlSource.js';
 
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_ARTICLE_CHARS = 80_000;
@@ -18,17 +18,33 @@ const SKIP_EXT =
 export const MAX_KNOWLEDGE_SOURCES = 500;
 
 export interface HelpCentreImport {
+  /** The site row the pages hang under — the KB list shows "site — N pages". */
+  site: string;
   kind: 'zendesk' | 'sitemap' | 'crawl';
   /** Article URLs the centre advertised. */
   discovered: number;
-  /** Rows filled with article text inline (Zendesk API path). */
+  /** Children filled with article text inline (Zendesk API path). */
   imported: number;
-  /** Stub rows the sweeper re-crawls on the jobs path (sitemap path). */
+  /** Stub children the sweeper re-crawls on the jobs path (sitemap path). */
   queued: number;
   /** URLs already present as sources — re-importing is idempotent. */
   skipped: number;
+  /** Children that left the site's listing — disabled this pass, deleted
+   *  on the next if still gone. */
+  pruned: number;
+  /** Previously-marked children that reappeared — re-enabled. */
+  restored: number;
   /** True when the per-agent source cap truncated the import. */
   capped: boolean;
+}
+
+/** A discovered page: Zendesk articles carry their text inline, sitemap and
+ *  link-crawl pages are URL-only stubs the sweeper fills. */
+interface DiscoveredPage {
+  url: string;
+  title?: string;
+  text?: string;
+  sizeBytes?: number;
 }
 
 // authHeaders — operator-supplied per-import credentials; fetchPublic
@@ -199,10 +215,174 @@ async function crawlUrls(root: URL, authHeaders?: Record<string, string>): Promi
   return found;
 }
 
-/** Import a whole help centre as per-article URL knowledge sources. Zendesk
- *  centres fill rows inline from the articles API; anything else falls back
- *  to the sitemap and leaves stub rows for the sweeper's bounded re-crawl.
- *  No sitemap either → a bounded link crawl from the pasted page. */
+/** Page discovery — the same ladder the import walks (Zendesk's public
+ *  articles API, then the site's own sitemap, then a bounded link BFS),
+ *  shared with the 24h re-check so a site row's refresh IS rediscovery.
+ *  Zendesk articles arrive with text; the other paths return URL stubs.
+ *  Throws when nothing under the pasted path is discoverable — callers
+ *  treat that as a failed crawl, not "the site is empty" (a transient
+ *  outage must never evict a working site). */
+async function discoverSite(
+  root: URL,
+  authHeaders?: Record<string, string>,
+): Promise<{ kind: HelpCentreImport['kind']; pages: DiscoveredPage[] }> {
+  const zd = await zendeskArticles(root, authHeaders);
+  if (zd) {
+    return {
+      kind: 'zendesk',
+      pages: zd.map((a) => ({
+        url: a.html_url!,
+        title: a.title,
+        text: htmlToText(a.body ?? '')
+          // eslint-disable-next-line no-control-regex
+          .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
+          .trim()
+          .slice(0, MAX_ARTICLE_CHARS),
+        sizeBytes: Buffer.byteLength(a.body ?? ''),
+      })),
+    };
+  }
+
+  // Sitemap first — the site's own page list is the most complete. When it
+  // yields nothing under the pasted path, BFS the site's own links instead.
+  const scoped = inScope(root, await sitemapUrls(root, authHeaders));
+  const crawled = scoped.length ? [] : await crawlUrls(root, authHeaders);
+  const found = scoped.length ? scoped : crawled;
+  const kind = scoped.length ? 'sitemap' : 'crawl';
+  // The pasted page is a page too — sitemaps don't always list the root.
+  const rootHref = new URL(root.href);
+  rootHref.hash = '';
+  rootHref.search = '';
+  const urls = [...new Set([rootHref.href, ...found])];
+  if (!found.length) {
+    throw new Error(
+      'no pages found — not a Zendesk API, no sitemap URLs, and no crawlable links under that path',
+    );
+  }
+  return { kind, pages: urls.map((url) => ({ url })) };
+}
+
+/** Error marker on a child whose URL left the site's listing. Marks are
+ *  restorable (the page comes back → re-enabled) and become the delete
+ *  signal on the NEXT pass — a single thin sitemap can't evict a page. */
+const LEFT_SITE = 'no longer listed on the site — excluded (auto-restored if it returns)';
+
+/**
+ * Diff a site row's children against freshly discovered pages:
+ *  - new URL → child row (filled inline when the discovery carried text,
+ *    else a stub the sweeper's per-page re-crawl fills)
+ *  - child still listed → untouched (or un-marked if it had left before)
+ *  - child missing → disabled + marked; already-marked and still missing →
+ *    deleted. Auth headers, cadence, and topic inherit from the site row.
+ */
+export async function syncSiteChildren(
+  db: Db,
+  site: typeof knowledgeFiles.$inferSelect,
+  pages: DiscoveredPage[],
+): Promise<Omit<HelpCentreImport, 'site' | 'kind' | 'discovered'>> {
+  const [children, sources, [rowCount]] = await Promise.all([
+    db.select().from(knowledgeFiles).where(eq(knowledgeFiles.parentId, site.id)),
+    db
+      .select({ id: knowledgeFiles.id, sourceUrl: knowledgeFiles.sourceUrl })
+      .from(knowledgeFiles)
+      .where(and(eq(knowledgeFiles.agentId, site.agentId), isNotNull(knowledgeFiles.sourceUrl))),
+    db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.agentId, site.agentId)),
+  ]);
+  // Dedupe against every other source row EXCEPT the site row itself — its
+  // own URL doubles as the root child, which is how the homepage stays in.
+  const have = new Set(sources.filter((r) => r.id !== site.id).map((r) => r.sourceUrl));
+  const childByUrl = new Map(children.map((c) => [c.sourceUrl, c]));
+  const listed = new Set(pages.map((p) => p.url));
+  let slots = MAX_KNOWLEDGE_SOURCES - rowCount.count;
+  const now = new Date();
+  const next = new Date(now.getTime() + (site.refreshHours ?? 24) * 3600_000);
+  const out = { imported: 0, queued: 0, skipped: 0, pruned: 0, restored: 0, capped: false };
+
+  for (const page of pages) {
+    const child = childByUrl.get(page.url);
+    if (child) {
+      if (!child.enabled && child.error === LEFT_SITE) {
+        await db
+          .update(knowledgeFiles)
+          .set({ enabled: true, error: null, refreshHours: site.refreshHours, nextFetchAt: now })
+          .where(eq(knowledgeFiles.id, child.id));
+        out.restored++;
+      }
+      continue;
+    }
+    if (have.has(page.url)) {
+      out.skipped++;
+      continue;
+    }
+    if (slots-- <= 0) {
+      out.capped = true;
+      break;
+    }
+    const text = page.text ?? '';
+    await db.insert(knowledgeFiles).values({
+      workspaceId: site.workspaceId,
+      agentId: site.agentId,
+      parentId: site.id,
+      name: (page.title ?? page.url).slice(0, 500),
+      mimeType: 'text/url-source',
+      sizeBytes: page.sizeBytes ?? 0,
+      text,
+      status: page.text === undefined || text ? 'ready' : 'failed',
+      error: page.text === undefined || text ? null : 'article had no readable text',
+      sourceUrl: page.url,
+      sourceHeadersEnc: site.sourceHeadersEnc,
+      topic: site.topic,
+      refreshHours: site.refreshHours,
+      // A filled child is fresh now; a stub goes to the head of the
+      // sweeper's bounded re-crawl queue.
+      lastFetchedAt: text ? now : null,
+      nextFetchAt: text ? next : now,
+    });
+    have.add(page.url);
+    if (text) out.imported++;
+    else out.queued++;
+  }
+
+  for (const child of children) {
+    if (!child.sourceUrl || listed.has(child.sourceUrl)) continue;
+    if (child.enabled) {
+      // refreshHours null keeps the row off the re-crawl queue — a lucky
+      // refetch would clear the mark and the page could never be pruned.
+      await db
+        .update(knowledgeFiles)
+        .set({ enabled: false, error: LEFT_SITE, refreshHours: null, nextFetchAt: null })
+        .where(eq(knowledgeFiles.id, child.id));
+      out.pruned++;
+    } else if (child.error === LEFT_SITE) {
+      await db.delete(knowledgeFiles).where(eq(knowledgeFiles.id, child.id));
+      out.pruned++;
+    }
+  }
+  return out;
+}
+
+/** Site-row refresh — what the sweeper calls instead of a page refetch.
+ *  Re-runs discovery and diffs the children; throws when the site can't be
+ *  discovered at all (the caller degrades the row, children keep serving
+ *  their last-good text). */
+export async function refreshSiteSource(
+  db: Db,
+  site: typeof knowledgeFiles.$inferSelect,
+  authHeaders?: Record<string, string>,
+): Promise<{ kind: HelpCentreImport['kind'] } & Omit<HelpCentreImport, 'site' | 'kind' | 'discovered'>> {
+  const disc = await discoverSite(new URL(site.sourceUrl!), authHeaders);
+  const sync = await syncSiteChildren(db, site, disc.pages);
+  return { kind: disc.kind, ...sync };
+}
+
+/** Import a whole site as ONE knowledge row: the site is the parent,
+ *  discovered pages hang under it as children. Zendesk centres fill
+ *  children inline from the articles API; sitemap/link discovery leaves
+ *  stubs for the sweeper's bounded re-crawl. Re-importing the same root
+ *  rides the existing site row — it's a rediscovery, not a second site. */
 export async function importHelpCentre(
   db: Db,
   workspaceId: string,
@@ -210,102 +390,47 @@ export async function importHelpCentre(
   url: string,
   refreshHours: number,
   auth: { headers?: Record<string, string>; headersEnc?: string } = {},
+  opts: { topic?: string } = {},
 ): Promise<HelpCentreImport> {
   const root = new URL(url);
-  const existing = await db
-    .select({ sourceUrl: knowledgeFiles.sourceUrl })
+  const prior = await db
+    .select({ id: knowledgeFiles.id, mimeType: knowledgeFiles.mimeType, sourceUrl: knowledgeFiles.sourceUrl })
     .from(knowledgeFiles)
-    .where(
-      and(eq(knowledgeFiles.agentId, agentId), isNotNull(knowledgeFiles.sourceUrl)),
-    );
-  const have = new Set(existing.map((r) => r.sourceUrl));
-  let slots = MAX_KNOWLEDGE_SOURCES - existing.length;
-  if (slots <= 0) throw new Error(`knowledge source limit reached (${MAX_KNOWLEDGE_SOURCES})`);
+    .where(and(eq(knowledgeFiles.agentId, agentId), isNotNull(knowledgeFiles.sourceUrl)));
+  if (prior.length >= MAX_KNOWLEDGE_SOURCES)
+    throw new Error(`knowledge source limit reached (${MAX_KNOWLEDGE_SOURCES})`);
+  const priorSite = prior.find(
+    (r) => r.mimeType === SITE_SOURCE_MIME && r.sourceUrl === url,
+  );
+  // Discovery BEFORE any row write — a total failure leaves nothing behind.
+  const disc = await discoverSite(root, auth.headers);
 
   const now = new Date();
-  const next = new Date(now.getTime() + refreshHours * 3600_000);
-  const base = {
-    workspaceId,
-    agentId,
-    mimeType: 'text/url-source',
-    refreshHours,
-    // Auth headers persist (encrypted) so the cadence re-crawl authenticates
-    // identically to the import — every row this import creates carries them.
-    ...(auth.headersEnc ? { sourceHeadersEnc: auth.headersEnc } : {}),
-  };
-
-  const zd = await zendeskArticles(root, auth.headers);
-  if (zd) {
-    let imported = 0;
-    let skipped = 0;
-    let capped = false;
-    for (const a of zd) {
-      if (have.has(a.html_url!)) {
-        skipped++;
-        continue;
-      }
-      if (slots-- <= 0) {
-        capped = true;
-        break;
-      }
-      const text = htmlToText(a.body ?? '')
-        // eslint-disable-next-line no-control-regex
-        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '')
-        .trim()
-        .slice(0, MAX_ARTICLE_CHARS);
-      await db.insert(knowledgeFiles).values({
-        ...base,
-        name: a.title!.slice(0, 500),
-        sizeBytes: Buffer.byteLength(a.body ?? ''),
-        text,
-        status: text ? 'ready' : 'failed',
-        error: text ? null : 'article had no readable text',
-        sourceUrl: a.html_url,
+  let site: typeof knowledgeFiles.$inferSelect;
+  if (priorSite) {
+    [site] = (await db.select().from(knowledgeFiles).where(eq(knowledgeFiles.id, priorSite.id)))!;
+  } else {
+    [site] = await db
+      .insert(knowledgeFiles)
+      .values({
+        workspaceId,
+        agentId,
+        name: url.slice(0, 500),
+        mimeType: SITE_SOURCE_MIME,
+        sizeBytes: 0,
+        text: '',
+        status: 'ready',
+        sourceUrl: url,
+        // Auth headers persist (encrypted) so the cadence re-crawl
+        // authenticates identically — children inherit them.
+        ...(auth.headersEnc ? { sourceHeadersEnc: auth.headersEnc } : {}),
+        topic: opts.topic ?? null,
+        refreshHours,
         lastFetchedAt: now,
-        nextFetchAt: next,
-      });
-      have.add(a.html_url!);
-      imported++;
-    }
-    return { kind: 'zendesk', discovered: zd.length, imported, queued: 0, skipped, capped };
+        nextFetchAt: new Date(now.getTime() + refreshHours * 3600_000),
+      })
+      .returning();
   }
-
-  // Sitemap first — the site's own page list is the most complete. When it
-  // yields nothing under the pasted path, BFS the site's own links instead.
-  const scoped = inScope(root, await sitemapUrls(root, auth.headers));
-  const crawled = scoped.length ? [] : await crawlUrls(root, auth.headers);
-  const discovered = scoped.length ? scoped : crawled;
-  const kind = scoped.length ? 'sitemap' : 'crawl';
-  if (!discovered.length) {
-    throw new Error(
-      'no pages found — not a Zendesk API, no sitemap URLs, and no crawlable links under that path',
-    );
-  }
-  let queued = 0;
-  let skipped = 0;
-  let capped = false;
-  for (const u of discovered) {
-    if (have.has(u)) {
-      skipped++;
-      continue;
-    }
-    if (slots-- <= 0) {
-      capped = true;
-      break;
-    }
-    // Stub row — nextFetchAt=now puts it at the head of the sweeper's
-    // bounded re-crawl queue, which fills text + the real next slot.
-    await db.insert(knowledgeFiles).values({
-      ...base,
-      name: u,
-      sizeBytes: 0,
-      text: '',
-      sourceUrl: u,
-      lastFetchedAt: null,
-      nextFetchAt: now,
-    });
-    have.add(u);
-    queued++;
-  }
-  return { kind, discovered: discovered.length, imported: 0, queued, skipped, capped };
+  const sync = await syncSiteChildren(db, site, disc.pages);
+  return { site: site.id, kind: disc.kind, discovered: disc.pages.length, ...sync };
 }

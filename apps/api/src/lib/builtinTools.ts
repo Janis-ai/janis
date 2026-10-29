@@ -1431,6 +1431,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
             status: knowledgeFiles.status,
             chars: sql<number>`length(${knowledgeFiles.text})`,
             sourceUrl: knowledgeFiles.sourceUrl,
+            mimeType: knowledgeFiles.mimeType,
             enabled: knowledgeFiles.enabled,
           })
           .from(knowledgeFiles)
@@ -1489,7 +1490,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         tools: ((cfg.tools ?? []) as { name?: string }[]).map((t) => t.name).filter(Boolean),
         knowledge_sources: files.map((f) => ({
           name: f.name,
-          kind: f.sourceUrl ? 'url' : 'file',
+          kind: f.mimeType === 'text/url-site' ? 'site' : f.sourceUrl ? 'url' : 'file',
           status: f.status,
           chars: f.chars,
           enabled: f.enabled,
@@ -3182,7 +3183,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'add_knowledge_source',
     description:
-      "Propose adding a knowledge SOURCE to an agent in the visitor's workspace — kind=url crawls a web page (and re-crawls it on the refresh cadence, like the console's Websites source), kind=site imports a WHOLE website or help centre as per-page sources (Zendesk API → sitemap → link crawl), kind=text saves a pasted document as a file (like an uploaded doc). For a one-line fact use teach_agent instead; for a public help-centre article use draft_article. Posts an approval card — nothing is added until the visitor approves. Admin-only.",
+      "Propose adding a knowledge SOURCE to an agent in the visitor's workspace — kind=url crawls a web page (and re-crawls it on the refresh cadence, like the console's Websites source), kind=site imports a WHOLE website or help centre as one site row with per-page sources nested under it (Zendesk API → sitemap → link crawl), kind=text saves a pasted document as a file (like an uploaded doc). For a one-line fact use teach_agent instead; for a public help-centre article use draft_article. Posts an approval card — nothing is added until the visitor approves. Admin-only.",
     params: {
       agent: 'agent name (required)',
       kind: 'url | text | site (required)',
@@ -3231,7 +3232,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         execArgs.refresh_hours = Math.floor(hours);
         display.website = url;
         display.recrawl = `every ${Math.floor(hours)}h`;
-        if (kind === 'site') display.scope = 'whole site — each page lands as its own source';
+        if (kind === 'site') display.scope = 'whole site — pages nest under one site row';
       } else {
         const title = String(args.title ?? '').trim().slice(0, 200);
         const content = String(args.content ?? '').trim();
@@ -3320,7 +3321,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({
           ok: true,
           agent: agent.name,
-          summary: `Crawling ${args.url} into ${agent.name}'s knowledge — ${result.discovered} pages found via ${result.kind}${result.skipped ? ` (${result.skipped} already imported)` : ''}; each lands as its own re-crawled source.`,
+          summary: `Crawling ${args.url} into ${agent.name}'s knowledge — ${result.discovered} pages found via ${result.kind}${result.skipped ? ` (${result.skipped} already imported)` : ''}; they nest under one site row that re-discovers pages on schedule.`,
         });
       }
       let name: string;

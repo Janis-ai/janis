@@ -200,6 +200,9 @@ export async function loadKnowledgeDocs(
           eq(knowledgeFiles.agentId, agentId),
           inArray(knowledgeFiles.status, ['ready', 'degraded']),
           eq(knowledgeFiles.enabled, true),
+          // Site parents and not-yet-filled crawl stubs carry no text —
+          // a name-only doc teaches the model nothing.
+          sql`length(${knowledgeFiles.text}) > 0`,
         ),
       )
   ).map((r) => ({

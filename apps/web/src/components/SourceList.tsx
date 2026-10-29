@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Agent, AgentConfig, HelpArticle } from '@janis/shared';
 import { api } from '../api/client';
 import { HelpCenter } from './HelpCenter';
+import { Modal } from './Modal';
 import { FileText, Globe, Newspaper, RefreshCw, StickyNote, Trash2 } from 'lucide-react';
 import { timeAgo } from './bits';
 
@@ -14,6 +15,9 @@ export interface KnowledgeFile {
   status: string;
   error: string | null;
   source_url: string | null;
+  /** Set on crawled pages — they nest under their site row (the parent). */
+  parent_id: string | null;
+  mime_type: string;
   topic: string | null;
   enabled: boolean;
   refresh_hours: number | null;
@@ -133,9 +137,9 @@ export function SourceList({
   const [editValue, setEditValue] = useState('');
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
   const [importMsg, setImportMsg] = useState('');
-  const [importUrl, setImportUrl] = useState('');
+  // The pasted URL awaiting the "page or whole site?" popup decision.
+  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openFiles, setOpenFiles] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
@@ -212,6 +216,8 @@ export function SourceList({
     onSuccess: () => {
       setInput('');
       setAuthHeader('');
+      setPendingUrl(null);
+      setImportMsg('');
       invalidate();
       if (forTopic) onTopicSettled?.();
     },
@@ -219,20 +225,35 @@ export function SourceList({
   });
 
   const importCentre = useMutation({
-    mutationFn: (url: string) =>
-      api<{ kind: string; imported: number; queued: number; skipped: number; discovered: number }>(
-        `/api/agents/${agentId}/knowledge-import`,
-        { method: 'POST', body: JSON.stringify({ url: url.trim(), refresh_hours: 24 }) },
-      ),
+    mutationFn: ({ url, auth }: { url: string; auth: string }) =>
+      api<{
+        kind: string;
+        imported: number;
+        queued: number;
+        skipped: number;
+        discovered: number;
+        site: string;
+      }>(`/api/agents/${agentId}/knowledge-import`, {
+        method: 'POST',
+        body: JSON.stringify({
+          url: /^https?:\/\//i.test(url) ? url : `https://${url}`,
+          refresh_hours: 24,
+          ...(forTopic ? { topic: forTopic.id } : {}),
+          ...(auth ? { headers: { Authorization: auth } } : {}),
+        }),
+      }),
     onSuccess: (r) => {
-      setImportUrl('');
+      setInput('');
+      setAuthHeader('');
+      setPendingUrl(null);
       const dup = r.skipped ? ` (${r.skipped} already imported)` : '';
       setImportMsg(
         r.kind === 'zendesk'
-          ? `Imported ${r.imported} article${r.imported === 1 ? '' : 's'} from the Zendesk API${dup} — they re-crawl on this schedule.`
-          : `Found ${r.discovered} pages${r.kind === 'crawl' ? ' by following links' : ''}${dup} — ${r.queued} queued; the sweeper fetches them in batches. Sizes appear per row once fetched.`,
+          ? `Imported ${r.imported} article${r.imported === 1 ? '' : 's'} from the Zendesk API${dup} — they nest under the site row and re-crawl on this schedule.`
+          : `Found ${r.discovered} pages${r.kind === 'crawl' ? ' by following links' : ''}${dup} — ${r.queued} queued under the site row; the sweeper fetches them in batches. New pages join and dead pages drop on each re-check.`,
       );
       invalidate();
+      if (forTopic) onTopicSettled?.();
     },
     onError: (e) => setError(e.message),
   });
@@ -302,7 +323,10 @@ export function SourceList({
     const v = input.trim();
     if (!v) return;
     if (looksLikeUrl(v)) {
-      addUrl.mutate({ url: v, auth: authHeader.trim() });
+      // Every pasted link gets the scope question — page or whole site.
+      setError('');
+      setImportMsg('');
+      setPendingUrl(v);
     } else {
       void saveNotes([...notes, v]);
       setInput('');

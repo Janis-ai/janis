@@ -10,6 +10,11 @@ const MAX_CHARS = 80_000;
 const FETCH_TIMEOUT_MS = 15_000;
 const MAX_REDIRECTS = 5;
 
+/** Whole-site knowledge source — the parent row under which discovered
+ *  pages hang as parent_id children. Its refresh cadence re-runs page
+ *  DISCOVERY (helpCentreImport.refreshSiteSource), not a page refetch. */
+export const SITE_SOURCE_MIME = 'text/url-site';
+
 // ── SSRF guard ──────────────────────────────────────────────────────────
 // URL knowledge sources are operator-pasted but the fetch is server-side:
 // without a guard, any workspace admin can point the crawler at the cloud
@@ -283,12 +288,15 @@ export async function refreshKnowledgeSource(
       sourceUrl: file.sourceUrl,
       ...extra,
     });
+  // "Last-good exists" = prior text for page rows, a prior successful
+  // discovery for site rows (which hold no text — their children do).
+  const hasLastGood = !!file.text || !!file.lastFetchedAt;
   const degrade = async (reason: string) => {
-    const entersDegraded = !!file.text && file.status !== 'degraded';
+    const entersDegraded = hasLastGood && file.status !== 'degraded';
     await db
       .update(knowledgeFiles)
       .set({
-        status: file.text ? 'degraded' : 'failed',
+        status: hasLastGood ? 'degraded' : 'failed',
         error: reason,
         lastFetchedAt: now,
         nextFetchAt: new Date(now.getTime() + intervalMs),
@@ -311,6 +319,34 @@ export async function refreshKnowledgeSource(
       } catch {
         sourceHeaders = undefined;
       }
+    }
+    // Site rows refresh differently: the cadence re-runs page DISCOVERY
+    // (new pages index as children, dead children mark then drop) instead
+    // of refetching one page — the row itself holds no text. Dynamic
+    // import keeps the urlSource ↔ helpCentreImport edge one-directional.
+    if (file.mimeType === SITE_SOURCE_MIME) {
+      const { refreshSiteSource } = await import('./helpCentreImport.js');
+      const r = await refreshSiteSource(db, file, sourceHeaders);
+      await db
+        .update(knowledgeFiles)
+        .set({
+          status: 'ready',
+          error: null,
+          lastFetchedAt: now,
+          nextFetchAt: new Date(now.getTime() + intervalMs),
+        })
+        .where(eq(knowledgeFiles.id, file.id));
+      if (file.status === 'degraded') sourceEvent('knowledge_source.recovered');
+      // Page only when the site actually changed shape — a quiet 24h
+      // rediscovery that found nothing new isn't worth a webhook.
+      if (r.queued + r.imported + r.pruned + r.restored > 0)
+        sourceEvent('knowledge_source.recrawled', {
+          kind: r.kind,
+          added: r.queued + r.imported,
+          pruned: r.pruned,
+          restored: r.restored,
+        });
+      return true;
     }
     const { text, sizeBytes, imageUrl, finalUrl } = file.sourceUrl!.startsWith('shopify://')
       ? await fetchShopifySourceText(db, file)
