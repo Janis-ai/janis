@@ -539,6 +539,16 @@ export function webchatRoutes(db: Db) {
       // channel-level override wins; agent config is the default
       quick_replies: creds.quick_replies?.length ? creds.quick_replies : agentReplies,
       help_url: helpUrl,
+      // 'Text us' footer line — only when an SMS channel exists on this
+      // agent and the channel hasn't switched the line off.
+      sms_number:
+        creds.sms_footer === false
+          ? null
+          : ((await db
+              .select({ p: sql<string>`${channels.credentials}->>'phone_number'` })
+              .from(channels)
+              .where(and(eq(channels.agentId, channel.agentId), eq(channels.kind, 'sms')))
+              .limit(1))[0]?.p ?? null),
       teaser_text: creds.teaser_text ?? null,
       proactive: creds.proactive !== false,
       proactive_delay: creds.proactive_delay ?? 20,

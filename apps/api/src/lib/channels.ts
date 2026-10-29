@@ -63,6 +63,9 @@ export interface ChannelCredentials {
   // webchat: show the "Browse help articles" link — default on; an agent-level
   // config.help_url still overrides where it points
   show_help_link?: boolean;
+  // 'Text us: {sms number}' footer line — default on, only renders
+  // when the agent also has an SMS channel
+  sms_footer?: boolean;
   // webchat: mic dictation in the widget — opt-in; transcription is a metered
   // Janis charge regardless of the agent's LLM (BYOK included)
   dictation?: boolean;

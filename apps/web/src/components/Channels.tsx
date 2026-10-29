@@ -913,6 +913,7 @@ function WebchatBranding({
     theme: b.theme ?? 'light',
     hide_powered_by: b.hide_powered_by === true,
     show_help_link: b.show_help_link !== false,
+    sms_footer: b.sms_footer !== false,
     dictation: b.dictation === true,
     // absent on channels saved before the engine switch — 'llm' matches
     // the server default so their behaviour is preserved
@@ -1012,6 +1013,7 @@ function WebchatBranding({
             theme: f.theme,
             hide_powered_by: f.hide_powered_by,
             show_help_link: f.show_help_link,
+            sms_footer: f.sms_footer,
             dictation: f.dictation,
             dictation_engine: f.dictation_advanced ? 'llm' : 'browser',
             font_family: f.font_preset === 'custom' ? f.font_custom.trim() : f.font_preset,
@@ -1443,6 +1445,12 @@ function WebchatBranding({
               }
               checked={f.show_help_link}
               onChange={(v) => setF({ ...f, show_help_link: v })}
+            />
+            <BubSwitch
+              label="Show 'Text us' line"
+              hint="widget footer shows your SMS number — only when this agent has an SMS channel"
+              checked={f.sms_footer}
+              onChange={(v) => setF({ ...f, sms_footer: v })}
             />
             <BubSwitch
               label="Microphone dictation"

@@ -1026,6 +1026,17 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         params: { spreadsheet_id: 'sheet id from gsheets_list', range: 'A1 range, e.g. Sheet1!A1:D50' },
       },
       {
+        name: 'gsheets_update',
+        label: 'Update a row',
+        description:
+          'Overwrite a specific range in a sheet — use it to update an EXISTING row (e.g. a contact whose email is already present): first call gsheets_read, find the matching row number, then update range like Sheet1!A{row}:D{row}. Never use this to add a new row — use gsheets_append.',
+        method: 'PUT',
+        url: 'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}/values/{range}?valueInputOption=USER_ENTERED',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: { spreadsheet_id: 'sheet id', range: 'target range, e.g. Sheet1!A3:D3', values: 'JSON array of row arrays' },
+        bodyTemplate: '{"values": ${values}}',
+      },
+      {
         name: 'gsheets_append',
         label: 'Append rows',
         description:

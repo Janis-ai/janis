@@ -3046,6 +3046,18 @@
       helpLink.href = cfg.help_url || '#';
       helpLink.style.display = cfg.help_url ? '' : 'none';
       applyTheme();
+      var smsEl = panel.querySelector('#janis-sms');
+      if (!smsEl && cfg.sms_number) {
+        smsEl = document.createElement('a');
+        smsEl.id = 'janis-sms';
+        smsEl.style.cssText = 'display:block;font-size:11px;opacity:.6;text-decoration:none;color:inherit;text-align:center;padding:2px 0';
+        helpLink.parentNode.insertBefore(smsEl, helpLink.nextSibling);
+      }
+      if (smsEl) {
+        smsEl.style.display = cfg.sms_number ? '' : 'none';
+        smsEl.textContent = 'Text us: ' + (cfg.sms_number || '');
+        smsEl.href = 'sms:' + (cfg.sms_number || '');
+      }
       var pw = panel.querySelector('#janis-power');
       if (pw) pw.style.display = cfg.hide_powered_by ? 'none' : '';
       var left = cfg.position === 'left';
