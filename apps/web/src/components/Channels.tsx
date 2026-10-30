@@ -162,6 +162,24 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                 {link.isPending ? 'Linking…' : 'Link page'}
               </button>
             </div>
+          ) : !session.data?.connected ? (
+            <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+              <a className="btn" href={`/api/meta/connect?agent=${ch.agent_id}`}>
+                Connect Meta
+              </a>{' '}
+              to pick your Page — or paste its ID manually:
+              <div className="row" style={{ marginTop: 8, gap: 8 }}>
+                <input
+                  placeholder="Facebook Page ID"
+                  value={pageId}
+                  onChange={(e) => setPageId(e.target.value)}
+                  style={{ flex: 1 }}
+                />
+                <button className="btn" disabled={savePage.isPending} onClick={() => savePage.mutate()}>
+                  Save
+                </button>
+              </div>
+            </div>
           ) : (
             <div className="row" style={{ marginTop: 8, gap: 8 }}>
               <input

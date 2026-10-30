@@ -1640,6 +1640,11 @@ export default function ConversationPage() {
                 <strong>Phone:</strong> {p.phone}
               </div>
             )}
+            {data?.member_plan && (
+              <div>
+                <strong>Plan:</strong> {data.member_plan}
+              </div>
+            )}
             <div>
               <strong>Sentiment:</strong>{' '}
               {c.sentiment ? (

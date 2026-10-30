@@ -9,11 +9,13 @@ import {
   channelBindings,
   conversations,
   convTombstones,
+  memberships,
   messages,
   slackThreads,
   suggestions,
   usageEvents,
   users,
+  workspaces,
 } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { toAlert, toConversation, toMessage, toSuggestion } from '../lib/serializers.js';
@@ -348,7 +350,26 @@ export function conversationRoutes(db: Db) {
     ]);
 
     const msgs = msgRows.slice(0, PAGE).reverse();
+
+    // Verified Janis visitor? — the profile's external_id is their user id.
+    // Surface their best workspace plan so the operator sees paying vs free.
+    const visitorId = (row.conversation.userProfile as { external_id?: string } | null)
+      ?.external_id;
+    let memberPlan: string | undefined;
+    if (visitorId) {
+      const RANK: Record<string, number> = { free: 0, starter: 1, pro: 2, scale: 3, internal: 4 };
+      const plans = await db
+        .select({ plan: workspaces.plan })
+        .from(memberships)
+        .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
+        .where(eq(memberships.userId, visitorId));
+      memberPlan = plans
+        .map((p) => p.plan ?? 'free')
+        .sort((a, b) => (RANK[b] ?? 0) - (RANK[a] ?? 0))[0];
+    }
+
     return c.json({
+      member_plan: memberPlan,
       conversation: toConversation(
         row.conversation,
         convAlerts.filter((a) => a.status === 'open').length,
