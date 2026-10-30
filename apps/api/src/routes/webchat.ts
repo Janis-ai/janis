@@ -548,6 +548,7 @@ export function webchatRoutes(db: Db) {
       quick_replies: creds.quick_replies?.length ? creds.quick_replies : agentReplies,
       help_url: helpUrl,
       show_help_link: creds.show_help_link !== false,
+      show_help_suggestions: creds.show_help_suggestions !== false,
       help_suggestions: helpSuggestions.map((s) => ({
         title: s.title,
         url: `${helpBase}/${s.slug ?? s.id}`,

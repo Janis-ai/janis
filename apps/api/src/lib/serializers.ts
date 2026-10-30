@@ -221,6 +221,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     theme?: 'light' | 'dark' | 'auto';
     hide_powered_by?: boolean;
     show_help_link?: boolean;
+    show_help_suggestions?: boolean;
     dictation?: boolean;
     dictation_engine?: 'llm' | 'browser';
     identity_secret?: string;
@@ -318,6 +319,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
               theme: creds.theme,
               hide_powered_by: creds.hide_powered_by,
               show_help_link: creds.show_help_link,
+              show_help_suggestions: (creds as { show_help_suggestions?: boolean }).show_help_suggestions !== false,
               sms_footer: (creds as { sms_footer?: boolean }).sms_footer,
               dictation: creds.dictation === true,
               dictation_engine: creds.dictation_engine === 'browser' ? 'browser' : 'llm',

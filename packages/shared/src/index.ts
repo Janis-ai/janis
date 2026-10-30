@@ -703,6 +703,9 @@ export const Channel = z.object({
         hide_powered_by: z.boolean().optional(),
         // show the "Browse help articles" link — default on
         show_help_link: z.boolean().optional(),
+        // suggested-article cards under the greeting on an empty chat —
+        // default on, gated separately from the footer link
+        show_help_suggestions: z.boolean().optional(),
         sms_footer: z.boolean().optional(),
         // mic dictation in the widget — opt-in: transcription runs on
         // Janis's keys and is metered to the workspace

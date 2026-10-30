@@ -2406,7 +2406,7 @@
             }
             if (
               state.config &&
-              state.config.show_help_link !== false &&
+              state.config.show_help_suggestions !== false &&
               state.config.help_suggestions &&
               state.config.help_suggestions.length
             ) {

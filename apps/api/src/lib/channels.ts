@@ -63,6 +63,9 @@ export interface ChannelCredentials {
   // webchat: show the "Browse help articles" link — default on; an agent-level
   // config.help_url still overrides where it points
   show_help_link?: boolean;
+  // webchat: suggested-article cards under the greeting — default on; gated
+  // separately from the footer link so operators can keep one without the other
+  show_help_suggestions?: boolean;
   // 'Text us: {sms number}' footer line — default on, only renders
   // when the agent also has an SMS channel
   sms_footer?: boolean;

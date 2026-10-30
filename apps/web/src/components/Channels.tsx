@@ -919,6 +919,7 @@ function WebchatBranding({
     theme: b.theme ?? 'light',
     hide_powered_by: b.hide_powered_by === true,
     show_help_link: b.show_help_link !== false,
+    show_help_suggestions: (b as { show_help_suggestions?: boolean }).show_help_suggestions !== false,
     sms_footer: b.sms_footer === true,
     dictation: b.dictation === true,
     // absent on channels saved before the engine switch — 'llm' matches
@@ -1463,6 +1464,14 @@ function WebchatBranding({
               onChange={(v) => setF({ ...f, show_help_link: v })}
             />
             )}
+            {wcfg?.help_url && (
+            <BubSwitch
+              label="Suggested articles"
+              hint="tappable article cards under the greeting on an empty chat — deflection before the visitor types"
+              checked={f.show_help_suggestions}
+              onChange={(v) => setF({ ...f, show_help_suggestions: v })}
+            />
+            )}
             {wcfg?.sms_number && (
             <BubSwitch
               label="Show 'Text us' line"
@@ -1541,6 +1550,7 @@ function WebchatBranding({
               // post doesn't null the iframe's good bootstrap value at mount.
               ...(f.show_help_link ? (wcfg?.help_url ? { help_url: wcfg.help_url } : {}) : { help_url: null }),
               show_help_link: f.show_help_link,
+              show_help_suggestions: f.show_help_suggestions,
               sms_footer: f.sms_footer,
             }}
           />
