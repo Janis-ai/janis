@@ -35,14 +35,32 @@ The response `content.messages[*].text` is the agent's reply.
 
 ## Behavior
 
-- Each platform user gets a conversation in your shared inbox
-  (`chatfuel:<psid>` / `manychat:<subscriber_id>`) — the whole thread is
-  visible, searchable, and evaluable like any channel.
-- A teammate can take over from the inbox: while a human owns the
-  conversation the endpoint replies **empty** — the bot goes silent until
-  it's handed back.
+- Each platform user gets a conversation in your shared inbox — the whole
+  thread is visible, searchable, and evaluable like any channel.
+- Meta-family surfaces share the thread: if the Page is also subscribed to
+  Janis's Meta webhook, a message seen on both paths lands **once** in the
+  same conversation (messenger/instagram/chatfuel/manychat key on the same
+  PSID).
+- A teammate can take over from the inbox, or directly in Facebook Page
+  Inbox: while a human owns the conversation the endpoint replies
+  **empty** — the bot goes silent. Hand it back in the console (or wait
+  out the auto-resume window) and the agent answers again.
 - The ingest waits ~15s for the agent's answer; slower turns reply empty
   and the conversation still captures the inbound.
+
+## Optional: see every message (secondary receiver)
+
+The bot forwards only what its flow reaches. To capture *all* inbound Page
+messages — including ones the bot never forwards — subscribe the Page to
+Janis's Meta webhook as a **secondary receiver** (the bot stays primary):
+
+1. On the channel's page in the console, open **See every message**.
+2. Paste your Facebook Page ID and save.
+3. In your Meta app (developers.facebook.com → Messenger → Webhooks),
+   subscribe the Page with the webhook URL + verify token shown there.
+
+Inbound messages then join the same shared conversation — no duplicates —
+and a human replying in Page Inbox pauses the agent here too.
 
 ## Migrating from old Janis
 
