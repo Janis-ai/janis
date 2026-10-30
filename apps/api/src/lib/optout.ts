@@ -201,11 +201,19 @@ export async function smsConsentGate(
     .limit(1);
 
   // Pending = bound conversation holding a parked inbound awaiting YES.
+  // (drizzle select, not db.execute — postgres-js returns a RowList, not
+  // {rows}; PGlite's shape made .rows pass in tests.)
   const pending = bound
-    ? !!(await db.execute(
-        sql`select 1 from messages where conversation_id = ${bound.conversationId}
-            and payload->>'sms_pending' = 'true' limit 1`,
-      )).rows.length
+    ? !!(await db
+        .select({ one: sql`1` })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, bound.conversationId),
+            sql`${messages.payload}->>'sms_pending' = 'true'`,
+          ),
+        )
+        .limit(1)).length
     : false;
 
   // Consented, or a pre-gate texter (bound, never parked) — normal path.
@@ -249,10 +257,18 @@ export async function smsConsentGate(
   const convId = bound?.conversationId ?? (await seedSmsThread(db, channel, from, profile)).convId;
   // MessageSid dedup — a retried webhook must not double-park the text.
   const dupe = messageSid
-    ? (await db.execute(
-        sql`select 1 from messages where conversation_id = ${convId}
-            and payload->>'mid' = ${messageSid} limit 1`,
-      )).rows.length
+    ? (
+        await db
+          .select({ one: sql`1` })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, convId),
+              sql`${messages.payload}->>'mid' = ${messageSid}`,
+            ),
+          )
+          .limit(1)
+      ).length
     : 0;
   if (!dupe) {
     await recordSmsInbound(db, convId, text || '(attachment)', {
