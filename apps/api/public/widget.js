@@ -766,12 +766,14 @@
   // once it's ended. The server archives on end (CSAT prompt follows), and
   // /new re-points this visitor's binding at a fresh empty conversation.
   function syncMenu() {
-    // The rendered note is the ground truth for "this chat is over" — the
-    // poll can report 'new' (binding gone, identity lapsed) while the note
-    // is still up, and the visitor needs the way out either way.
+    // "Start a new chat" is always available — ending is a consequence,
+    // not a prerequisite (Intercom's model). "End chat" only exists while
+    // something is actually live: a fresh or already-ended thread has
+    // nothing to end. The rendered note counts as ended even when the
+    // poll says 'new' (binding gone, identity lapsed).
     var ended = state.convState === 'archived' || !!msgs.querySelector('.janis-ended');
-    menuEnd.style.display = ended ? 'none' : 'block';
-    menuNew.style.display = ended ? 'block' : 'none';
+    menuEnd.style.display = !ended && state.convState !== 'new' ? 'block' : 'none';
+    menuNew.style.display = 'block';
   }
   function markEnded() {
     syncMenu();
@@ -811,6 +813,12 @@
   };
   menuNew.onclick = function () {
     menu.classList.remove('open');
+    // A live thread's rendered transcript is replaced by the fresh one —
+    // confirm before it disappears from view (the old chat stays in the
+    // team's inbox; the visitor just can't scroll back to it).
+    var ended = state.convState === 'archived' || !!msgs.querySelector('.janis-ended');
+    if (!ended && msgs.querySelector('.janis-msg') &&
+      !window.confirm('Start a new chat? Your current conversation will be closed.')) return;
     fetch(API + '/chat/' + TOKEN + '/new', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

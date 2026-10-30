@@ -441,6 +441,31 @@ async function findConversation(db: Db, channel: ChannelRow, visitorId: string) 
   return undefined;
 }
 
+/** Visitor-initiated close — /end and /new (which archives the live thread
+ *  before forking). A 'resolve' event can't archive a human-owned thread —
+ *  the operator owns the agent-side close — but the customer ending their
+ *  own chat still wins, so 'human' finishes the same transition an operator
+ *  archive runs (CSAT, hooks, Meta thread release, alert sweep). */
+async function endConversation(
+  db: Db,
+  agent: typeof agents.$inferSelect,
+  conv: typeof conversations.$inferSelect,
+  reason: string,
+): Promise<void> {
+  await processEvents(db, agent, [
+    { type: 'resolve', conversation_id: conv.externalId, reason },
+  ]);
+  if (conv.state !== 'human') return;
+  const [after] = await db
+    .update(conversations)
+    .set({ state: 'archived', archivedAt: new Date() })
+    .where(eq(conversations.id, conv.id))
+    .returning();
+  if (after) {
+    await applyConvEffects(db, agent.workspaceId, conv, after, { state: 'archived' }, null);
+  }
+}
+
 export function webchatRoutes(db: Db) {
   const app = new Hono();
 
@@ -1190,34 +1215,15 @@ export function webchatRoutes(db: Db) {
       if (conv.state === 'archived') return c.json({ ok: true, state: 'archived' });
       const [agent] = await db.select().from(agents).where(eq(agents.id, channel.agentId)).limit(1);
       if (!agent) return c.json({ error: 'not found' }, 404);
-      await processEvents(db, agent, [
-        {
-          type: 'resolve',
-          conversation_id: conv.externalId,
-          reason: 'customer ended the chat',
-        },
-      ]);
-      if (conv.state === 'human') {
-        // A 'resolve' event can't archive a human-owned thread — the operator
-        // owns the agent-side close. The customer ending their own chat still
-        // wins, so finish the same transition an operator archive runs (CSAT,
-        // hooks, Meta thread release, alert sweep).
-        const [after] = await db
-          .update(conversations)
-          .set({ state: 'archived', archivedAt: new Date() })
-          .where(eq(conversations.id, conv.id))
-          .returning();
-        if (after) {
-          await applyConvEffects(db, agent.workspaceId, conv, after, { state: 'archived' }, null);
-        }
-      }
+      await endConversation(db, agent, conv, 'customer ended the chat');
       return c.json({ ok: true, state: 'archived' });
     },
   );
 
-  // "Start a new chat" — after a chat has ended, the visitor's binding moves
-  // to a fresh conversation so the next thread starts empty (the archived
-  // one keeps its transcript). No-op while a chat is still open.
+  // "Start a new chat" — Intercom's model, not Zendesk's: always available.
+  // A live chat is archived first (ending is a consequence of starting
+  // fresh, not a separate gesture the visitor has to know to make), then
+  // the visitor's binding moves to a fresh empty conversation.
   app.post(
     '/:token/new',
     rateLimit({ scope: 'chat-new', windowMs: 60_000, max: 5 }),
@@ -1232,7 +1238,15 @@ export function webchatRoutes(db: Db) {
       const participant = participantFor(resolved, visitor_id, threadFor(thread));
       const conv = await findConversation(db, channel, participant);
       if (!conv) return c.json({ ok: true, state: 'new' });
-      if (conv.state !== 'archived') return c.json({ ok: true, state: conv.state });
+      const [agent] = await db
+        .select()
+        .from(agents)
+        .where(eq(agents.id, channel.agentId))
+        .limit(1);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      if (conv.state !== 'archived') {
+        await endConversation(db, agent, conv, 'customer started a new chat');
+      }
       const [created] = await db
         .insert(conversations)
         .values({
@@ -1265,12 +1279,7 @@ export function webchatRoutes(db: Db) {
           target: [channelBindings.channelId, channelBindings.platformUserId],
           set: { conversationId: created.id },
         });
-      const [agent] = await db
-        .select()
-        .from(agents)
-        .where(eq(agents.id, created.agentId))
-        .limit(1);
-      if (agent) {
+      {
         // A "new chat" conv used to sit at 0 messages until the visitor
         // typed — blank rows in the inbox. Store the greeting the client
         // is about to render as the first out message so the transcript is

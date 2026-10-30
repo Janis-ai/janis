@@ -251,9 +251,9 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
   });
   const url = data?.urls[ch.kind as 'chatfuel' | 'manychat'];
-  // Bot-platform setup is gated on the Meta link: the Page webhook is what
+  // Bot-platform setup is gated on the Meta link: the Meta webhook is what
   // gives the agent the whole thread, not just card-forwarded turns.
-  const metaConnected = Boolean(ch.meta.page_id || ch.meta.ig_page_id);
+  const metaConnected = Boolean(ch.meta.page_id || ch.meta.ig_page_id || ch.meta.phone_number_id);
   const { data: me } = useMe();
   // A surface bound to a sibling channel in THIS workspace — takeover info
   // for the caption under Take over (bound rows carry it from the API).
@@ -405,11 +405,11 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
     <>
       {!metaConnected && (
         <div className="muted" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6 }}>
-          <strong style={{ fontSize: 14 }}>Connect your Page first</strong>
+          <strong style={{ fontSize: 14 }}>Connect Meta first</strong>
           <div style={{ marginTop: 2 }}>
-            Link the Facebook Page or Instagram your{' '}
-            {ch.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} bot runs on. Janis needs the
-            Page's webhook to see the whole conversation — not just the messages the bot
+            Link the Meta surface (Facebook Page, Instagram, or WhatsApp) your{' '}
+            {ch.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} bot runs on. Janis needs
+            Meta's webhook to see the whole conversation — not just the messages the bot
             forwards — so the agent answers with full context and handovers between the bot
             and your team work both ways. The{' '}
             {ch.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} setup steps appear once it's
@@ -515,9 +515,35 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
         <strong style={{ fontSize: 15 }}>Connect to Meta</strong>
         <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
           {metaConnected
-            ? 'Linked — Janis sees every message on this Page, even ones your bot never forwards.'
-            : 'Pick the Page or Instagram your bot runs on — the setup steps unlock once it\u2019s linked.'}
+            ? 'Linked — Janis sees every message on this Meta surface, even ones your bot never forwards.'
+            : 'Pick the Meta surface your bot runs on — the setup steps unlock once it\u2019s linked.'}
         </div>
+        {metaConnected && (
+          <div style={{ marginTop: 8, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {(
+              [
+                ['Facebook Page', ch.meta.page_id, 'page_id'],
+                ['Instagram', ch.meta.ig_page_id, 'ig_page_id'],
+                ['WhatsApp', ch.meta.phone_number_id, 'phone_number_id'],
+              ] as const
+            )
+              .filter(([, v]) => Boolean(v))
+              .map(([label, id, key]) => (
+                <div key={key} className="row" style={{ gap: 8, alignItems: 'center' }}>
+                  <span className="muted">{label}</span>
+                  <span className="mono" style={{ fontSize: 12 }}>{id}</span>
+                  <button
+                    className="btn"
+                    style={{ padding: '2px 10px', fontSize: 12 }}
+                    disabled={savePage.isPending}
+                    onClick={() => savePage.mutate({ [key]: '' })}
+                  >
+                    Unlink
+                  </button>
+                </div>
+              ))}
+          </div>
+        )}
         {pending.isError ? (
           <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
             Couldn't load your Pages — try again later.
@@ -532,7 +558,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
             <a className="btn" href={`/api/meta/connect?agent=${ch.agent_id}`}>
               Connect Meta
             </a>{' '}
-            to pick your Page — or paste its ID manually:
+            to pick your Meta surface — or paste its ID manually:
             <div className="row" style={{ marginTop: 8, gap: 8 }}>
               <input
                 placeholder="Facebook Page ID"
@@ -1601,6 +1627,7 @@ function WebchatBranding({
             theme: f.theme,
             hide_powered_by: f.hide_powered_by,
             show_help_link: f.show_help_link,
+            show_help_suggestions: f.show_help_suggestions,
             sms_footer: f.sms_footer,
             dictation: f.dictation,
             dictation_engine: f.dictation_advanced ? 'llm' : 'browser',

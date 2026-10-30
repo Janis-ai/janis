@@ -432,14 +432,23 @@ describe('webchat widget endpoints', () => {
       .where(eq(messages.conversationId, conv.id));
     expect(stillThere.length).toBeGreaterThanOrEqual(3);
 
-    // /new is a no-op while a chat is open — no thread-splitting by accident
+    // /new while a chat is open archives it and binds a fresh thread —
+    // ending is a consequence of starting fresh, not a prerequisite
     await post('actually one more thing', VISITOR);
     const again = await app.request(`/chat/${channelId}/new`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ visitor_id: VISITOR }),
     });
-    expect((await again.json()).state).toBe('active');
+    expect((await again.json()).state).toBe('new');
+    const poll3 = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR}`);
+    const body3 = await poll3.json();
+    expect(body3.state).not.toBe('archived');
+    expect(
+      body3.messages.every(
+        (m: { text: string }) => m.text !== 'actually one more thing',
+      ),
+    ).toBe(true);
   });
 
   it('end reports the truth when there is no conversation to end', async () => {
