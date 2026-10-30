@@ -17,7 +17,7 @@
     "test:ui": "node scripts/ui/smoke.mjs",
     "db:generate": "npm run db:generate -w apps/api",
     "demo-agent": "npm run demo-agent -w apps/api",
-    "prepare": "git config core.hooksPath .githooks",
+    "prepare": "git config core.hooksPath .githooks || true",
     "preflight": "./scripts/preflight.sh"
   },
   "devDependencies": {
