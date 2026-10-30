@@ -4378,7 +4378,36 @@ interface EvalBatch {
   passed: number;
   failed: number;
   unrunnable: number;
-  results: { test_id: string; name: string; passed: boolean | null; reason: string; model: string | null }[];
+  results: { test_id: string; name: string; passed: boolean | null; reason: string; model: string | null; reply: string | null }[];
+}
+
+/** Per-test changes between a batch and the previous (older) run — the
+ *  diff surface that serves both regression hunting and A/B model
+ *  comparison. */
+interface BatchDiff {
+  flippedFail: { name: string; reason: string; before: string | null; after: string | null }[];
+  flippedPass: { name: string }[];
+  added: { name: string }[];
+  dropped: { name: string }[];
+}
+function diffBatches(cur: EvalBatch, prev: EvalBatch): BatchDiff {
+  const prevById = new Map(prev.results.map((r) => [r.test_id, r]));
+  const curById = new Map(cur.results.map((r) => [r.test_id, r]));
+  const d: BatchDiff = { flippedFail: [], flippedPass: [], added: [], dropped: [] };
+  for (const r of cur.results) {
+    const p = prevById.get(r.test_id);
+    if (!p) {
+      d.added.push({ name: r.name });
+      continue;
+    }
+    if (p.passed !== r.passed) {
+      if (r.passed === false)
+        d.flippedFail.push({ name: r.name, reason: r.reason, before: p.reply, after: r.reply });
+      else if (r.passed === true) d.flippedPass.push({ name: r.name });
+    }
+  }
+  for (const p of prev.results) if (!curById.has(p.test_id)) d.dropped.push({ name: p.name });
+  return d;
 }
 
 function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; isAdmin: boolean }) {
@@ -5408,7 +5437,11 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             Run history — {batches.length} suite{batches.length === 1 ? '' : 's'}
           </summary>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
-            {batches.map((b) => (
+            {batches.map((b, i) => {
+              const prev = batches[i + 1];
+              const diff = prev ? diffBatches(b, prev) : null;
+              const changed = diff ? diff.flippedFail.length + diff.flippedPass.length + diff.added.length + diff.dropped.length : 0;
+              return (
               <details key={b.batch_id} style={{ fontSize: 12 }}>
                 <summary style={{ cursor: 'pointer' }}>
                   <span className="muted">{timeAgo(b.at)} ago</span>
@@ -5425,7 +5458,54 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                     {b.kind === 'scheduled' ? 'scheduled' : b.kind === 'ab' ? 'A/B' : 'manual'}
                     {b.unrunnable > 0 && ` · ${b.unrunnable} unrunnable`}
                   </span>
+                  {diff && changed > 0 && (
+                    <span className="muted" style={{ marginLeft: 6 }}>
+                      {diff.flippedFail.length > 0 && <span className="badge warn" style={{ marginRight: 3 }}>▼ {diff.flippedFail.length} regressed</span>}
+                      {diff.flippedPass.length > 0 && <span className="badge active" style={{ marginRight: 3 }}>▲ {diff.flippedPass.length} fixed</span>}
+                      {diff.added.length > 0 && `+${diff.added.length} new `}
+                      {diff.dropped.length > 0 && `−${diff.dropped.length} gone`}
+                    </span>
+                  )}
+                  {diff && changed === 0 && <span className="muted" style={{ marginLeft: 6 }}>· no changes vs previous</span>}
                 </summary>
+                {diff && changed > 0 && (
+                  <div style={{ margin: '6px 0 6px 16px', padding: '6px 8px', background: 'var(--panel-2)', borderRadius: 6 }}>
+                    <strong className="muted">Changes vs previous run</strong>
+                    {diff.flippedFail.map((f) => (
+                      <details key={f.name} style={{ marginTop: 4 }}>
+                        <summary style={{ cursor: 'pointer' }}>
+                          <span className="badge warn">✓→✗</span> {f.name}
+                          {f.reason && <span className="muted"> — {f.reason}</span>}
+                        </summary>
+                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 4, marginLeft: 16 }}>
+                          <div>
+                            <div className="muted" style={{ fontSize: 11 }}>Before (passed)</div>
+                            <div style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{f.before?.slice(0, 1500) || '(empty reply)'}</div>
+                          </div>
+                          <div>
+                            <div className="muted" style={{ fontSize: 11 }}>Now (failed)</div>
+                            <div style={{ whiteSpace: 'pre-wrap', fontSize: 11 }}>{f.after?.slice(0, 1500) || '(empty reply)'}</div>
+                          </div>
+                        </div>
+                      </details>
+                    ))}
+                    {diff.flippedPass.map((f) => (
+                      <div key={f.name} style={{ marginTop: 4 }}>
+                        <span className="badge active">✗→✓</span> {f.name}
+                      </div>
+                    ))}
+                    {diff.added.map((f) => (
+                      <div key={f.name} style={{ marginTop: 4 }}>
+                        <span className="badge">+</span> {f.name} <span className="muted">(new test)</span>
+                      </div>
+                    ))}
+                    {diff.dropped.map((f) => (
+                      <div key={f.name} style={{ marginTop: 4 }}>
+                        <span className="badge">−</span> {f.name} <span className="muted">(removed)</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div style={{ margin: '6px 0 6px 16px', display: 'flex', flexDirection: 'column', gap: 3 }}>
                   {b.results.map((r) => (
                     <div key={r.test_id}>
@@ -5441,7 +5521,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
                   ))}
                 </div>
               </details>
-            ))}
+              );
+            })}
           </div>
         </details>
       )}

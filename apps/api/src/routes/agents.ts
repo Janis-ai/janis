@@ -3534,7 +3534,7 @@ export function agentRoutes(db: Db) {
         passed: number;
         failed: number;
         unrunnable: number;
-        results: { test_id: string; name: string; passed: boolean | null; reason: string; model: string | null }[];
+        results: { test_id: string; name: string; passed: boolean | null; reason: string; model: string | null; reply: string | null }[];
       }
     >();
     for (const r of rows) {
@@ -3560,6 +3560,7 @@ export function agentRoutes(db: Db) {
         passed: r.passed,
         reason: r.reason,
         model: r.model,
+        reply: r.reply?.slice(0, 4000) ?? null,
       });
     }
     return c.json({ batches: [...batches.values()].slice(0, 30) });
