@@ -13,6 +13,8 @@ export interface BoundAsset {
   workspace_name: string;
   agent_name: string;
   owner_email?: string | null;
+  /** Bound workspace is one of the user's — takeover is allowed. */
+  mine?: boolean;
 }
 
 export interface PendingAssets {
@@ -100,17 +102,19 @@ export function MetaAssetList({ rows }: { rows: AssetRow[] }) {
               >
                 {s.disconnectLabel}
               </button>
-            ) : s.state === 'own' ? (
-              <span className="muted">{s.ownLabel}</span>
-            ) : s.state === 'bound' && s.bound ? (
+            ) : s.state === 'own' || (s.state === 'bound' && s.bound?.mine) ? (
               <div className="asset-bound">
                 <button
                   className="btn danger"
                   disabled={s.busy}
                   onClick={async () => {
+                    const from =
+                      s.state === 'own'
+                        ? s.ownLabel ?? 'its current channel'
+                        : `${s.bound!.workspace_name}/${s.bound!.agent_name}${s.bound!.owner_email ? ` (${s.bound!.owner_email})` : ''}`;
                     if (
                       (await confirm(
-                        `Take ${s.label} over from ${s.bound!.workspace_name}${s.bound!.owner_email ? ` (${s.bound!.owner_email})` : ''}? ${s.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
+                        `Take ${s.label} over from ${from}? Its current channel loses it — conversation history stays, but inbound messages come here instead.`,
                         [
                           { key: 'ok', label: 'Take over', danger: true },
                         ],
@@ -121,14 +125,20 @@ export function MetaAssetList({ rows }: { rows: AssetRow[] }) {
                 >
                   Take over
                 </button>
-                <span
-                  className="muted asset-bound-note"
-                  title={`bound to ${s.bound.agent_name} on ${s.bound.workspace_name}`}
-                >
-                  on {s.bound.workspace_name} · {s.bound.agent_name}
-                  {s.bound.owner_email ? ` (${s.bound.owner_email})` : ''}
+                <span className="muted asset-bound-note">
+                  {s.state === 'own'
+                    ? s.ownLabel
+                    : `from ${s.bound!.workspace_name}/${s.bound!.agent_name}${s.bound!.owner_email ? ` (${s.bound!.owner_email})` : ''}`}
                 </span>
               </div>
+            ) : s.state === 'bound' && s.bound ? (
+              <span
+                className="muted"
+                title={`bound to ${s.bound.agent_name} on ${s.bound.workspace_name}`}
+              >
+                from {s.bound.workspace_name}/{s.bound.agent_name}
+                {s.bound.owner_email ? ` (${s.bound.owner_email})` : ''}
+              </span>
             ) : (
               <button className="btn" disabled={s.busy} onClick={() => s.onConnect(false)}>
                 {s.connectLabel}
