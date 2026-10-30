@@ -39,11 +39,57 @@ export const KIND_LABEL: Record<string, string> = {
   gmail: 'Gmail',
   voice: 'Voice',
   sms: 'SMS',
+  chatfuel: 'Chatfuel',
+  manychat: 'ManyChat',
 };
 
 /** Comma- or newline-separated text → trimmed array of quick-reply labels. */
 export function parseReplies(text: string): string[] {
   return text.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+}
+
+/** Chatfuel/ManyChat ingest — the platform's HTTP step posts the user's
+ *  message here and the agent's reply goes back in the response. The key
+ *  mints lazily on first view of this card. */
+function BotIngestDetails({ ch }: { ch: Channel }) {
+  const { data } = useQuery({
+    queryKey: ['agent-bot-key', ch.agent_id],
+    queryFn: () =>
+      api<{ bot_key: string; urls: { chatfuel: string; manychat: string } }>(
+        `/api/agents/${ch.agent_id}/bot`,
+      ),
+  });
+  const url = data?.urls[ch.kind as 'chatfuel' | 'manychat'];
+  return (
+    <details className="webhook-details" open style={{ marginTop: 8 }}>
+      <summary>
+        <span className="details-title">Ingest URL</span>
+        <span className="details-sub">paste this into your bot's HTTP step</span>
+      </summary>
+      <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
+        {url ?? '…'}
+      </div>
+      <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
+        {ch.kind === 'chatfuel' ? (
+          <>
+            In Chatfuel: add a <strong>JSON API</strong> card where you want the agent to answer —
+            type POST, this URL, and send <span className="mono">messenger user id</span> and{' '}
+            <span className="mono">user input</span>. The response's messages display as the bot's
+            reply.
+          </>
+        ) : (
+          <>
+            In ManyChat: add an <strong>External Request</strong> action where you want the agent
+            to answer — POST to this URL with the subscriber's <span className="mono">id</span> and{' '}
+            <span className="mono">custom_fields.user input</span>. The response's
+            content.messages display as the bot's reply.
+          </>
+        )}{' '}
+        While a teammate owns the conversation the endpoint answers empty — the bot goes silent
+        until it's handed back.
+      </div>
+    </details>
+  );
 }
 
 /** A single connected channel — the full editor (branding, embed, credentials,
@@ -367,6 +413,7 @@ export function ChannelCard({
           </div>
         </details>
       )}
+      {(ch.kind === 'chatfuel' || ch.kind === 'manychat') && <BotIngestDetails ch={ch} />}
       {ch.meta.via !== 'oauth' && ['messenger', 'instagram', 'whatsapp'].includes(ch.kind) && (
       <details className="webhook-details">
         <summary>

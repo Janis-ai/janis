@@ -91,8 +91,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       localStorage.setItem(`janis.launch-ack.${agentId}`, '1');
     } catch {}
   };
-  type ChKey = 'bubble' | 'meta' | 'gmail' | 'outlook' | 'email' | 'voice' | 'sms';
-  const ALL_CH: ChKey[] = ['bubble', 'meta', 'gmail', 'outlook', 'email', 'voice', 'sms'];
+  type ChKey = 'bubble' | 'meta' | 'gmail' | 'outlook' | 'email' | 'voice' | 'sms' | 'bots';
+  const ALL_CH: ChKey[] = ['bubble', 'meta', 'gmail', 'outlook', 'email', 'voice', 'sms', 'bots'];
   // While Gmail connect is gated, the "Email" sorter pick lands on the
   // forwarding channel — the always-available mailbox path.
   const NEED_TARGETS: Record<string, string> = {
@@ -363,6 +363,26 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     onError: (e) => setError(e.message),
   });
 
+  // Chatfuel/ManyChat — the platform's HTTP step calls Janis; the channel
+  // exists so the ingest URL + status have a home in the console.
+  const createBot = useMutation({
+    mutationFn: (kind: 'chatfuel' | 'manychat') =>
+      api<{ channel: Channel }>('/api/channels', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind,
+          name: `${agent.name} ${kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'}`,
+          agent_id: agentId,
+        }),
+      }),
+    onSuccess: (r) => {
+      setError('');
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      goToChannel(r.channel.id);
+    },
+    onError: (e) => setError(e.message),
+  });
+
   const removeChannel = useMutation({
     mutationFn: (channelId: string) => api(`/api/channels/${channelId}`, { method: 'DELETE' }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
@@ -452,6 +472,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     email: 'any mailbox via forwarding',
     voice: 'voice calls',
     sms: 'SMS texting',
+    bots: 'Chatfuel or ManyChat bot',
   };
   const firstCh = [...channels].sort((a, b) =>
     a.created_at.localeCompare(b.created_at),
@@ -1005,6 +1026,48 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             </details>
           </div>
         );
+      case 'bots':
+        return (
+          <div className="card">
+            <details className="appearance-details">
+              <summary>
+                <span className="details-title">Chatfuel / ManyChat{sTag && <> — {sTag}</>}</span>
+                <span className="details-sub">
+                  needs: an existing bot — its HTTP step calls Janis and the agent's reply goes back
+                </span>
+              </summary>
+              <div style={{ display: 'flex', gap: 12, marginTop: 12, flexWrap: 'wrap' }}>
+                {(['chatfuel', 'manychat'] as const).map((kind) => {
+                  const existing = channels.find((v) => v.kind === kind);
+                  return (
+                    <div key={kind} className="card" style={{ flex: '1 1 240px', marginTop: 0 }}>
+                      <strong>{kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'}</strong>
+                      <div className="muted" style={{ marginTop: 6, fontSize: 13 }}>
+                        {kind === 'chatfuel'
+                          ? 'A JSON API card in your bot calls Janis — the agent replies inline.'
+                          : 'An External Request action in your flow calls Janis — the agent replies inline.'}
+                      </div>
+                      {existing ? (
+                        <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
+                          Connected — open its channel page for the URL to paste.
+                        </div>
+                      ) : (
+                        <button
+                          className="btn"
+                          style={{ marginTop: 8 }}
+                          disabled={createBot.isPending}
+                          onClick={() => createBot.mutate(kind)}
+                        >
+                          Connect
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </details>
+          </div>
+        );
     }
   };
 
@@ -1065,6 +1128,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       </div>
     </>
   );
+
 
   return (
     <>
