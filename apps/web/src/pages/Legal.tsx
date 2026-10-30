@@ -7,7 +7,8 @@ Janis ("we", "us") provides tools that let businesses monitor AI agents and hand
 
 What we collect
 - Account information: name, email address, and sign-in identifiers (Google, Slack, or email/password).
-- Conversation data: messages sent to and from connected channels (Facebook Messenger, Instagram, WhatsApp, Slack, email) and any agent replies, stored so operators can view and respond to them.
+- Conversation data: messages sent to and from connected channels (Facebook Messenger, Instagram, WhatsApp, SMS/text messages, Slack, email) and any agent replies, stored so operators can view and respond to them. For SMS, this includes the phone number that texted us and the message content, used solely to operate that conversation.
+- Text messaging originator opt-in data and consent: when you opt in to SMS from a Janis-powered assistant, your opt-in data and consent records are stored to demonstrate consent. No mobile information will be shared with third parties or affiliates for marketing or promotional purposes. All the categories above exclude text messaging originator opt-in data and consent; this information will not be shared with any third parties.
 - Integration credentials: access tokens for channels you connect, used solely to send and receive messages on your behalf.
 - Google user data: if you connect a Gmail or Google Workspace mailbox, we access that mailbox's inbound mail (gmail.readonly) solely to route customer email into your Janis inbox, and send replies (gmail.send) on your behalf in the same thread. Google data is never used for advertising, sold, shared with third parties beyond operating the service, or used to train AI models. Janis's use of information received from Google APIs adheres to the Google API Services User Data Policy (https://developers.google.com/terms/api-services-user-data-policy), including the Limited Use requirements.
 - Usage data: message counts and AI token consumption, used for billing.
@@ -64,16 +65,31 @@ Contact
 Questions: support@janis.ai
 
 
-SMS messaging
--------------
+SMS messaging terms
+-------------------
 
-When you opt in to text messages from a Janis-powered assistant, we use your
-phone number and message content only to operate that conversation. Mobile
-information is not shared with third parties or affiliates for marketing or
-promotional purposes. All categories exclude text messaging originator
-opt-in data and consent; this information will not be shared with any third
-parties. You can reply STOP at any time to end messages, or HELP for help.
-Msg & data rates may apply; message frequency varies by conversation.
+The Janis SMS program sends customer-support replies and conversation
+updates from our AI assistant to users who text our published support
+number. Participation requires opt-in: end users initiate contact by
+texting the number, and we ask for explicit confirmation before replying
+further. Conversations are inbound-initiated; we do not send outbound SMS
+before the user's first message.
+
+- You can cancel the SMS service at any time. Just text STOP to the
+  support number. After you send STOP, we will send a confirmation
+  message and you will no longer receive messages from us. To rejoin,
+  text START or sign up again.
+- If you need assistance, text HELP to the support number, or email
+  support@janis.ai.
+- Message frequency varies by conversation (typically a few messages per
+  exchange). Msg & data rates may apply for messages sent to you from us
+  and to us from you.
+- Carriers are not liable for delayed or undelivered messages.
+- No mobile information will be shared with third parties or affiliates
+  for marketing or promotional purposes. All the above categories exclude
+  text messaging originator opt-in data and consent; this information
+  will not be shared with any third parties.
+- See our Privacy Policy for how we handle your data.
 `;
 
 function Doc({ title, body }: { title: string; body: string }) {
