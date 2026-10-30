@@ -263,7 +263,7 @@ async function mirrorToLegacy(c: Context): Promise<Response | null> {
 // Normalizers — one per caller flavor, all produce the same shape
 // ---------------------------------------------------------------------------
 
-interface Normalized {
+export interface Normalized {
   userId?: string;
   text?: string;
   event?: { name: string; data?: Record<string, unknown> };
@@ -306,7 +306,7 @@ function chatfuelAttrs(raw: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-async function normalizeChatfuel(c: Context): Promise<Normalized> {
+export async function normalizeChatfuel(c: Context): Promise<Normalized> {
   const raw = await rawParams(c);
   const userId = str(raw['messenger user id'] ?? raw['chatfuel user id']);
   const text = USER_INPUT_KEYS.map((k) => raw[k]).find((v) => v != null && v !== '');
@@ -338,7 +338,7 @@ async function normalizeChatfuel(c: Context): Promise<Normalized> {
   };
 }
 
-async function normalizeManychat(c: Context): Promise<{ norm: Normalized; subscriberId?: string }> {
+export async function normalizeManychat(c: Context): Promise<{ norm: Normalized; subscriberId?: string }> {
   const b = await rawParams(c);
   const subscriberId = b.id != null ? String(b.id) : undefined;
   const custom = (b.custom_fields ?? {}) as Record<string, unknown>;

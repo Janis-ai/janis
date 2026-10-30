@@ -60,7 +60,7 @@ import { toChannel } from '../lib/serializers.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 
 const createChannel = z.object({
-  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'voice', 'sms']),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'voice', 'sms', 'chatfuel', 'manychat']),
   name: z.string().min(1).max(120),
   agent_id: z.string().uuid(),
   page_id: z.string().optional(), // messenger / instagram

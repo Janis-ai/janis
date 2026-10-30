@@ -55,7 +55,7 @@ import { agentNameTaken, groupNameTaken } from '../lib/names.js';
 import { recordLlmUsage } from '../lib/usage.js';
 import { enqueueJob, runJobs } from '../lib/jobs.js';
 import { applySuggestion, type SuggestionPatch } from '../lib/evalTriage.js';
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { effectiveMeteredModel } from '../lib/llm.js';
 import { llmModelsResult } from '../lib/llmModels.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
@@ -864,6 +864,34 @@ export function agentRoutes(db: Db) {
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
     return c.json({ webhook_secret: row.webhookSecret });
+  });
+
+  // Bot-platform ingest key — mints lazily; the card on the Channels page
+  // shows the Chatfuel/ManyChat URLs built from it. Reusing a legacy
+  // client_key needs no minting — the ingest matches either field.
+  app.get('/:id/bot', agentMember, async (c) => {
+    const [row] = await db
+      .select({ metadata: agents.metadata })
+      .from(agents)
+      .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    const meta = (row.metadata ?? {}) as Record<string, unknown>;
+    let key = (meta.bot_key ?? meta.legacy_client_key) as string | undefined;
+    if (!key) {
+      key = `bk_${randomBytes(16).toString('hex')}`;
+      await db
+        .update(agents)
+        .set({ metadata: { ...meta, bot_key: key } })
+        .where(eq(agents.id, c.req.param('id')));
+    }
+    return c.json({
+      bot_key: key,
+      urls: {
+        chatfuel: `${env.apiOrigin}/bot/${key}/chatfuel`,
+        manychat: `${env.apiOrigin}/bot/${key}/manychat`,
+      },
+    });
   });
 
   // Recent outbound webhook deliveries — for debugging agent wiring

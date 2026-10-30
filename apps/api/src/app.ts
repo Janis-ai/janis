@@ -60,6 +60,7 @@ import { viewRoutes } from './routes/views.js';
 import { trackRoutes } from './routes/track.js';
 import { webchatRoutes } from './routes/webchat.js';
 import { legacyWebhookRoutes } from './routes/legacy.js';
+import { botIngestRoutes } from './routes/botIngest.js';
 import { legacyApiRoutes } from './routes/legacyApi.js';
 import { LEGACY_PASSTHROUGH_PREFIXES, legacyPassthrough } from './routes/legacyPassthrough.js';
 
@@ -196,6 +197,7 @@ export function createApp(db: Db) {
   app.route('/billing/stripe-webhook', stripeWebhookRoutes(db)); // Stripe-signed
   app.route('/chat', webchatRoutes(db)); // embeddable web-chat widget
   app.route('/messenger', legacyWebhookRoutes(db)); // legacy Meta app path (webhook.janis.ai)
+  app.route('/bot', botIngestRoutes(db)); // Chatfuel/ManyChat external-request ingest — hosted pipeline
   app.route('/meta', metaPublicRoutes(db)); // Meta-signed: data-deletion + deauthorize callbacks
   app.route('/gmail', gmailPublicRoutes(db));
   app.route('/calendly', calendlyPublicRoutes(db)); // Calendly OAuth callback
