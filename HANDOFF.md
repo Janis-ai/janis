@@ -164,8 +164,10 @@ so outside the sidebar they had no height/background and rendered as
 invisible empty inline elements. Both asset loaders (agent picker +
 Chatfuel/ManyChat card) now use `.spin`. Surface labels self-link:
 Messenger→m.me/<page>, Instagram→instagram.com/<user>, WhatsApp→
-wa.me/<num> (Launch-chat row removed as redundant). Take over now
-stacks Agent/Workspace/Owner beneath the button — `AssetSurface.owner`
+wa.me/<num> (Launch-chat row removed as redundant). Rows top-align
+(.asset-row was center-aligned — tall Take-over cells pushed the title
+off-axis). Take over AND inert foreign binds both stack
+Agent/Workspace/Owner (mailto on the email) — `AssetSurface.owner`
 carries same-workspace sibling binds (bound rows already had it from
 the API). Bot-ingest card also wrapped MetaAssetList in muted 12px
 copy — unwrapped so both call sites render it identically, and
