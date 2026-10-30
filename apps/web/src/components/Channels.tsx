@@ -444,8 +444,8 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
             code={url ?? '…'}
           />
         </div>
-        {ch.kind === 'chatfuel' ? <ChatfuelGuide /> : <ManyChatGuide />}
         {ch.kind === 'manychat' && <ManyChatTokenField channel={ch} />}
+        {ch.kind === 'chatfuel' ? <ChatfuelGuide /> : <ManyChatGuide />}
       </div>
       )}
       <div style={{ marginTop: 20, paddingTop: 8, order: 1 }}>
