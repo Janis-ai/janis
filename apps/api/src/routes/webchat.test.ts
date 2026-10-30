@@ -412,7 +412,11 @@ describe('webchat widget endpoints', () => {
     expect((await fresh.json()).state).toBe('new');
     const poll2 = await app.request(`/chat/${channelId}/messages?visitor_id=${VISITOR}`);
     const body2 = await poll2.json();
-    expect(body2.messages).toEqual([]);
+    // the fresh thread's only message is the stored bootstrap greeting —
+    // everything else stayed on the archived conv
+    expect(
+      body2.messages.filter((m: { greeting?: boolean }) => m.greeting !== true),
+    ).toEqual([]);
     // a new chat is a fresh context — saved profile facts (name, email,
     // traits) stay on the archived thread instead of following the visitor
     const [newConv] = await db

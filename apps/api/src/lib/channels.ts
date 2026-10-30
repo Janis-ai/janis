@@ -15,6 +15,7 @@ import {
 } from './gmail.js';
 import { voiceDeliver } from './voiceBridge.js';
 import { sendSms, type TwilioError } from './twilio.js';
+import { splitResponse } from './legacyFormat.js';
 
 type ChannelRow = typeof channels.$inferSelect;
 
@@ -628,6 +629,44 @@ async function resolvePersona(
   }
 }
 
+/** ManyChat sendContent — pushes a reply to a subscriber when the channel
+ *  holds an API token (operator sends; replies that missed the card's sync
+ *  window). Splits at the same 640-char cap the card formatter uses. */
+async function sendManyChatReply(
+  token: string,
+  subscriberId: string,
+  text: string,
+): Promise<SendResult> {
+  const msgs = splitResponse(text).map((t) => ({ type: 'text', text: t }));
+  try {
+    const res = await fetch('https://api.manychat.com/fb/sending/sendContent', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        subscriber_id: subscriberId,
+        data: { version: 'v2', content: { messages: msgs, actions: [] } },
+        message_tag: 'ACCOUNT_UPDATE',
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      const detail = (await res.text().catch(() => '')).slice(0, 200);
+      return {
+        mid: null,
+        error: `ManyChat rejected the send (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
+        retryable: res.status === 429 || res.status >= 500,
+      };
+    }
+    return { mid: null, error: null, retryable: true };
+  } catch (e) {
+    return {
+      mid: null,
+      error: `ManyChat send failed: ${e instanceof Error ? e.message : e}`,
+      retryable: true,
+    };
+  }
+}
+
 export async function sendChannelMessage(
   channel: ChannelRow,
   platformUserId: string,
@@ -651,6 +690,18 @@ export async function sendChannelMessage(
     return sendSmsReply(channel, platformUserId, text, attachments, opts);
   }
   const creds = channel.credentials as ChannelCredentials;
+  // Bot platforms pull the reply out of the synchronous ingest response —
+  // there is nothing to push to. A ManyChat channel holding an API token
+  // CAN push, though: replies that missed the card's window and operator
+  // sends still reach the subscriber, and the token'd channel then owns
+  // delivery so the ingest response must stay empty (no doubles).
+  if (channel.kind === 'chatfuel') return null;
+  if (channel.kind === 'manychat') {
+    if (!creds.manychat_token) return null;
+    const named =
+      opts?.senderName && text.trim() ? `${opts.senderName}: ${text}` : text;
+    return sendManyChatReply(creds.manychat_token, platformUserId, named);
+  }
   if (!creds.access_token) {
     return {
       mid: null,

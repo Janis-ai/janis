@@ -562,6 +562,67 @@ describe('formatForChannel', () => {
   });
 });
 
+describe('sendChannelMessage bot platforms', () => {
+  const ch = (kind: string, credentials: Record<string, unknown> = {}) =>
+    ({ kind, credentials }) as typeof channels.$inferSelect;
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('chatfuel has no push channel — the ingest response delivers', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await sendChannelMessage(ch('chatfuel'), 'PSID1', 'hi')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('manychat without a token has no push channel', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await sendChannelMessage(ch('manychat'), 'SUB1', 'hi')).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('manychat with a token pushes via sendContent, split at 640', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response('{"status":"success"}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await sendChannelMessage(
+      ch('manychat', { manychat_token: 'mc.tok' }),
+      'SUB1',
+      'word '.repeat(400).trim(),
+      undefined,
+      { senderName: 'Mike' },
+    );
+    expect(res?.error).toBeNull();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://api.manychat.com/fb/sending/sendContent',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect((init.headers as Record<string, string>).authorization).toBe('Bearer mc.tok');
+    const body = JSON.parse(init.body as string);
+    expect(body.subscriber_id).toBe('SUB1');
+    expect(body.data.version).toBe('v2');
+    // senderName prefixes the first text chunk; every chunk is capped
+    expect(body.data.content.messages[0].text).toMatch(/^Mike: /);
+    expect(body.data.content.messages.length).toBeGreaterThan(1);
+    expect(
+      body.data.content.messages.every(
+        (m: { type: string; text: string }) => m.type === 'text' && m.text.length <= 640,
+      ),
+    ).toBe(true);
+  });
+
+  it('surfaces a rejected ManyChat send as an error', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('bad token', { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await sendChannelMessage(ch('manychat', { manychat_token: 'mc.tok' }), 'SUB1', 'hi');
+    expect(res?.error).toContain('401');
+    expect(res?.retryable).toBe(false);
+  });
+});
+
 describe('sendChannelMessage quick replies', () => {
   const ch = (kind: string) =>
     ({

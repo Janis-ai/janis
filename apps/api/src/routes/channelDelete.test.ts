@@ -60,6 +60,40 @@ const del = (id: string) =>
     new Request(`http://t/api/channels/${id}`, { method: 'DELETE', headers: { cookie } }),
   );
 
+const patch = (id: string, body: Record<string, unknown>) =>
+  app.fetch(
+    new Request(`http://t/api/channels/${id}`, {
+      method: 'PATCH',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  );
+
+describe('channel patch — manychat token', () => {
+  it('stores, reports (never serializes), and clears the token', async () => {
+    const [ch] = await db
+      .insert(channels)
+      .values({ workspaceId: wsId, agentId, kind: 'manychat', name: 'MC', credentials: {} })
+      .returning();
+    let r = await patch(ch.id, { manychat_token: 'tok-abc' });
+    expect(r.status).toBe(200);
+    let j = (await r.json()) as { channel: { meta: { manychat_connected?: boolean } } };
+    expect(j.channel.meta.manychat_connected).toBe(true);
+    expect(JSON.stringify(j.channel.meta)).not.toContain('tok-abc');
+    const [row] = await db.select().from(channels).where(eq(channels.id, ch.id));
+    expect((row.credentials as { manychat_token?: string }).manychat_token).toBe('tok-abc');
+    r = await patch(ch.id, { manychat_token: '' });
+    expect(r.status).toBe(200);
+    j = (await r.json()) as typeof j;
+    expect(j.channel.meta.manychat_connected).toBeUndefined();
+  });
+
+  it('rejects the token on non-manychat channels', async () => {
+    const [ch] = await mkChannel('webchat-1');
+    expect((await patch(ch.id, { manychat_token: 'x' })).status).toBe(400);
+  });
+});
+
 describe('channel delete', () => {
   it('deletes a channel with contact identities + bindings', async () => {
     const [ch] = await mkChannel('with-identity');

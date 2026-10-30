@@ -663,6 +663,10 @@ export const Channel = z.object({
       .optional(),
     // Cloudflare OAuth connected for one-click DNS setup (token never leaves creds)
     cf_connected: z.boolean().optional(),
+    // manychat: an api.manychat.com token is on file — Janis pushes replies
+    // server-side instead of relying only on the card's sync response
+    // (token itself never leaves credentials)
+    manychat_connected: z.boolean().optional(),
     // email: upstream mailbox BCC'd on replies (auto-detected forward origin)
     mirror_address: z.string().optional(),
     // webchat: claimed custom domain (chat.acme.com) — serves the hosted chat

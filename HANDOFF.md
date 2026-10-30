@@ -94,6 +94,24 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Bot-platform ingest parity + setup docs:** `POST /bot/:key/{chatfuel,
+manychat}` now covers the legacy doc contract end-to-end. Event-only
+posts (`{{event}}`/`dfEvent` with no typed text) reach the agent as
+`[event] NAME` and open new convs with the greeting (postback semantics,
+same as Meta Get Started). Replies split at the 640-char card cap
+(shared `splitResponse` from legacyFormat), and stored
+`payload.quick_replies` map to platform quick replies — Chatfuel taps
+set `user input` + redirect to the `Janis` block, ManyChat emits v2
+`node` targets. `manychat_token` (PATCH `/api/channels/:id`, exposed
+only as `meta.manychat_connected`) enables api.manychat.com sendContent
+pushes — a token'd channel OWNS delivery so the card response stays
+empty (no doubles); token-less channels keep the sync response path,
+and Meta-bound convs (family merge) already deliver via Graph.
+sendChannelMessage no longer stamps a bogus "no access token" delivery
+error on bot channels — they return null (pull) like webchat. Channel
+pages now carry the full Chatfuel JSON-API-card and ManyChat
+Default-Reply/Dynamic-step setup instructions + the token field.
+
 **Ops drills (both closed):** Neon PITR rehearsed — scratch branch from a
 past timestamp verified row-count + newest send vs prod, then deleted;
 the runbook in AGENTS.md is now proven. k6 load test vs prod: ~150rps

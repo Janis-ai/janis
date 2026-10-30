@@ -1,10 +1,13 @@
 import { Hono } from 'hono';
 import { and, eq, gt, inArray, or, sql, desc } from 'drizzle-orm';
+import type { QuickReply } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, channels, conversations, messages } from '../db/schema.js';
+import { agents, channelBindings, channels, conversations, messages } from '../db/schema.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 import { normalizeChatfuel, normalizeManychat } from './legacy.js';
 import { dbRateLimit } from '../lib/rateLimit.js';
+import { splitResponse } from '../lib/legacyFormat.js';
+import { qrTitle, type ChannelCredentials } from '../lib/channels.js';
 
 /**
  * First-class bot-platform ingest — POST /bot/:key/:flavor.
@@ -29,10 +32,42 @@ const emptyFor = (flavor: Flavor) =>
     ? { version: 'v2', content: { messages: [], actions: [] } }
     : { messages: [] };
 
-const shapeFor = (flavor: Flavor, text: string) =>
-  flavor === 'manychat'
-    ? { version: 'v2', content: { messages: [{ type: 'text', text }], actions: [] } }
-    : { messages: [{ text }] };
+/** Suggested replies → the platform's quick-reply shape. A Chatfuel tap
+ *  sets `user input` and redirects to the Janis block (the documented name
+ *  for the block holding the JSON API card) so the card re-fires with the
+ *  label as the user's message; a ManyChat node target is named after the
+ *  label so a same-named flow/node picks the tap up. Non-string replies
+ *  (email/phone collectors) have no bot-platform primitive — dropped. */
+const qrFor = (flavor: Flavor, qrs: QuickReply[]) =>
+  qrs
+    .map((q) => (typeof q === 'string' ? q.trim() : ''))
+    .filter(Boolean)
+    .slice(0, 11)
+    .map((label) =>
+      flavor === 'chatfuel'
+        ? { title: qrTitle(label), block_names: ['Janis'], set_attributes: { 'user input': label } }
+        : { type: 'node', caption: qrTitle(label), target: label },
+    );
+
+/** Reply text → the platform's response shape. Long answers split at the
+ *  640-char message cap (the legacy formatter's limit — Chatfuel drops
+ *  oversize message objects silently). Quick replies ride the last text
+ *  message, the only spot Chatfuel renders them. */
+export function shapeReply(flavor: Flavor, text: string, qrs: QuickReply[] = []) {
+  const chunks = splitResponse(text).filter(Boolean);
+  const quickReplies = qrFor(flavor, qrs);
+  if (flavor === 'manychat') {
+    const content: Record<string, unknown> = {
+      messages: chunks.map((t) => ({ type: 'text', text: t })),
+      actions: [],
+    };
+    if (quickReplies.length) content.quick_replies = quickReplies;
+    return { version: 'v2', content };
+  }
+  const msgs = chunks.map((t) => ({ text: t }) as Record<string, unknown>);
+  if (quickReplies.length && msgs.length) msgs[msgs.length - 1].quick_replies = quickReplies;
+  return { messages: msgs };
+}
 
 /** The platform call is synchronous and the platforms wait ~15s — poll for
  *  the hosted pipeline's reply rather than holding the pipeline open. */
@@ -41,7 +76,7 @@ async function waitForOutbound(db: Db, conversationId: string, since: Date) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     const [hit] = await db
-      .select({ text: messages.text })
+      .select({ text: messages.text, payload: messages.payload })
       .from(messages)
       .where(
         and(
@@ -52,10 +87,33 @@ async function waitForOutbound(db: Db, conversationId: string, since: Date) {
       )
       .orderBy(desc(messages.createdAt))
       .limit(1);
-    if (hit?.text) return hit.text;
+    if (hit?.text) {
+      const quickReplies =
+        (hit.payload as { quick_replies?: QuickReply[] } | undefined)?.quick_replies ?? [];
+      return { text: hit.text, quickReplies };
+    }
     await new Promise((r) => setTimeout(r, 300));
   }
   return null;
+}
+
+/** Does a push channel already own delivery for this conversation? A conv
+ *  bound to a Meta channel (the Meta-family merge — the page is also on
+ *  our webhook) gets its replies Graph-sent by the outbox, and a ManyChat
+ *  channel holding an API token pushes via sendContent. In both cases the
+ *  card response must stay empty or the user sees every reply twice. */
+async function pushOwnsDelivery(db: Db, conversationId: string) {
+  const [bound] = await db
+    .select({ kind: channels.kind, credentials: channels.credentials })
+    .from(channelBindings)
+    .innerJoin(channels, eq(channelBindings.channelId, channels.id))
+    .where(eq(channelBindings.conversationId, conversationId))
+    .limit(1);
+  if (!bound) return false;
+  if (bound.kind === 'chatfuel') return false;
+  if (bound.kind === 'manychat')
+    return Boolean((bound.credentials as ChannelCredentials).manychat_token);
+  return true;
 }
 
 export function botIngestRoutes(db: Db) {
@@ -151,16 +209,21 @@ export function botIngestRoutes(db: Db) {
           .innerJoin(messages, eq(messages.conversationId, conversations.id))
           .where(eq(messages.id, dup.id))
           .limit(1);
-        if (!conv || conv.state === 'human') return c.json(emptyFor(flavor));
+        if (!conv || conv.state === 'human' || (await pushOwnsDelivery(db, conv.id)))
+          return c.json(emptyFor(flavor));
         const reply = await waitForOutbound(db, conv.id, new Date(Date.now() - 90_000));
-        return c.json(reply ? shapeFor(flavor, reply) : emptyFor(flavor));
+        return c.json(reply ? shapeReply(flavor, reply.text, reply.quickReplies) : emptyFor(flavor));
       }
     }
 
     await handleChannelMessage(db, channel, {
       objectId: '',
       senderId: norm.userId,
-      text: norm.text ?? '',
+      // an event-only post (a flow/button firing {{event}} / dfEvent with
+      // no typed text) still reaches the agent — same mapping the legacy
+      // fallback used; on a new conversation it opens with the greeting.
+      text: norm.text ?? (norm.event ? `[event] ${norm.event.name}` : ''),
+      postback: !norm.text && Boolean(norm.event),
       payload: { via: flavor, attrs: norm.attrs },
     });
 
@@ -170,10 +233,11 @@ export function botIngestRoutes(db: Db) {
       .from(conversations)
       .where(and(eq(conversations.agentId, agent.id), eq(conversations.externalId, externalId)))
       .limit(1);
-    if (!conv || conv.state === 'human') return c.json(emptyFor(flavor));
+    if (!conv || conv.state === 'human' || (await pushOwnsDelivery(db, conv.id)))
+      return c.json(emptyFor(flavor));
 
     const reply = await waitForOutbound(db, conv.id, since);
-    return c.json(reply ? shapeFor(flavor, reply) : emptyFor(flavor));
+    return c.json(reply ? shapeReply(flavor, reply.text, reply.quickReplies) : emptyFor(flavor));
   });
 
   return app;

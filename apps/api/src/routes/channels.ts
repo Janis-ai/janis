@@ -179,6 +179,10 @@ const patchChannel = z.object({
   page_id: z.string().max(60).optional(),
   ig_page_id: z.string().max(60).optional(),
   phone_number_id: z.string().max(60).optional(),
+  // manychat: api.manychat.com bearer token — lets Janis push replies
+  // server-side (operator sends, replies past the card's sync window);
+  // '' clears
+  manychat_token: z.string().max(200).optional(),
   // meta channels: mint a fresh webhook verify token (backfills channels
   // created before auto-generation)
   regenerate_verify_token: z.literal(true).optional(),
@@ -512,6 +516,9 @@ export function channelApiRoutes(db: Db) {
     if (body.widget_domain !== undefined && row.kind !== 'webchat') {
       return c.json({ error: 'widget_domain applies to webchat channels' }, 400);
     }
+    if (body.manychat_token !== undefined && row.kind !== 'manychat') {
+      return c.json({ error: 'manychat_token applies to manychat channels' }, 400);
+    }
 
     const creds = { ...(row.credentials as ChannelCredentials) };
     if (body.identity_secret !== undefined) {
@@ -653,6 +660,11 @@ export function channelApiRoutes(db: Db) {
     if (body.phone_number_id !== undefined) {
       if (body.phone_number_id === '') delete creds.phone_number_id;
       else creds.phone_number_id = body.phone_number_id;
+    }
+    if (body.manychat_token !== undefined) {
+      const t = body.manychat_token.trim();
+      if (!t) delete creds.manychat_token;
+      else creds.manychat_token = t;
     }
     const [updated] = await db
       .update(channels)

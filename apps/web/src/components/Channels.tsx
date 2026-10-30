@@ -401,31 +401,86 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
     <>
       <details className="webhook-details" open style={{ marginTop: 8 }}>
         <summary>
-          <span className="details-title">Ingest URL</span>
-          <span className="details-sub">paste this into your bot's HTTP step</span>
+          <span className="details-title">
+            {ch.kind === 'chatfuel' ? 'Chatfuel setup' : 'ManyChat setup'}
+          </span>
+          <span className="details-sub">your bot's HTTP step calls this URL — the reply comes back in the response</span>
         </summary>
         <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
           {url ?? '…'}
         </div>
+        {ch.kind === 'chatfuel' ? (
+          <ol className="muted" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.7, paddingLeft: 18 }}>
+            <li>
+              In Chatfuel, create a block named <strong>Janis</strong> — the name matters if you
+              use suggested replies: their taps route back through this block.
+            </li>
+            <li>
+              Open your <strong>Default Message</strong>: replace its contents with a{' '}
+              <strong>User Input</strong> card that saves the answer to{' '}
+              <span className="mono">{'{{user input}}'}</span>, then a{' '}
+              <strong>Go to block</strong> card pointing at <strong>Janis</strong>.
+            </li>
+            <li>
+              In the <strong>Janis</strong> block, add a <strong>JSON API</strong> card: type{' '}
+              <strong>POST</strong>, the URL above, and send user attributes —{' '}
+              <span className="mono">messenger user id</span> and{' '}
+              <span className="mono">user input</span> must be included (the card's send-all
+              default covers them).
+            </li>
+            <li>
+              Leave <strong>Report errors in the bot</strong> off, then{' '}
+              <strong>Test the request</strong> — expect <span className="mono">200 OK</span>.
+            </li>
+            <li>
+              Clear keyword rules that would fire ahead of the default message, so every
+              message reaches the Janis block.
+            </li>
+          </ol>
+        ) : (
+          <ol className="muted" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.7, paddingLeft: 18 }}>
+            <li>
+              In ManyChat, open <strong>Settings → Messenger → Default Reply → Edit</strong>.
+            </li>
+            <li>
+              Replace the first step with a <strong>Dynamic</strong> step and click the purple
+              area to add a request.
+            </li>
+            <li>
+              Method <strong>POST</strong>, the URL above, and under <strong>Body</strong> pick{' '}
+              <strong>Full Subscriber Data</strong> — the subscriber's{' '}
+              <span className="mono">id</span> and{' '}
+              <span className="mono">custom_fields.user input</span> are what Janis reads.
+            </li>
+            <li>
+              <strong>Test this request</strong> → <span className="mono">200</span>, then{' '}
+              <strong>Save</strong>. Keep the Default Reply enabled, set it to fire{' '}
+              <strong>every time</strong>, and <strong>Publish</strong> the flow.
+            </li>
+            <li>
+              Paste your ManyChat API token below (Settings → API) — Janis then pushes replies
+              through ManyChat directly, so answers still arrive if a reply runs past the
+              request's time limit, and teammate replies reach the subscriber too.
+            </li>
+          </ol>
+        )}
         <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
           {ch.kind === 'chatfuel' ? (
             <>
-              In Chatfuel: add a <strong>JSON API</strong> card where you want the agent to answer —
-              type POST, this URL, and send <span className="mono">messenger user id</span> and{' '}
-              <span className="mono">user input</span>. The response's messages display as the bot's
-              reply.
+              Other attributes the card sends are stored on the contact; send an{' '}
+              <span className="mono">event</span> attribute (e.g. from a button flow) to reach
+              the agent without visible text.
             </>
           ) : (
             <>
-              In ManyChat: add an <strong>External Request</strong> action where you want the agent
-              to answer — POST to this URL with the subscriber's <span className="mono">id</span>{' '}
-              and <span className="mono">custom_fields.user input</span>. The response's
-              content.messages display as the bot's reply.
+              Subscriber custom fields are stored on the contact; a custom field named{' '}
+              <span className="mono">event</span> reaches the agent without visible text.
             </>
           )}{' '}
-          While a teammate owns the conversation the endpoint answers empty — the bot goes silent
-          until it's handed back.
+          While a teammate owns the conversation the endpoint answers empty — the bot goes
+          silent until it's handed back.
         </div>
+        {ch.kind === 'manychat' && <ManyChatTokenField channel={ch} />}
       </details>
       <div style={{ marginTop: 20, paddingTop: 8 }}>
         <strong style={{ fontSize: 15 }}>Connect to Meta</strong>
@@ -476,6 +531,59 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
         )}
       </div>
     </>
+  );
+}
+
+/** ManyChat channel: the api.manychat.com token that enables server-side
+ *  sends (operator replies, answers past the card's sync window). The token
+ *  is write-only — the API reports a boolean once one's on file. */
+function ManyChatTokenField({ channel }: { channel: Channel }) {
+  const qc = useQueryClient();
+  const [token, setToken] = useState('');
+  const [msg, setMsg] = useState('');
+  const save = useMutation({
+    mutationFn: (value: string) =>
+      api(`/api/channels/${channel.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ manychat_token: value }),
+      }),
+    onSuccess: (_d, value) => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+      setToken('');
+      setMsg(value ? 'Token saved — replies now push through ManyChat.' : 'Token removed.');
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),
+  });
+  return (
+    <div style={{ marginTop: 12 }}>
+      <div style={{ fontSize: 13, fontWeight: 600 }}>ManyChat API token</div>
+      <div className="row" style={{ marginTop: 4, gap: 8 }}>
+        <input
+          className="grow"
+          type="password"
+          autoComplete="off"
+          placeholder={
+            channel.meta.manychat_connected ? 'Token saved — paste a new one to replace' : 'Paste the token from ManyChat Settings → API'
+          }
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+        />
+        <button className="btn" disabled={save.isPending || !token.trim()} onClick={() => save.mutate(token.trim())}>
+          Save
+        </button>
+        {channel.meta.manychat_connected && (
+          <button className="btn danger" disabled={save.isPending} onClick={() => save.mutate('')}>
+            Remove
+          </button>
+        )}
+      </div>
+      {msg && (
+        <div className={msg.endsWith('failed') || msg.includes('error') ? 'error' : 'muted'} style={{ fontSize: 12, marginTop: 4 }}>
+          {msg}
+        </div>
+      )}
+    </div>
   );
 }
 

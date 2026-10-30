@@ -33,7 +33,7 @@ export function removeFormatting(text: string): string {
     .replace(/:(skin-tone)(\S+):/g, '');
 }
 
-function splitResponse(str: string): string[] {
+export function splitResponse(str: string): string[] {
   if (str.length <= FB_TEXT_LIMIT) return [str];
   const out: string[] = [];
   let curr = FB_TEXT_LIMIT;

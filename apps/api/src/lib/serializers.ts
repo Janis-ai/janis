@@ -256,6 +256,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     cf_refresh_token?: string;
     mirror_address?: string;
     widget_domain?: string;
+    manychat_token?: string;
   };
   return {
     id: row.id,
@@ -297,6 +298,10 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
       cf_connected: row.kind === 'email' && creds.cf_refresh_token ? true : undefined,
       mirror_address: row.kind === 'email' ? creds.mirror_address : undefined,
       widget_domain: row.kind === 'webchat' ? creds.widget_domain : undefined,
+      // manychat: an API token is on file (server-side pushes live) — the
+      // token itself never leaves credentials
+      manychat_connected:
+        row.kind === 'manychat' && creds.manychat_token ? true : undefined,
       gmail_query: row.kind === 'gmail' ? creds.gmail_query : undefined,
       branding:
         row.kind === 'webchat'
