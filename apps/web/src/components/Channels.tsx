@@ -130,7 +130,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           until it's handed back.
         </div>
       </details>
-      <details className="webhook-details" style={{ marginTop: 8 }}>
+      <details className="webhook-details" open style={{ marginTop: 8 }}>
         <summary>
           <span className="details-title">See every message</span>
           <span className="details-sub">
