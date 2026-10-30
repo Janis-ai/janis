@@ -130,6 +130,7 @@ const patchChannel = z.object({
       theme: z.enum(['light', 'dark', 'auto']).optional(),
       hide_powered_by: z.boolean().optional(),
       show_help_link: z.boolean().optional(),
+      show_help_suggestions: z.boolean().optional(),
       // 'Text us: {number}' line in the widget footer — needs an SMS channel
       sms_footer: z.boolean().optional(),
       dictation: z.boolean().optional(),
@@ -622,6 +623,7 @@ export function channelApiRoutes(db: Db) {
       if (b.theme !== undefined) creds.theme = b.theme;
       if (b.hide_powered_by !== undefined) creds.hide_powered_by = b.hide_powered_by;
       if (b.show_help_link !== undefined) creds.show_help_link = b.show_help_link;
+      if (b.show_help_suggestions !== undefined) creds.show_help_suggestions = b.show_help_suggestions;
       if (b.sms_footer !== undefined) creds.sms_footer = b.sms_footer;
       if (b.dictation !== undefined) creds.dictation = b.dictation;
       if (b.dictation_engine !== undefined) creds.dictation_engine = b.dictation_engine;
