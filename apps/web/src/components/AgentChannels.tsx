@@ -439,7 +439,6 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           ? `https://m.me/${ch.meta.page_id}`
           : undefined;
 
-
   // Shared asset-list rows — same grammar as the bot-channel cards
   // (linked → red Disconnect, same-ws sibling → inert note, cross-ws →
   // Take over, free → Connect).
@@ -460,6 +459,18 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         ? 'bound'
         : 'free',
     bound,
+    // Sibling channel in this workspace — caption under Take over.
+    owner:
+      boundCh && boundCh.agent_id !== agentId
+        ? {
+            agent_name: boundCh.agent_name,
+            workspace_name: me?.workspace?.name ?? 'this workspace',
+            owner_email:
+              me?.workspace?.owner_id && me.workspace.owner_id === me.user.id
+                ? me.user.email
+                : null,
+          }
+        : undefined,
     ownLabel: boundCh ? `${label} on ${boundCh.agent_name}` : undefined,
     connectLabel: 'Connect',
     disconnectLabel: 'Disconnect',
@@ -478,13 +489,11 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           key: `${pg.id}:m`,
           title: pg.name,
           href: `https://facebook.com/${pg.id}`,
-          sub: 'Messenger',
-          extra:
-            msgr && msgr.agent_id === agentId && launchUrl(msgr) ? (
-              <a href={launchUrl(msgr)} target="_blank" rel="noreferrer">
-                Launch chat on Messenger ↗
-              </a>
-            ) : undefined,
+          sub: (
+            <a href={`https://m.me/${pg.id}`} target="_blank" rel="noreferrer">
+              Messenger ↗
+            </a>
+          ),
           surface: surf(`${pg.id}:m`, 'Messenger', pg.bound, msgr, {
             kind: 'messenger',
             page_id: pg.id,
@@ -496,13 +505,22 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           key: `${pg.id}:i`,
           title: pg.name,
           href: `https://facebook.com/${pg.id}`,
-          sub: `Instagram${ig.username ? ` @${ig.username}` : ''}`,
-          extra:
-            igCh && igCh.agent_id === agentId && launchUrl(igCh) ? (
-              <a href={launchUrl(igCh)} target="_blank" rel="noreferrer">
-                Launch chat on Instagram ↗
-              </a>
-            ) : undefined,
+          sub: (
+            <>
+              {ig.username ? (
+                <a
+                  href={`https://instagram.com/${ig.username}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Instagram ↗
+                </a>
+              ) : (
+                'Instagram'
+              )}
+              {ig.username ? ` @${ig.username}` : ''}
+            </>
+          ),
           surface: surf(`${pg.id}:i`, 'Instagram', ig.bound, igCh, {
             kind: 'instagram',
             page_id: pg.id,
@@ -514,16 +532,22 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     ...sortedWabas.flatMap((w) =>
       w.phone_numbers.map((n) => {
         const wa = linkedChannels.get(n.id);
+        const waNum = (n.display_phone_number ?? '').replace(/\D/g, '');
         return {
           key: n.id,
           title: n.display_phone_number ?? n.id,
-          sub: `WhatsApp Business${w.name ? ` · ${w.name}` : ''}`,
-          extra:
-            wa && wa.agent_id === agentId && launchUrl(wa) ? (
-              <a href={launchUrl(wa)} target="_blank" rel="noreferrer">
-                Launch chat on WhatsApp ↗
-              </a>
-            ) : undefined,
+          sub: (
+            <>
+              {waNum ? (
+                <a href={`https://wa.me/${waNum}`} target="_blank" rel="noreferrer">
+                  WhatsApp Business ↗
+                </a>
+              ) : (
+                'WhatsApp Business'
+              )}
+              {w.name ? ` · ${w.name}` : ''}
+            </>
+          ),
           surface: surf(`${n.id}:w`, 'WhatsApp', n.bound, wa, {
             kind: 'whatsapp',
             phone_number_id: n.id,
@@ -1368,10 +1392,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             <button className="btn danger" onClick={() => disconnect.mutate()}>Disconnect</button>
           </div>
           {pending.isLoading && (
-            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {[0, 1, 2].map((i) => (
-                <span key={i} className="nav-skel" style={{ width: `${70 - i * 15}%` }} />
-              ))}
+            <div className="row" style={{ marginTop: 12 }}>
+              <span className="spin" />
+              <span className="muted">Loading your Meta assets…</span>
             </div>
           )}
           {pending.isError && (
