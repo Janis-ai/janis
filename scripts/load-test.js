@@ -18,6 +18,7 @@ import { check, sleep } from 'k6';
 
 const BASE = __ENV.BASE_URL || 'http://localhost:8787';
 const COOKIE = __ENV.SESSION_COOKIE || '';
+const CHAT_ID = __ENV.PUBLIC_CHAT_ID || '';
 
 export const options = {
   scenarios: {
@@ -52,6 +53,7 @@ export default function () {
     ['/api/conversations?state=attention&unread=1', !!COOKIE],
     ['/api/agents', !!COOKIE],
     ['/api/saved-replies', !!COOKIE],
+    [`/chat/${CHAT_ID}`, !!CHAT_ID], // widget bootstrap — the public campaign surface
   ].filter(([, allowed]) => allowed);
 
   const [path] = pick(targets);

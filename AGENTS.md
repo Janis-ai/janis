@@ -355,8 +355,20 @@ drizzle-kit/workbox-build, nothing to drop directly).
     queue table, Meta OAuth stateless; remaining Maps are caches).
 
 *D. Ops/reliability — needs console access or ceremony*
-24. Neon PITR rehearsal — runbook below, unrehearsed.
-25. k6 load test run + documented ceiling — scripts/load-test.js exists.
+24. Neon PITR rehearsal — runbook below, unrehearsed. BLOCKED on Neon
+    console access 2026-10-29: no NEON_API_KEY anywhere local; the drill
+    is a console click-through — Branches → new branch "from a point in
+    time" → psql into the branch endpoint → verify newest campaign_send →
+    delete branch. ~3 min, Mike-only.
+25. DONE 2026-10-29 — k6 run vs prod (read-only): ~57rps sustained /
+    150rps peak for 3min, ZERO 5xx, p95 486ms (target <800ms) — the app
+    holds that load flat. 44% of requests got 429 — per-IP throttling on
+    the public /chat surface doing its job to a single source IP, not a
+    capacity wall. Aggregate ceiling still unmeasured (needs a
+    distributed/multi-IP run); session-authed tier unmeasured (needs a
+    session cookie — signup now requires email verification, so no
+    anonymous-cookie path). Residue: loadtest+devin@janis.local free
+    account left on prod for cleanup.
 26. DONE — Cloud Monitoring → Slack live (status/monitoring below).
 
 *E. Product depth tail (pull by customer demand)*
