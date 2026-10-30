@@ -5,7 +5,9 @@ import { channels } from '../db/schema.js';
 import type { ChannelCredentials } from '../lib/channels.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 import { validTwilioSignature } from '../lib/twilio.js';
-import { applySmsOpt, smsOptKeyword } from '../lib/optout.js';
+import { applySmsOpt, smsConsentGate, smsOptKeyword } from '../lib/optout.js';
+import { agents } from '../db/schema.js';
+import { resumeAfterConsent } from '../lib/hostedAgent.js';
 import { recordSuppression } from '../lib/deliverability.js';
 import { queueCrmActivity } from '../lib/crm.js';
 import { campaignSends } from '../db/schema.js';
@@ -52,12 +54,33 @@ export function smsRoutes(db: Db) {
     // CTIA opt keywords intercept before ingest — STOP marks the identity
     // opted-out (sendOutbound refuses thereafter) and never wakes the agent.
     if (await applySmsOpt(db, channel, from, text, body.MessageSid)) {
+      const kw = smsOptKeyword(text);
       const reply =
-        smsOptKeyword(text) === 'out'
+        kw === 'out'
           ? 'You have been unsubscribed and will not receive further messages. Reply START to resubscribe.'
-          : 'You have been resubscribed to messages.';
+          : kw === 'help'
+            ? 'Reply STOP to end these messages. For help, keep texting — the team sees every message.'
+            : 'You have been resubscribed to messages.';
       return c.text(
         `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${reply}</Message></Response>`,
+        200,
+        { 'Content-Type': 'text/xml' },
+      );
+    }
+
+    // A2P double opt-in (see /sms-optin.html): a first-time texter gets the
+    // confirm prompt, not the agent; YES records consent and resumes the
+    // agent on the parked inbound.
+    const gate = await smsConsentGate(db, channel, from, text, body.MessageSid);
+    if (gate.handled) {
+      if (gate.consentedConvId) {
+        const [agent] = await db.select().from(agents).where(eq(agents.id, channel.agentId));
+        if (agent) void resumeAfterConsent(db, agent, gate.consentedConvId);
+      }
+      return c.text(
+        gate.reply
+          ? `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${gate.reply}</Message></Response>`
+          : EMPTY_TWIML,
         200,
         { 'Content-Type': 'text/xml' },
       );

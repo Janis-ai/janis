@@ -1,0 +1,1 @@
+ALTER TABLE "contact_identities" ADD COLUMN "sms_opted_in_at" timestamp with time zone;

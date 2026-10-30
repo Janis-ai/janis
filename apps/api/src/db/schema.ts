@@ -354,6 +354,12 @@ export const contactIdentities = pgTable(
     // STOP/unsubscribe on this (channel, identity) — set by the inbound
     // keyword intercept; sendOutbound refuses while set.
     optedOutAt: timestamp('opted_out_at', { withTimezone: true }),
+    // SMS express consent — set when the texter replies YES/START to the
+    // first-inbound confirm prompt (A2P double opt-in). Null on sms
+    // channels = the conversation is pending consent and the agent must
+    // not reply; identities predating the gate pass via their existing
+    // binding instead.
+    smsOptedInAt: timestamp('sms_opted_in_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

@@ -280,3 +280,126 @@ describe('delivery status callback', () => {
     expect(sups).toHaveLength(0); // delivered → no suppression
   });
 });
+
+describe('SMS double opt-in gate', () => {
+  const NEWBIE = '+15557770101';
+  const LEGACY = '+15557770202';
+
+  async function identFor(caller: string) {
+    const [row] = await db
+      .select()
+      .from(schema.contactIdentities)
+      .where(
+        and(
+          eq(schema.contactIdentities.channelId, channel.id),
+          eq(schema.contactIdentities.platformUserId, caller),
+        ),
+      );
+    return row;
+  }
+
+  it('parks a first-time texter behind the confirm prompt', async () => {
+    const res = await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-G1',
+      From: NEWBIE,
+      To: '+15550001111',
+      Body: 'is my order here',
+    });
+    expect(res.status).toBe(200);
+    const twiml = await res.text();
+    expect(twiml).toContain('Reply YES to confirm');
+
+    const conv = await convForCaller(NEWBIE);
+    expect(conv).toBeTruthy();
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv!.id));
+    expect(msgs).toHaveLength(1);
+    expect((msgs[0].payload as Record<string, unknown>).sms_pending).toBe(true);
+    expect((await identFor(NEWBIE))?.smsOptedInAt).toBeNull();
+  });
+
+  it('re-prompts on a second non-consent text without duplicating on retry', async () => {
+    const res = await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-G2', From: NEWBIE, To: '+15550001111', Body: 'hello??',
+    });
+    expect(await res.text()).toContain('Reply YES to confirm');
+    // same MessageSid retried → no double park
+    await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-G2', From: NEWBIE, To: '+15550001111', Body: 'hello??',
+    });
+    const conv = await convForCaller(NEWBIE);
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv!.id));
+    expect(msgs.filter((m) => m.text === 'hello??')).toHaveLength(1);
+  });
+
+  it('YES records consent, acks, and lets the agent resume', async () => {
+    const res = await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-G3', From: NEWBIE, To: '+15550001111', Body: 'YES',
+    });
+    expect(await res.text()).toContain('confirmed');
+    const ident = await identFor(NEWBIE);
+    expect(ident?.smsOptedInAt).toBeTruthy();
+    const conv = await convForCaller(NEWBIE);
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv!.id));
+    expect(msgs.some((m) => m.text === 'YES')).toBe(true);
+  });
+
+  it('consented texter reaches the agent on the next text', async () => {
+    const res = await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-G4', From: NEWBIE, To: '+15550001111', Body: 'so about that order',
+    });
+    // normal path → empty TwiML (reply goes out async via Messages API)
+    expect(await res.text()).not.toContain('<Message>');
+    const conv = await convForCaller(NEWBIE);
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv!.id));
+    const stored = msgs.find((m) => m.text === 'so about that order');
+    expect(stored).toBeTruthy();
+    expect((stored!.payload as Record<string, unknown>).sms_pending).toBeUndefined();
+  });
+
+  it('pre-gate texters (binding, never parked) pass straight through', async () => {
+    // Simulate a texter who existed before the gate: conv + binding + identity, no opt-in stamp.
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: `sms:${LEGACY}`, userProfile: { id: LEGACY } })
+      .returning();
+    await db.insert(channelBindings).values({
+      channelId: channel.id, conversationId: conv.id, platformUserId: LEGACY,
+    });
+    const res = await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-G5', From: LEGACY, To: '+15550001111', Body: 'still me',
+    });
+    expect(await res.text()).not.toContain('<Message>');
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(msgs.some((m) => m.text === 'still me' && !(m.payload as Record<string, unknown>).sms_pending)).toBe(true);
+  });
+
+  it('STOP before consent suppresses; later texts stay silent until START', async () => {
+    await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-G6', From: '+15557770303', To: '+15550001111', Body: 'hi',
+    });
+    const stopRes = await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-G7', From: '+15557770303', To: '+15550001111', Body: 'stop',
+    });
+    expect(await stopRes.text()).toContain('unsubscribed');
+    const res = await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-G8', From: '+15557770303', To: '+15550001111', Body: 'hello?',
+    });
+    expect(await res.text()).toBe('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+    // START resubscribes AND records consent
+    const startRes = await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-G9', From: '+15557770303', To: '+15550001111', Body: 'START',
+    });
+    expect(await startRes.text()).toContain('resubscribed');
+    expect((await identFor('+15557770303'))?.smsOptedInAt).toBeTruthy();
+  });
+
+  it('HELP gets a deterministic reply without touching opt state', async () => {
+    const res = await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-G10', From: '+15557770404', To: '+15550001111', Body: 'HELP',
+    });
+    expect(await res.text()).toContain('Reply STOP');
+    const ident = await identFor('+15557770404');
+    expect(ident?.optedOutAt).toBeNull();
+    expect(ident?.smsOptedInAt).toBeNull();
+  });
+});

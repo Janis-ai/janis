@@ -236,14 +236,16 @@ describe('webchat widget endpoints', () => {
     expect(body.help_url).toBe('https://docs.acme.test');
     await db.delete(helpArticles).where(eq(helpArticles.agentId, agent.id));
 
-    // The per-widget toggle hides the button entirely.
+    // The per-widget toggle rides as show_help_link — help_url still emits
+    // so the console preview can flip it live; the widget gates the render.
     const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
     await db
       .update(channels)
       .set({ credentials: { ...(ch.credentials as object), show_help_link: false } })
       .where(eq(channels.id, channelId));
     body = await (await app.request(`/chat/${channelId}`)).json();
-    expect(body.help_url).toBeNull();
+    expect(body.help_url).toBe('https://docs.acme.test');
+    expect(body.show_help_link).toBe(false);
 
     await db
       .update(channels)

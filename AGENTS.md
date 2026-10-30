@@ -584,6 +584,15 @@ drizzle-kit/workbox-build, nothing to drop directly).
   crawler review (Twilio AND Google verify), widget 'Text us' footer
   shows the channel's SMS number via branding.sms_footer (opt-in toggle,
   default off; serialized in channel branding so the toggle reads back).
+  Double opt-in gate (2026-10-29, migration 0120 + smsConsentGate in
+  lib/optout.ts): first-time texters get a "Reply YES to confirm" prompt
+  instead of the agent — their inbound parks on the conv flagged
+  payload.sms_pending; YES sets contact_identities.sms_opted_in_at and
+  resumeAfterConsent (sms_consented resume reason) answers the parked
+  ask. START also records consent (it's an explicit resubscribe). HELP
+  returns a deterministic CTIA reply, never reaches the agent. Opted-out
+  texters get silence until START. Pass-throughs: already-consented
+  identities + pre-gate texters (binding exists, nothing parked).
 - Shared email addresses: PARTIAL — answer_rules on every email channel
   (PATCH /api/channels/:id {email_filters, from_address, gmail_query}):
   answer_addresses allowlist (mail To/Cc/Delivered-To a listed address

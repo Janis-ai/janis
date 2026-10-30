@@ -5013,11 +5013,22 @@ export async function resumeAfterDecision(
   return runConversationTurn(db, agent, convId, { resume: 'action_decided' });
 }
 
+/** A pending-consent texter just replied YES — the parked inbound is
+ *  finally theirs to answer. Same forced-pass shape as a decision resume. */
+export async function resumeAfterConsent(
+  db: Db,
+  agent: AgentRow,
+  convId: string,
+): Promise<void> {
+  agent = await withWorkspaceDefaults(db, agent);
+  return runConversationTurn(db, agent, convId, { resume: 'sms_consented' });
+}
+
 async function runConversationTurn(
   db: Db,
   agent: AgentRow,
   convId: string,
-  opts: { event?: OutboundWebhook; resume?: 'action_decided' },
+  opts: { event?: OutboundWebhook; resume?: 'action_decided' | 'sms_consented' },
 ): Promise<void> {
   const [conv] = await db
     .select()
@@ -5059,11 +5070,11 @@ async function runConversationTurn(
   convRuns.set(convId, run);
   if (run.running) {
     run.pending = true;
-    if (opts.resume) run.resume = true;
+    if (opts.resume) run.resume = opts.resume;
     return;
   }
   run.running = true;
-  if (opts.resume) run.resume = true;
+  if (opts.resume) run.resume = opts.resume;
   run.startedAt = Date.now();
   try {
     // Multi-instance (DATABASE_URL): the Map only serializes this process —
@@ -5101,7 +5112,7 @@ async function runConversationTurn(
         // contender that waited on the lock finds its inbound already
         // answered and no-ops instead of double-replying.
         if (!wasPending && !forced && !(await newestInboundIsPending(db, convId))) break;
-        await replyAsHostedAgent(db, agent, conv, forced ? { resume: 'action_decided' } : undefined);
+        await replyAsHostedAgent(db, agent, conv, forced ? { resume: forced } : undefined);
       } while (run.pending && Date.now() < holdDeadline);
     } finally {
       await release?.();
@@ -5118,14 +5129,15 @@ async function runConversationTurn(
     if (run.pending || run.resume)
       void runConversationTurn(db, agent, convId, {
         ...opts,
-        resume: run.resume ? 'action_decided' : undefined,
+        resume: run.resume || undefined,
       });
   }
 }
 
+type ResumeReason = 'action_decided' | 'sms_consented';
 const convRuns = new Map<
   string,
-  { running: boolean; pending: boolean; resume: boolean; startedAt: number }
+  { running: boolean; pending: boolean; resume: ResumeReason | false; startedAt: number }
 >();
 // Runs are serialized per conversation; a healthy pass is seconds. 3min means
 // the run is wedged on an await that will never settle — let the next inbound
@@ -5286,7 +5298,7 @@ async function replyAsHostedAgent(
   db: Db,
   agent: AgentRow,
   conv: ConversationRow,
-  opts?: { resume?: 'action_decided' },
+  opts?: { resume?: 'action_decided' | 'sms_consented' },
 ): Promise<void> {
   agent = await withWorkspaceDefaults(db, agent);
   const convId = conv.id;
@@ -5372,6 +5384,12 @@ async function replyAsHostedAgent(
       history.push({
         role: 'user',
         content: '(the decision on your proposed action is the last line above — reply to the customer now)',
+      });
+    }
+    if (opts?.resume === 'sms_consented') {
+      history.push({
+        role: 'user',
+        content: '(the customer just confirmed SMS consent — answer their earlier message now)',
       });
     }
     {
@@ -5620,6 +5638,10 @@ async function replyAsHostedAgent(
     if (opts?.resume === 'action_decided') {
       prompt +=
         '\n\n## Resuming after a teammate decision\nA teammate just decided the action you proposed — the bracketed "(teammate approved and ran …)" or "(teammate declined …)" line at the end of the transcript is the outcome. Reply to the customer now in one short message: say plainly what happened and what comes next for them. Do not call the tool again, do not ask for approval again, and do not re-verify identity. If the line says it was declined or ended in an error, tell them it could not be done and offer the next best step.';
+    }
+    if (opts?.resume === 'sms_consented') {
+      prompt +=
+        '\n\n## Resuming after SMS opt-in confirmation\nThe customer just replied YES confirming they want SMS replies — consent is recorded and their earlier message above is the real ask. Answer it now in one short SMS-length reply. Do not re-ask for confirmation and do not mention opt-in.';
     }
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     let stalled = false;
