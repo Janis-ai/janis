@@ -239,6 +239,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
       }),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', ch.id] });
     },
   });
   const [pageId, setPageId] = useState(ch.meta.page_id ?? '');
@@ -248,7 +249,11 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
         method: 'PATCH',
         body: JSON.stringify(body),
       }),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
+    onSuccess: (_d, body) => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', ch.id] });
+      if ('page_id' in body) setPageId(body.page_id);
+    },
   });
   const url = data?.urls[ch.kind as 'chatfuel' | 'manychat'];
   // Bot-platform setup is gated on the Meta link: the Meta webhook is what
