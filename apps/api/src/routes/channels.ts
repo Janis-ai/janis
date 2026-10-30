@@ -204,6 +204,45 @@ const patchChannel = z.object({
 });
 
 /** Console endpoints mounted at /api/channels (session auth). */
+const GRAPH = 'https://graph.facebook.com/v21.0';
+
+/** Lazy name backfill — surfaces linked before page_name/ig_name existed
+ *  show a bare id until this resolves it once via Graph (the stored page
+ *  token can read its own page). Missing/failed lookups just keep the id. */
+async function backfillSurfaceNames(
+  channel: typeof channels.$inferSelect,
+): Promise<ChannelCredentials> {
+  const creds = { ...(channel.credentials as ChannelCredentials) };
+  if (!creds.access_token) return creds;
+  const graphName = async (id: string, fields: string) => {
+    const res = await fetch(`${GRAPH}/${id}?fields=${fields}&access_token=${creds.access_token}`, {
+      signal: AbortSignal.timeout(8_000),
+    }).catch(() => null);
+    if (!res?.ok) return undefined;
+    const d = (await res.json().catch(() => ({}))) as { name?: string; username?: string };
+    return d.name ?? d.username;
+  };
+  let changed = false;
+  if (creds.page_id && !creds.page_name) {
+    const name = await graphName(creds.page_id, 'name');
+    if (name) {
+      creds.page_name = name;
+      changed = true;
+    }
+  }
+  if (creds.ig_page_id && !creds.ig_name) {
+    const name = await graphName(creds.ig_page_id, 'username');
+    if (name) {
+      creds.ig_name = name;
+      changed = true;
+    }
+  }
+  if (changed) {
+    await db.update(channels).set({ credentials: creds }).where(eq(channels.id, channel.id));
+  }
+  return creds;
+}
+
 export function channelApiRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
@@ -276,6 +315,7 @@ export function channelApiRoutes(db: Db) {
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
     await resolveChatIdentity(db, row.channel);
+    row.channel.credentials = await backfillSurfaceNames(row.channel);
     return c.json({ channel: toChannel(row.channel, row.agentName) });
   });
 
