@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentApiKeys, agents, channels, contacts, conversations, workspaces } from '../db/schema.js';
+import { agentApiKeys, agents, channels, contacts, conversations, knowledgeFiles, workspaces } from '../db/schema.js';
 import { generateApiKey } from '../lib/crypto.js';
 import { v1Routes } from './v1.js';
 
@@ -321,5 +321,51 @@ describe('v1 integration surface', () => {
       });
       expect(res.status).toBe(400);
     }
+  });
+});
+
+describe('v1 knowledge sources', () => {
+  it('/knowledge lists only URL-sourced files and refresh is agent-scoped', async () => {
+    const [ws2] = await db.insert(workspaces).values({ name: 'Other' }).returning();
+    const [other] = await db.insert(agents).values({ workspaceId: ws2.id, name: 'OtherBot' }).returning();
+    const [file] = await db.insert(knowledgeFiles).values({
+      workspaceId: ws2.id,
+      agentId,
+      name: 'docs page',
+      mimeType: 'text/html',
+      sizeBytes: 0,
+      sourceUrl: 'http://127.0.0.1:1/unreachable',
+    }).returning();
+    const [upload] = await db.insert(knowledgeFiles).values({
+      workspaceId: ws2.id,
+      agentId,
+      name: 'pasted notes',
+      mimeType: 'text/plain',
+      sizeBytes: 0,
+    }).returning();
+    const [otherFile] = await db.insert(knowledgeFiles).values({
+      workspaceId: ws2.id,
+      agentId: other.id,
+      name: 'not mine',
+      mimeType: 'text/html',
+      sizeBytes: 0,
+      sourceUrl: 'https://example.test',
+    }).returning();
+
+    const list = await (await app.request('/v1/knowledge', { headers: authed() })).json();
+    const ids = list.map((f: { id: string }) => f.id);
+    expect(ids).toContain(file.id);
+    expect(ids).not.toContain(upload.id); // uploads have nothing to refresh
+    expect(ids).not.toContain(otherFile.id);
+
+    for (const id of [otherFile.id, upload.id]) {
+      const res = await app.request(`/v1/knowledge/${id}/refresh`, { method: 'POST', headers: authed() });
+      expect(res.status).toBe(404);
+    }
+
+    const res = await app.request(`/v1/knowledge/${file.id}/refresh`, { method: 'POST', headers: authed() });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(false); // unreachable origin degrades, never 500s
   });
 });

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { IngestRequest } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { channels, conversations, hookSubscriptions } from '../db/schema.js';
+import { channels, conversations, hookSubscriptions, knowledgeFiles } from '../db/schema.js';
 import { agentAuth, type AgentAuthEnv } from '../middleware/agentAuth.js';
 import { deliverWebhook } from '../lib/webhooks.js';
 import { sendOutbound } from '../lib/outbound.js';
@@ -12,6 +12,7 @@ import { applyConvEffects } from '../lib/conversationOps.js';
 import { HOOK_EVENTS } from '../lib/hooks.js';
 import { toConversation } from '../lib/serializers.js';
 import { enrichContact } from '../lib/contacts.js';
+import { refreshKnowledgeSource } from '../lib/urlSource.js';
 import { processEvents } from '../services/ingest.js';
 import { storeSuggestion } from '../services/suggestions.js';
 
@@ -327,6 +328,48 @@ export function v1Routes(db: Db) {
       .from(channels)
       .where(eq(channels.agentId, agent.id));
     return c.json(rows.map((r) => ({ ...r, outbound: OUTBOUND_KINDS.includes(r.kind) })));
+  });
+
+  // URL-sourced knowledge files — lets an external system (Shopify webhook,
+  // CMS publish hook, Zapier schedule) poll which sources exist and trigger
+  // an out-of-cadence re-crawl when the upstream page changes. Only
+  // source_url rows are exposed — uploads have nothing to refresh.
+  app.get('/knowledge', async (c) => {
+    const agent = c.get('agent');
+    const rows = await db
+      .select({
+        id: knowledgeFiles.id,
+        name: knowledgeFiles.name,
+        source_url: knowledgeFiles.sourceUrl,
+        status: knowledgeFiles.status,
+        refresh_hours: knowledgeFiles.refreshHours,
+        last_fetched_at: knowledgeFiles.lastFetchedAt,
+        next_fetch_at: knowledgeFiles.nextFetchAt,
+      })
+      .from(knowledgeFiles)
+      .where(eq(knowledgeFiles.agentId, agent.id));
+    return c.json(rows.filter((r) => r.source_url));
+  });
+
+  // Refresh runs inline (a single page re-crawl is ~seconds; a site source
+  // re-runs discovery — still bounded) so the caller learns whether the
+  // refresh actually landed. Idempotent — retries of a timed-out call just
+  // re-crawl.
+  app.post('/knowledge/:fileId/refresh', async (c) => {
+    const agent = c.get('agent');
+    const [file] = await db
+      .select()
+      .from(knowledgeFiles)
+      .where(
+        and(
+          eq(knowledgeFiles.id, c.req.param('fileId')),
+          eq(knowledgeFiles.agentId, agent.id),
+        ),
+      )
+      .limit(1);
+    if (!file?.sourceUrl) return c.json({ error: 'not found' }, 404);
+    const ok = await refreshKnowledgeSource(db, file);
+    return c.json({ ok, status: ok ? 'ready' : 'degraded' });
   });
 
   // REST-hook subscriptions — Zapier/Make/n8n-style instant delivery. The

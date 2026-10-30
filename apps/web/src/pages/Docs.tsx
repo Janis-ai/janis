@@ -45,6 +45,8 @@ const AUTOMATION = [
   ['GET /v1/hooks', 'List REST-hook subscriptions.'],
   ['POST /v1/hooks', '{ target_url, event } — subscribe to instant pushes. Events: new_conversation, conversation_escalated, conversation_resolved.'],
   ['DELETE /v1/hooks/:id', 'Unsubscribe. Zapier calls this when a Zap turns off.'],
+  ['GET /v1/knowledge', 'List the agent\'s URL-sourced knowledge files — { id, name, source_url, status, refresh_hours }.'],
+  ['POST /v1/knowledge/:fileId/refresh', 'Re-crawl a URL source now (off-cadence). Idempotent; a failed crawl degrades, never evicts.'],
 ];
 
 function Table({ head, rows }: { head: string[]; rows: string[][] }) {
@@ -242,6 +244,30 @@ Content-Type: application/json
         stand in for the {'{{…}}'} placeholders. Omit the{' '}
         <span className="mono">handoff_request</span> event to route the message
         to the agent instead of straight to a human.
+      </p>
+
+      <h2>Recipe — keep knowledge fresh on external change</h2>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        URL-sourced knowledge files re-crawl on their{' '}
+        <span className="mono">refresh_hours</span> cadence, but an external
+        change (a Shopify product edit, a CMS publish, a pricing-page update)
+        can trigger one immediately: list the agent's URL sources, then POST a
+        refresh for the file that changed.
+      </p>
+      <Code>{`# Zapier/Make: Shopify "Product Updated" (or any webhook) → HTTP step
+GET https://app.janis.ai/v1/knowledge
+Authorization: Bearer jk_live_...
+# → [{ id, name, source_url, status, refresh_hours, next_fetch_at }]
+
+POST https://app.janis.ai/v1/knowledge/{file_id}/refresh
+Authorization: Bearer jk_live_...
+# → { ok: true, status: "ready" }`}</Code>
+      <p className="muted" style={{ lineHeight: 1.6 }}>
+        The refresh is inline and idempotent — a re-crawl of an unchanged page
+        is a cheap no-op, and a failed crawl degrades that source without
+        evicting its last-good text. Point a workflow at the file whose
+        upstream page changed; for "refresh everything daily" use a scheduled
+        Zap iterating the list.
       </p>
         </>
       ) : (
