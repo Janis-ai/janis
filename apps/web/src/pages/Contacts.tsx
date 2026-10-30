@@ -647,8 +647,22 @@ export function ContactDetail() {
             // Two provenance tiers: `claimed` is what the visitor stated in
             // chat (save_user_profile facts); other top-level keys are
             // system-asserted traits (API push, future CRM syncs).
-            const { claimed, ...system } = c.metadata ?? {};
+            const { claimed, learned, ...system } = c.metadata ?? {};
             const sysKeys = Object.entries(system).filter(([, v]) => v != null && typeof v !== 'object');
+            const l = learned as {
+              summary?: string; job_title?: string; company?: string;
+              lifecycle?: string; interests?: string[]; facts?: string[];
+              consolidated_at?: string;
+            } | undefined;
+            const learnedRows = l
+              ? [
+                  l.job_title && `title: ${l.job_title}`,
+                  l.company && `company: ${l.company}`,
+                  l.lifecycle && `lifecycle: ${l.lifecycle}`,
+                  l.interests?.length && `interests: ${l.interests.join(', ')}`,
+                  ...(l.facts ?? []),
+                ].filter(Boolean)
+              : [];
             return (
               <>
                 {!!sysKeys.length && (
@@ -656,6 +670,17 @@ export function ContactDetail() {
                     {sysKeys.map(([k, v]) => (
                       <div key={k}>{k}: {String(v)}</div>
                     ))}
+                  </div>
+                )}
+                {!!(l?.summary || learnedRows.length) && (
+                  <div style={{ marginTop: 6 }}>
+                    <span className="muted">Learned from conversations:</span>
+                    {l?.summary && <div style={{ marginTop: 2 }}>{l.summary}</div>}
+                    {learnedRows.length > 0 && (
+                      <div className="muted" style={{ marginTop: 2, fontSize: 12 }}>
+                        {learnedRows.join(' · ')}
+                      </div>
+                    )}
                   </div>
                 )}
                 {!!claimed && !!Object.keys(claimed).length && (

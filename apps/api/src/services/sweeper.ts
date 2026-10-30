@@ -18,6 +18,7 @@ import { sweepCampaigns } from '../lib/campaigns.js';
 import { sweepEvals } from '../lib/evalRuns.js';
 import { sweepEmailDomainStatus } from '../lib/resendDomains.js';
 import { sweepShopifyUsage } from '../lib/shopifyApp.js';
+import { sweepContactConsolidation } from '../lib/contactConsolidate.js';
 
 /**
  * Claim or renew a named singleton lock. Only the holder (or anyone, once the
@@ -80,6 +81,9 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
       void sweepOutlook(db).catch((err) => console.error('sweepOutlook error:', err));
       void renewOutlookWatches(db).catch((err) => console.error('renewOutlookWatches error:', err));
       void sweepKnowledge(db).catch((err) => console.error('sweepKnowledge error:', err));
+      void sweepContactConsolidation(db).catch((err) =>
+        console.error('sweepContactConsolidation error:', err),
+      );
       void sweepSnoozes(db).catch((err) => console.error('sweepSnoozes error:', err));
       void sweepWebhookRetries(db).catch((err) => console.error('sweepWebhookRetries error:', err));
       void sweepHostedStalls(db).catch((err) => console.error('sweepHostedStalls error:', err));
