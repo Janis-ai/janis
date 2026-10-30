@@ -94,6 +94,21 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Widget menu redesign + follow-ups (Oct 30, second pass):** "Start a
+new chat" is now ALWAYS in the ⋯ menu — ending is a consequence, not a
+prerequisite (Intercom's model; Mike asked). `/new` archives a live
+thread via the shared `endConversation` helper (covers human-owned) then
+forks + upserts the binding. "End chat" shows only while something is
+live; starting fresh over a live transcript window.confirm()s since the
+old thread leaves view. Suggested-articles toggle actually saves now —
+`show_help_suggestions` was missing from the Channels.tsx PATCH payload
+(toggle flipped, never persisted; Mike's concierge channel flagged off
+in prod). `widget.js` gets stale-cached an hour on www — the CF
+janis-legacy-proxy worker forces `cache-control: max-age=3600`
+regardless of origin (origin emits 300). Landing.tsx now loads
+`/widget.js?v=2` — bump the version on widget behavior changes or
+visitors run the old JS for an hour post-deploy.
+
 **Widget end/new-chat fixes (the stuck ⋯ menu):** `/chat/:token/end|new|
 typing` never forwarded the signed identity claim, so an identified
 visitor's actions resolved the anonymous participant — `/end` faked
