@@ -64,6 +64,29 @@ just the email. Sessions kept skipping it (reconciled from git log
    Note: `/` is the public landing even when authed — smoke probes must hit
    console routes (/conversations, /ask), not `/`.
 
+## UI work discipline (learned 2026-10-30)
+
+- **Reuse before you build.** If an existing component already does most of
+  the job (the Meta asset picker fed a whole second implementation that
+  took five review rounds to converge), extract/share it first. Hand-rolled
+  parallels drift from the established grammar and read as sloppy.
+- **Do your own QA — never ship UI fixes on theory alone.** Reproduce the
+  failure yourself (run the page, drive the state, watch the mount) before
+  declaring a fix. If Mike reports a fix still broken, the NEXT iteration
+  must be verified end-to-end by you, not re-theorized — one round trip
+  through him is already a failure.
+- **Don't be sloppy with markup.** Collapse carets on open sections,
+  stray dividers, duplicate buttons (confirm dialogs already render a
+  Cancel — don't pass one), developer-speak copy ("surfaces", "inbound"),
+  and plain links where siblings are buttons are all catches before
+  deploy, not after.
+- **Parallel sessions: check before you overwrite.** Other sessions work
+  the same tree. Before reverting or re-applying over a file that looks
+  like it lost your changes, check timestamps — if the other edits
+  post-date yours, that work may be deliberate (including a session Mike
+  opened BECAUSE yours was failing). When in doubt, ASK before reverting;
+  and stage only your own files, always.
+
 ## Caveats
 
 - SSE check needs an existing conversation to trigger a bus event.
