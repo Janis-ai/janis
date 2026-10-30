@@ -124,6 +124,36 @@ export function CodeBlock({ title, code, lang }: { title: string; code: string; 
   );
 }
 
+/** Bare code block with a copy button — the docs-page grammar (used by the
+ *  API/automation/operator guides). CodeBlock above is the titled variant
+ *  for console cards. */
+export function Code({ children }: { children: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(children);
+    } catch {
+      // clipboard API needs a secure context — fall back for older setups
+      const ta = document.createElement('textarea');
+      ta.value = children;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+  return (
+    <div className="docs-code-wrap">
+      <button className="docs-copy" onClick={copy} title="Copy to clipboard" aria-label="Copy code">
+        {copied ? '✓' : '⧉'}
+      </button>
+      <pre className="docs-code">{children}</pre>
+    </div>
+  );
+}
+
 /** Inline markdown-ish emphasis for one-line contexts — conversation
  *  previews, list rows. No links: these render inside row links already,
  *  and nested <a> is invalid. */

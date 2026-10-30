@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useMe } from '../api/hooks';
 import { api } from '../api/client';
-import { BrandImg, SiteFooter } from '../components/bits';
+import { BrandImg, Code, SiteFooter } from '../components/bits';
 import OperatorDocs from './OperatorDocs';
 
 const INBOUND = [
@@ -68,38 +68,18 @@ function Table({ head, rows }: { head: string[]; rows: string[][] }) {
   );
 }
 
-function Code({ children }: { children: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(children);
-    } catch {
-      // clipboard API needs a secure context — fall back for older setups
-      const ta = document.createElement('textarea');
-      ta.value = children;
-      document.body.appendChild(ta);
-      ta.select();
-      document.execCommand('copy');
-      ta.remove();
-    }
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-  return (
-    <div className="docs-code-wrap">
-      <button className="docs-copy" onClick={copy} title="Copy to clipboard" aria-label="Copy code">
-        {copied ? '✓' : '⧉'}
-      </button>
-      <pre className="docs-code">{children}</pre>
-    </div>
-  );
-}
-
 export default function Docs() {
   const { data } = useMe();
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
   const guide = params.get('guide');
   const tab = guide === 'operator' ? 'operator' : guide === 'automation' ? 'automation' : 'api';
+  // #anchor links (e.g. /docs?guide=operator#chatfuel from the channel
+  // cards) scroll once the target tab has rendered.
+  useEffect(() => {
+    if (!location.hash) return;
+    document.getElementById(location.hash.slice(1))?.scrollIntoView();
+  }, [location.hash, tab]);
   const signOut = async () => {
     await api('/auth/logout', { method: 'POST' });
     window.location.href = '/';

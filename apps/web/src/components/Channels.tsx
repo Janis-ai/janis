@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { Sun, Moon, Monitor } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
@@ -482,6 +483,12 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           )}{' '}
           While a teammate owns the conversation the endpoint answers empty — the bot goes
           silent until it's handed back.
+        </div>
+        <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+          Full guide:{' '}
+          <Link to={`/docs?guide=operator#${ch.kind}`}>
+            Docs → {ch.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} channel
+          </Link>
         </div>
         {ch.kind === 'manychat' && <ManyChatTokenField channel={ch} />}
       </details>
