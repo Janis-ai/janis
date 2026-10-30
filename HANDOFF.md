@@ -92,6 +92,72 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 - **Agent builder** — `apps/web/src/pages/AgentBuilder.tsx`, stages per
   nav above.
 
+## Recently shipped (Oct 29–30, 2026)
+
+**Ops drills (both closed):** Neon PITR rehearsed — scratch branch from a
+past timestamp verified row-count + newest send vs prod, then deleted;
+the runbook in AGENTS.md is now proven. k6 load test vs prod: ~150rps
+read-only, ZERO 5xx, p95 486ms — the 429s were per-IP rate limiting
+working as designed, not a capacity wall. `scripts/load-test.js` gained a
+PUBLIC_CHAT_ID widget-bootstrap target.
+
+**Concierge hardening:** anonymous visitors get told up-front they aren't
+signed in; `error_reports` gated on `signedInUser` (was the only
+ungated operator tool — verified never hit by an anonymous thread); and
+the bigger fix — `enabledBuiltins(enabled, workspaceId, verified)` now
+scopes the tool CATALOG by conversation identity, so unverified visitors
+on the operator workspace see only `publicAnon` tools (web_search,
+web_fetch). Fail-closed default.
+
+**Voice/SMS plan gating:** the free-plan upsell never fired because
+`useBillingStatus` typed the response as `{ plan }` but the endpoint
+returns `plan_key` — fixed; free workspaces now get a lock-icon tab,
+dimmed disabled fields, and a visible paid-feature notice. Hosted SMS
+confirmed working via the voice channel's subaccount (same number);
+the real SMS blocker is A2P 10DLC registration (external, awaiting
+Twilio review), not code.
+
+**Hosted chat links:** every Bubble channel now gets a shareable
+`{apiOrigin}/chat/{id}/page` link ("Open chat as a customer ↗") even
+without a widget_domain, plus a `hosted_chat_open` GA4 event on click.
+
+**Console UX:** search now covers archived + snoozed conversations by
+default (Slack semantics — archive is a list-view concept); explicit
+state filters still scope. Admin "Delete" button on conversation detail
+wires the existing DELETE endpoint through the styled confirm dialog —
+real erasure for test threads/GDPR where archive can't serve.
+
+**Integrations API:** `GET /v1/knowledge` + `POST /v1/knowledge/:fileId/
+refresh` (agent-key authed, agent-scoped, idempotent) — external systems
+(Shopify webhook → Zapier → Janis) can trigger an off-cadence re-crawl;
+a failed crawl degrades rather than evicting last-good. Docs recipes
+updated.
+
+**Depth tails closed:** eval run-diff in Tests → run history (flip
+badges + expandable before/after replies — one view serves regression
+hunting AND the A/B 'Try a variant' model compare; /test-runs returns
+reply text). Help article version history (help_article_revisions,
+snapshot-on-save, editor-stamped, restore w/ slug re-dedupe). Widget
+suggested-article cards under the greeting (top-3 viewed published
+articles, empty-transcript only, `show_help_suggestions` toggle —
+separate from the footer link after Mike flagged it). And the same
+version-history pattern for agent INSTRUCTIONS —
+agent_instruction_revisions snapshots system_prompt/greeting/
+quick_replies on every content-changing config save, with a
+collapsible history + admin-gated Restore in the Instructions card.
+
+**Meta entity discovery (tracker 15b):** the Janis Meta app's business
+verification + Tech Provider status + the FB page all anchor to Josh
+Barkin's entities (Stagename Inc., "Josh Barkin's Business") — not
+Janis's legal entity. Target: Tangerine Torpedo LLC (Mike's, verified,
+already lists janis.ai). Migration steps written into AGENTS.md 15b —
+move app/page/WABA to Torpedo, keep Stagename bound until green.
+
+**Prod cleanup:** "Smoke Test Bot" agent + 9 live-verification test rows
+deleted via deleteAgentsCascade; loadtest+devin@janis.local throwaway
+account removed. 31 decided pending_actions and real thread history
+left untouched (records, not residue).
+
 ## Recently shipped (late Oct 2026 session)
 
 Team table unification, notification prefs → modal editors everywhere,
