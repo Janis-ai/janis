@@ -123,6 +123,9 @@ const linkBody = z.object({
   connect_id: z.string(),
   agent_id: z.string().uuid(),
   kind: z.enum(['messenger', 'instagram', 'whatsapp', 'chatfuel', 'manychat']),
+  // Bot-platform channels bind Messenger and Instagram surfaces separately
+  // (page_id vs ig_page_id creds) — which side this link is for.
+  surface: z.enum(['messenger', 'instagram']).optional(),
   page_id: z.string().optional(),
   phone_number_id: z.string().optional(),
   // Take over a binding owned by another workspace — removes that channel
@@ -470,9 +473,21 @@ export function metaApiRoutes(db: Db) {
     }
     credentials.access_token = pageToken;
     const botKind = body.kind === 'chatfuel' || body.kind === 'manychat';
-    if (botKind) name = `${body.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} (${page.name})`;
+    let conflictId = credentials.page_id!;
+    if (botKind) {
+      name = `${body.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} (${page.name})`;
+      if (body.surface === 'instagram') {
+        if (!page.instagram_business_account) {
+          return c.json({ error: 'no Instagram business account linked to that page' }, 400);
+        }
+        // IG binds a different cred — leave any existing page_id untouched.
+        delete credentials.page_id;
+        credentials.ig_page_id = page.instagram_business_account.id;
+        conflictId = credentials.ig_page_id;
+      }
+    }
 
-    const conflict = await resolveConflict(credentials.page_id!);
+    const conflict = await resolveConflict(conflictId);
     if (conflict) return c.json(conflict.body, conflict.status as 409);
 
     // Bot channels may pre-exist from the Connect card (kind only, no page

@@ -21,6 +21,7 @@ type ChannelRow = typeof channels.$inferSelect;
 export interface ChannelCredentials {
   via?: 'oauth' | 'manual' | 'legacy'; // how the channel was created
   page_id?: string; // messenger / instagram
+  ig_page_id?: string; // instagram feed on a bot-platform channel
   // migrated legacy bots: a page-inbox human reply (standby echo) pauses the
   // bot; the pause lapses after takeover_timeout minutes (legacy ~5)
   takeover_from_page_inbox?: boolean;
@@ -1755,7 +1756,7 @@ export async function findChannelByObjectId(db: Db, objectId: string) {
   }
   return channelListCache.rows.find((ch) => {
     const c = ch.credentials as ChannelCredentials;
-    return c.page_id === objectId || c.phone_number_id === objectId;
+    return c.page_id === objectId || c.ig_page_id === objectId || c.phone_number_id === objectId;
   });
 }
 

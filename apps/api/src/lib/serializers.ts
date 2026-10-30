@@ -196,6 +196,7 @@ export function toMemberGroup(row: Row<typeof memberGroups>): MemberGroup {
 export function toChannel(row: Row<typeof channels>, agentName: string): Channel {
   const creds = (row.credentials ?? {}) as {
     page_id?: string;
+    ig_page_id?: string;
     phone_number_id?: string;
     username?: string;
     phone_number?: string;
@@ -264,6 +265,7 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     agent_name: agentName,
     meta: {
       page_id: creds.page_id,
+      ig_page_id: creds.ig_page_id,
       phone_number_id: creds.phone_number_id,
       username: row.kind === 'instagram' ? creds.username : undefined,
       phone_number:

@@ -84,7 +84,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
     },
   });
   const link = useMutation({
-    mutationFn: (b: { page_id: string; takeover?: boolean }) =>
+    mutationFn: (b: { page_id: string; surface?: 'messenger' | 'instagram'; takeover?: boolean }) =>
       api<{ channel: Channel }>('/api/meta/link', {
         method: 'POST',
         body: JSON.stringify({
@@ -100,10 +100,10 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
   });
   const [pageId, setPageId] = useState(ch.meta.page_id ?? '');
   const savePage = useMutation({
-    mutationFn: () =>
+    mutationFn: (body: Record<string, string>) =>
       api(`/api/channels/${ch.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ page_id: pageId.trim() }),
+        body: JSON.stringify(body),
       }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
   });
@@ -163,7 +163,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                     onChange={(e) => setPageId(e.target.value)}
                     style={{ flex: 1 }}
                   />
-                  <button className="btn" disabled={savePage.isPending} onClick={() => savePage.mutate()}>
+                  <button className="btn" disabled={savePage.isPending} onClick={() => savePage.mutate({ page_id: pageId.trim() })}>
                     Save
                   </button>
                 </div>
@@ -190,62 +190,110 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
               </div>
               <div className="asset-list" style={{ marginTop: 8 }}>
                 {(pending.data.pages ?? []).map((pg) => {
-                  const own = (chList?.channels ?? []).find(
-                    (x) => x.meta.page_id === pg.id && x.id !== ch.id,
-                  );
-                  const linkedHere = ch.meta.page_id === pg.id;
+                  const ig = pg.instagram;
+                  const surfaces: {
+                    label: string;
+                    id: string;
+                    linked: boolean;
+                    bound?: BoundAsset | null;
+                    own?: Channel;
+                  }[] = [
+                    {
+                      label: 'Messenger',
+                      id: pg.id,
+                      linked: ch.meta.page_id === pg.id,
+                      bound: pg.bound,
+                      own: (chList?.channels ?? []).find(
+                        (x) => x.meta.page_id === pg.id && x.id !== ch.id,
+                      ),
+                    },
+                  ];
+                  if (ig) {
+                    surfaces.push({
+                      label: `Instagram${ig.username ? ` @${ig.username}` : ''}`,
+                      id: ig.id,
+                      linked: ch.meta.ig_page_id === ig.id,
+                      bound: ig.bound,
+                      own: (chList?.channels ?? []).find(
+                        (x) =>
+                          (x.meta.page_id === ig.id || x.meta.ig_page_id === ig.id) &&
+                          x.id !== ch.id,
+                      ),
+                    });
+                  }
                   return (
                     <div key={pg.id} className="asset-row">
                       <div className="grow">
                         <strong>{pg.name}</strong>
-                        <div className="muted">
-                          Facebook Page{pg.instagram ? ` · also @${pg.instagram.username ?? pg.instagram.id}` : ''}
-                        </div>
-                        {pg.bound && !linkedHere && !own && (
-                          <div className="muted" style={{ fontSize: 12 }}>
-                            on {pg.bound.workspace_name} · {pg.bound.agent_name}
-                            {pg.bound.owner_email ? ` (${pg.bound.owner_email})` : ''}
-                          </div>
-                        )}
+                        <div className="muted">Facebook Page</div>
                       </div>
-                      {linkedHere ? (
-                        <span className="badge active">Linked</span>
-                      ) : own ? (
-                        <span className="muted">on {own.name}</span>
-                      ) : pg.bound ? (
-                        <button
-                          className="btn"
-                          disabled={link.isPending}
-                          onClick={async () => {
-                            if (
-                              (await confirm(
-                                `Take this Page over from ${pg.bound!.workspace_name}${pg.bound!.owner_email ? ` (${pg.bound!.owner_email})` : ''}? ${pg.bound!.agent_name} loses it — inbound messages come here instead.`,
-                                [
-                                  { key: 'ok', label: 'Take over' },
-                                  { key: 'cancel', label: 'Cancel' },
-                                ],
-                              )) === 'ok'
-                            )
-                              link.mutate({ page_id: pg.id, takeover: true });
-                          }}
-                        >
-                          Take over
-                        </button>
-                      ) : (
-                        <button
-                          className="btn"
-                          disabled={link.isPending}
-                          onClick={() => link.mutate({ page_id: pg.id })}
-                        >
-                          Link page
-                        </button>
-                      )}
+                      {surfaces.map((s) => (
+                        <span key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                          {s.linked ? (
+                            <button
+                              className="btn danger"
+                              disabled={savePage.isPending}
+                              onClick={() =>
+                                savePage.mutate(
+                                  s.label === 'Messenger' ? { page_id: '' } : { ig_page_id: '' },
+                                )
+                              }
+                            >
+                              Disconnect {s.label}
+                            </button>
+                          ) : s.own ? (
+                            <span className="muted">{s.label} on {s.own.name}</span>
+                          ) : s.bound ? (
+                            <span>
+                              <button
+                                className="btn"
+                                disabled={link.isPending}
+                                onClick={async () => {
+                                  if (
+                                    (await confirm(
+                                      `Take ${s.label} over from ${s.bound!.workspace_name}${s.bound!.owner_email ? ` (${s.bound!.owner_email})` : ''}? ${s.bound!.agent_name} loses it — inbound messages come here instead.`,
+                                      [
+                                        { key: 'ok', label: 'Take over' },
+                                        { key: 'cancel', label: 'Cancel' },
+                                      ],
+                                    )) === 'ok'
+                                  )
+                                    link.mutate({
+                                      page_id: pg.id,
+                                      surface: s.label === 'Messenger' ? 'messenger' : 'instagram',
+                                      takeover: true,
+                                    });
+                                }}
+                              >
+                                Take over
+                              </button>{' '}
+                              <span className="muted" style={{ fontSize: 12 }}>
+                                on {s.bound.workspace_name} · {s.bound.agent_name}
+                              </span>
+                            </span>
+                          ) : (
+                            <button
+                              className="btn"
+                              disabled={link.isPending}
+                              onClick={() =>
+                                link.mutate({
+                                  page_id: pg.id,
+                                  surface: s.label === 'Messenger' ? 'messenger' : 'instagram',
+                                })
+                              }
+                            >
+                              Connect {s.label}
+                            </button>
+                          )}
+                        </span>
+                      ))}
                     </div>
                   );
                 })}
               </div>
               <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-                Linking a Page covers Messenger and Instagram events for this channel.
+                Inbound events join the same conversation — Messenger and Instagram are linked
+                separately.
               </div>
             </>
           ) : null}

@@ -611,6 +611,7 @@ export const Channel = z.object({
   // non-secret identifiers + the verify token needed to register the webhook
   meta: z.object({
     page_id: z.string().optional(),
+    ig_page_id: z.string().optional(),
     phone_number_id: z.string().optional(),
     // instagram handle + whatsapp display number — public, used for launch links
     username: z.string().optional(),

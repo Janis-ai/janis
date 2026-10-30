@@ -177,6 +177,7 @@ const patchChannel = z.object({
   // chatfuel/manychat: the Page the bot fronts — lets Janis's Meta webhook
   // resolve this channel when the page is subscribed as a secondary receiver
   page_id: z.string().max(60).optional(),
+  ig_page_id: z.string().max(60).optional(),
   // meta channels: mint a fresh webhook verify token (backfills channels
   // created before auto-generation)
   regenerate_verify_token: z.literal(true).optional(),
@@ -643,6 +644,10 @@ export function channelApiRoutes(db: Db) {
     if (body.page_id !== undefined) {
       if (body.page_id === '') delete creds.page_id;
       else creds.page_id = body.page_id;
+    }
+    if (body.ig_page_id !== undefined) {
+      if (body.ig_page_id === '') delete creds.ig_page_id;
+      else creds.ig_page_id = body.ig_page_id;
     }
     const [updated] = await db
       .update(channels)
