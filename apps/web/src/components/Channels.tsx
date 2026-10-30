@@ -84,7 +84,12 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
     },
   });
   const link = useMutation({
-    mutationFn: (b: { page_id: string; surface?: 'messenger' | 'instagram'; takeover?: boolean }) =>
+    mutationFn: (b: {
+      page_id?: string;
+      phone_number_id?: string;
+      surface?: 'messenger' | 'instagram' | 'whatsapp';
+      takeover?: boolean;
+    }) =>
       api<{ channel: Channel }>('/api/meta/link', {
         method: 'POST',
         body: JSON.stringify({
@@ -291,9 +296,77 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                   );
                 })}
               </div>
+              {(pending.data.whatsapp ?? []).map((w) =>
+                w.phone_numbers.map((num) => {
+                  const linked = ch.meta.phone_number_id === num.id;
+                  const own = (chList?.channels ?? []).find(
+                    (x) => x.meta.phone_number_id === num.id && x.id !== ch.id,
+                  );
+                  return (
+                    <div key={num.id} className="asset-row">
+                      <div className="grow">
+                        <strong>{num.display_phone_number ?? w.name ?? num.id}</strong>
+                        <div className="muted">WhatsApp</div>
+                        {num.bound && !linked && !own && (
+                          <div className="muted" style={{ fontSize: 12 }}>
+                            on {num.bound.workspace_name} · {num.bound.agent_name}
+                            {num.bound.owner_email ? ` (${num.bound.owner_email})` : ''}
+                          </div>
+                        )}
+                      </div>
+                      {linked ? (
+                        <button
+                          className="btn danger"
+                          disabled={savePage.isPending}
+                          onClick={() => savePage.mutate({ phone_number_id: '' })}
+                        >
+                          Disconnect WhatsApp
+                        </button>
+                      ) : own ? (
+                        <span className="muted">WhatsApp on {own.name}</span>
+                      ) : num.bound ? (
+                        <button
+                          className="btn"
+                          disabled={link.isPending}
+                          onClick={async () => {
+                            if (
+                              (await confirm(
+                                `Take WhatsApp over from ${num.bound!.workspace_name}${num.bound!.owner_email ? ` (${num.bound!.owner_email})` : ''}? ${num.bound!.agent_name} loses it — inbound messages come here instead.`,
+                                [
+                                  { key: 'ok', label: 'Take over' },
+                                  { key: 'cancel', label: 'Cancel' },
+                                ],
+                              )) === 'ok'
+                            )
+                              link.mutate({
+                                phone_number_id: num.id,
+                                surface: 'whatsapp',
+                                takeover: true,
+                              });
+                          }}
+                        >
+                          Take over
+                        </button>
+                      ) : (
+                        <button
+                          className="btn"
+                          disabled={link.isPending}
+                          onClick={() =>
+                            link.mutate({
+                              phone_number_id: num.id,
+                              surface: 'whatsapp',
+                            })
+                          }
+                        >
+                          Connect WhatsApp
+                        </button>
+                      )}
+                    </div>
+                  );
+                }),
+              )}
               <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-                Inbound events join the same conversation — Messenger and Instagram are linked
-                separately.
+                Inbound events join the same conversation — each surface is linked separately.
               </div>
             </>
           ) : null}

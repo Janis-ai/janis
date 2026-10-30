@@ -178,6 +178,7 @@ const patchChannel = z.object({
   // resolve this channel when the page is subscribed as a secondary receiver
   page_id: z.string().max(60).optional(),
   ig_page_id: z.string().max(60).optional(),
+  phone_number_id: z.string().max(60).optional(),
   // meta channels: mint a fresh webhook verify token (backfills channels
   // created before auto-generation)
   regenerate_verify_token: z.literal(true).optional(),
@@ -648,6 +649,10 @@ export function channelApiRoutes(db: Db) {
     if (body.ig_page_id !== undefined) {
       if (body.ig_page_id === '') delete creds.ig_page_id;
       else creds.ig_page_id = body.ig_page_id;
+    }
+    if (body.phone_number_id !== undefined) {
+      if (body.phone_number_id === '') delete creds.phone_number_id;
+      else creds.phone_number_id = body.phone_number_id;
     }
     const [updated] = await db
       .update(channels)

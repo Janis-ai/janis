@@ -125,7 +125,7 @@ const linkBody = z.object({
   kind: z.enum(['messenger', 'instagram', 'whatsapp', 'chatfuel', 'manychat']),
   // Bot-platform channels bind Messenger and Instagram surfaces separately
   // (page_id vs ig_page_id creds) — which side this link is for.
-  surface: z.enum(['messenger', 'instagram']).optional(),
+  surface: z.enum(['messenger', 'instagram', 'whatsapp']).optional(),
   page_id: z.string().optional(),
   phone_number_id: z.string().optional(),
   // Take over a binding owned by another workspace — removes that channel
@@ -425,10 +425,10 @@ export function metaApiRoutes(db: Db) {
       verify_token: env.metaVerifyToken || randomBytes(16).toString('hex'),
     };
 
-    if (body.kind === 'whatsapp') {
+    if (body.kind === 'whatsapp' || body.surface === 'whatsapp') {
       const waba = p.wabas.find((w) => w.phone_numbers.some((n) => n.id === body.phone_number_id));
       const num = waba?.phone_numbers.find((n) => n.id === body.phone_number_id);
-      if (!num) return c.json({ error: 'phone number not found in discovered assets' }, 400);
+      if (!num || !waba) return c.json({ error: 'phone number not found in discovered assets' }, 400);
       name = num.display_phone_number ?? waba?.name ?? 'WhatsApp';
       credentials.phone_number_id = num.id;
       if (num.display_phone_number) {
@@ -440,6 +440,42 @@ export function metaApiRoutes(db: Db) {
 
       const conflict = await resolveConflict(num.id);
       if (conflict) return c.json(conflict.body, conflict.status as 409);
+
+      // Bot channels pre-exist from the Connect card — merge the WA creds on.
+      if (body.surface === 'whatsapp') {
+        name = `${body.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} (${name})`;
+        const [existing] = await db
+          .select()
+          .from(channels)
+          .where(and(eq(channels.agentId, agent.id), eq(channels.kind, body.kind)))
+          .limit(1);
+        const [row] = existing
+          ? await db
+              .update(channels)
+              .set({ credentials: { ...(existing.credentials as ChannelCredentials), ...credentials } })
+              .where(eq(channels.id, existing.id))
+              .returning()
+          : await db
+              .insert(channels)
+              .values({
+                workspaceId: c.get('workspaceId'),
+                agentId: agent.id,
+                kind: body.kind,
+                name,
+                credentials,
+              })
+              .returning();
+        if (existing) {
+          await db.update(channels).set({ name }).where(eq(channels.id, existing.id));
+        }
+        // WA subscriptions live on the WABA, not a page.
+        await fetch(`${GRAPH}/${waba.id}/subscribed_apps`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ access_token: userToken }),
+        }).catch(() => {});
+        return c.json({ channel: toChannel(row, agent.name) }, 201);
+      }
 
       const [row] = await db
         .insert(channels)
