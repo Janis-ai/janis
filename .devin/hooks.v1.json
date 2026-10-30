@@ -1,0 +1,11 @@
+{
+  "PreToolUse": [
+    { "matcher": "exec", "hooks": [{ "type": "command", "command": "python3 .devin/hooks/janis_guard.py", "timeout": 10 }] }
+  ],
+  "SessionStart": [
+    { "matcher": "", "hooks": [{ "type": "command", "command": "python3 .devin/hooks/janis_guard.py", "timeout": 5 }] }
+  ],
+  "Stop": [
+    { "matcher": "", "hooks": [{ "type": "command", "command": "python3 .devin/hooks/janis_guard.py", "timeout": 10 }] }
+  ]
+}

@@ -72,6 +72,13 @@ on a fresh clone). A red suite aborts the deploy/push. `SKIP_TESTS=1` is
 the emergency bypass — say why in the commit message. Commits themselves
 stay ungated so commit-every-turn stays cheap.
 
+Devin-side hooks (`.devin/hooks.v1.json` → `.devin/hooks/janis_guard.py`)
+block raw `gcloud run deploy` and refuse to end a turn while a deploy
+this session started is still running or died without `Deployed:` —
+"committed + deploying" is not a report. Global trunk-based-development
+hooks (staging by path, trailer, no force/amend/merge-commit on trunk,
+dirty-tree / unpushed nudge) live in `~/.config/devin/hooks/tbd_guard.py`.
+
 ## UI work discipline (learned 2026-10-30)
 
 - **Reuse before you build.** If an existing component already does most of
