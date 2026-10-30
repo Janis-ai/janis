@@ -960,7 +960,7 @@ drizzle-kit/workbox-build, nothing to drop directly).
   session-auth'd reads, p95<800ms / <1% errors thresholds; run against a
   preview revision, never prod at 150rps without warning. Read-only by
   design (writes pollute CRM write-back + billing meters).
-- Backup/restore runbook (Neon PITR exists — unrehearsed): rehearsal = Neon
+- Backup/restore runbook (Neon PITR rehearsed 2026-10-29 — drill in D24): rehearsal = Neon
   console → Branches → new branch "from a point in time" → psql into the
   branch endpoint, verify a known row (e.g. newest campaign_send) → delete
   branch. For real restores prefer branching + cutover over overwriting the
