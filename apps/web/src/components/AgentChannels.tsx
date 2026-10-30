@@ -1362,8 +1362,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             >
               Done
             </button>
-            <a href={`/api/meta/connect?agent=${agentId}`} onClick={() => dropParams('meta_connect')}>Switch account</a>
-            <button className="btn" onClick={() => disconnect.mutate()}>Disconnect</button>
+            <a className="btn" href={`/api/meta/connect?agent=${agentId}`} onClick={() => dropParams('meta_connect')}>Switch account</a>
+            <button className="btn danger" onClick={() => disconnect.mutate()}>Disconnect</button>
           </div>
           <div className="muted" style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
             Connecting a Page or number pipes its inbound messages into {agent.name}'s shared
