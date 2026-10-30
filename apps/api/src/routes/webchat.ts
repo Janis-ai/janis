@@ -1248,11 +1248,31 @@ export function webchatRoutes(db: Db) {
           ),
         );
       const [agent] = await db
-        .select({ workspaceId: agents.workspaceId })
+        .select()
         .from(agents)
         .where(eq(agents.id, created.agentId))
         .limit(1);
       if (agent) {
+        // A "new chat" conv used to sit at 0 messages until the visitor
+        // typed — blank rows in the inbox. Store the greeting the client
+        // is about to render as the first out message so the transcript is
+        // real from the start (and the inbox preview shows it).
+        const greeting = await resolveGreeting(channel, agent, undefined, { background: true }, db);
+        if (greeting) {
+          await db.insert(messages).values({
+            conversationId: created.id,
+            direction: 'out',
+            text: greeting,
+            // via:'greeting' marks the stored row — the widget dedupes its
+            // synthetic bootstrap greeting against it (same convention as
+            // the first-contact greeting ingress stores).
+            payload: { via: 'greeting' },
+          });
+          await db
+            .update(conversations)
+            .set({ lastMessageAt: new Date(), lastMessagePreview: greeting.slice(0, 140) })
+            .where(eq(conversations.id, created.id));
+        }
         bus.publish(agent.workspaceId, {
           type: 'conversation',
           data: { id: created.id, state: created.state },
