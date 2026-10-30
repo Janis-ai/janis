@@ -383,7 +383,11 @@ async function normalizeDialogflow(c: Context): Promise<Normalized> {
   };
 }
 
-const str = (v: unknown) => (v == null || v === '' ? undefined : String(v));
+// 'null'/'undefined' are serialized-absent too — bot cards send the literal
+// strings for unset attrs; treating them as real values made every inbound
+// from a misconfigured card fold into one shared chatfuel:null conv.
+const str = (v: unknown) =>
+  v == null || v === '' || v === 'null' || v === 'undefined' ? undefined : String(v);
 const num = (v: unknown) => {
   const n = Number(v);
   return Number.isFinite(n) && v != null && v !== '' ? n : undefined;
