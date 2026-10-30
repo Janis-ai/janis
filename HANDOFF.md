@@ -94,6 +94,22 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Widget end/new-chat fixes (the stuck ⋯ menu):** `/chat/:token/end|new|
+typing` never forwarded the signed identity claim, so an identified
+visitor's actions resolved the anonymous participant — `/end` faked
+'archived' on a conv it never touched, the poll reverted convState, and
+the ⋯ menu stayed on "End chat" forever. `/new` also updated (not
+upserted) the channel binding — a missing row (dies with an
+inbox-deleted conv, or never existed via the `u:` externalId fallback)
+meant every "Start a new chat" minted an orphan `…#<ts>` fork while the
+visitor stayed anchored to the archived base conv. Fixed: shared
+`visitorAction` schema carries the claim, `/end` reports real state and
+archives even `human`-owned threads (customer leaving wins over the
+operator-close rule — runs applyConvEffects for CSAT/hooks/Meta
+release), `/new` upserts the binding, widget.js sends the claim on all
+three calls, only draws the ended note on a real `archived` response,
+and offers "Start a new chat" whenever the ended note is rendered.
+
 **Bot-platform contract completed:** `lib/botPlatform.ts` is the single
 response builder — `buildBotResponse(flavor, {text, quickReplies,
 widgets, attachments, effects})` drives both the sync card reply and the
