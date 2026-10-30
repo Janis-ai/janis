@@ -406,8 +406,11 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           </span>
           <span className="details-sub">your bot's HTTP step calls this URL — the reply comes back in the response</span>
         </summary>
-        <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
-          {url ?? '…'}
+        <div style={{ marginTop: 8 }}>
+          <CodeBlock
+            title={ch.kind === 'chatfuel' ? 'JSON API card — POST this URL' : 'Dynamic request — POST this URL'}
+            code={url ?? '…'}
+          />
         </div>
         {ch.kind === 'chatfuel' ? (
           <ol className="muted" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.7, paddingLeft: 18 }}>
