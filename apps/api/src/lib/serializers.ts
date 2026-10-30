@@ -196,7 +196,9 @@ export function toMemberGroup(row: Row<typeof memberGroups>): MemberGroup {
 export function toChannel(row: Row<typeof channels>, agentName: string): Channel {
   const creds = (row.credentials ?? {}) as {
     page_id?: string;
+    page_name?: string;
     ig_page_id?: string;
+    ig_name?: string;
     phone_number_id?: string;
     username?: string;
     phone_number?: string;
@@ -266,13 +268,12 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     agent_name: agentName,
     meta: {
       page_id: creds.page_id,
+      page_name: creds.page_name,
       ig_page_id: creds.ig_page_id,
+      ig_name: creds.ig_name,
       phone_number_id: creds.phone_number_id,
       username: row.kind === 'instagram' ? creds.username : undefined,
-      phone_number:
-        row.kind === 'whatsapp' || row.kind === 'voice' || row.kind === 'sms'
-          ? creds.phone_number
-          : undefined,
+      phone_number: creds.phone_number,
       verify_token: creds.verify_token ?? '',
       via: creds.via === 'oauth' || creds.via === 'manual' ? creds.via : undefined,
       chat_url: channelChatUrl(row),

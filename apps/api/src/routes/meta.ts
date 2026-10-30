@@ -543,6 +543,7 @@ export function metaApiRoutes(db: Db) {
         : `IG (${page.name})`;
     } else {
       credentials.page_id = page.id;
+      credentials.page_name = page.name;
     }
     credentials.access_token = pageToken;
     const botKind = body.kind === 'chatfuel' || body.kind === 'manychat';
@@ -556,6 +557,7 @@ export function metaApiRoutes(db: Db) {
         // IG binds a different cred — leave any existing page_id untouched.
         delete credentials.page_id;
         credentials.ig_page_id = page.instagram_business_account.id;
+        credentials.ig_name = page.instagram_business_account.username ?? page.name;
         conflictId = credentials.ig_page_id;
       }
     }

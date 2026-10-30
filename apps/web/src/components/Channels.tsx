@@ -243,6 +243,14 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
     },
   });
   const [pageId, setPageId] = useState(ch.meta.page_id ?? '');
+  const [manageOpen, setManageOpen] = useState(false);
+  const linkedSurfaces = (
+    [
+      ['Facebook Page', ch.meta.page_name ?? ch.meta.page_id, 'page_id'],
+      ['Instagram', ch.meta.ig_name ?? ch.meta.ig_page_id, 'ig_page_id'],
+      ['WhatsApp', ch.meta.phone_number ?? ch.meta.phone_number_id, 'phone_number_id'],
+    ] as const
+  ).filter(([, v]) => Boolean(v));
   const savePage = useMutation({
     mutationFn: (body: Record<string, string>) =>
       api(`/api/channels/${ch.id}`, {
@@ -412,7 +420,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
         <div className="muted" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6 }}>
           <strong style={{ fontSize: 14 }}>Connect Meta first</strong>
           <div style={{ marginTop: 2 }}>
-            Link the Meta surface (Facebook Page, Instagram, or WhatsApp) your{' '}
+            Link the Meta account (Facebook Page, Instagram, or WhatsApp) your{' '}
             {ch.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} bot runs on. Janis needs
             Meta's webhook to see the whole conversation — not just the messages the bot
             forwards — so the agent answers with full context and handovers between the bot
@@ -517,39 +525,46 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
       </details>
       )}
       <div style={{ marginTop: 20, paddingTop: 8 }}>
-        <strong style={{ fontSize: 15 }}>Connect to Meta</strong>
-        <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
-          {metaConnected
-            ? 'Linked — Janis sees every message on this Meta surface, even ones your bot never forwards.'
-            : 'Pick the Meta surface your bot runs on — the setup steps unlock once it\u2019s linked.'}
+        <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+          <strong style={{ fontSize: 15 }}>Connect to Meta</strong>
+          {metaConnected && (
+            <button
+              className="btn"
+              style={{ padding: '2px 12px', fontSize: 12 }}
+              onClick={() => setManageOpen((v) => !v)}
+            >
+              {manageOpen ? 'Hide' : 'Manage'}
+            </button>
+          )}
         </div>
-        {metaConnected && (
-          <div style={{ marginTop: 8, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {(
-              [
-                ['Facebook Page', ch.meta.page_id, 'page_id'],
-                ['Instagram', ch.meta.ig_page_id, 'ig_page_id'],
-                ['WhatsApp', ch.meta.phone_number_id, 'phone_number_id'],
-              ] as const
-            )
-              .filter(([, v]) => Boolean(v))
-              .map(([label, id, key]) => (
-                <div key={key} className="row" style={{ gap: 8, alignItems: 'center' }}>
-                  <span className="muted">{label}</span>
-                  <span className="mono" style={{ fontSize: 12 }}>{id}</span>
-                  <button
-                    className="btn"
-                    style={{ padding: '2px 10px', fontSize: 12 }}
-                    disabled={savePage.isPending}
-                    onClick={() => savePage.mutate({ [key]: '' })}
-                  >
-                    Unlink
-                  </button>
-                </div>
-              ))}
+        {metaConnected ? (
+          <div style={{ marginTop: 6, fontSize: 13, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {linkedSurfaces.map(([label, id, key]) => (
+              <div key={key} className="row" style={{ gap: 8, alignItems: 'center' }}>
+                <span className="muted">{label}</span>
+                <span>{id}</span>
+                <button
+                  className="btn"
+                  style={{ padding: '2px 10px', fontSize: 12 }}
+                  disabled={savePage.isPending}
+                  onClick={() => savePage.mutate({ [key]: '' })}
+                >
+                  Disconnect
+                </button>
+              </div>
+            ))}
+            <div className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>
+              Linked — Janis sees every message here, even ones your bot never forwards.
+            </div>
+          </div>
+        ) : (
+          <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+            Pick the Meta account your bot runs on — the setup steps unlock once it&rsquo;s
+            linked.
           </div>
         )}
-        {pending.isError ? (
+        {(!metaConnected || manageOpen) &&
+          (pending.isError ? (
           <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
             Couldn't load your Pages — try again later.
           </div>
@@ -563,7 +578,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
             <a className="btn" href={`/api/meta/connect?agent=${ch.agent_id}`}>
               Connect Meta
             </a>{' '}
-            to pick your Meta surface — or paste its ID manually:
+            to pick your Meta account — or paste its ID manually:
             <div className="row" style={{ marginTop: 8, gap: 8 }}>
               <input
                 placeholder="Facebook Page ID"
@@ -571,7 +586,17 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                 onChange={(e) => setPageId(e.target.value)}
                 style={{ flex: 1 }}
               />
-              <button className="btn" disabled={savePage.isPending} onClick={() => savePage.mutate({ page_id: pageId.trim() })}>
+              <button
+                className="btn"
+                disabled={savePage.isPending}
+                onClick={() =>
+                  savePage.mutate({
+                    page_id: pageId.trim(),
+                    page_name:
+                      pending.data?.pages?.find((p) => p.id === pageId.trim())?.name ?? '',
+                  })
+                }
+              >
                 Save
               </button>
             </div>
@@ -586,7 +611,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           </div>
         ) : pending.data ? (
           <MetaAssetList rows={assetRows} />
-        ) : null}
+        ) : null)}
         {link.error && (
           <div className="error" style={{ marginTop: 6, fontSize: 12 }}>{link.error.message}</div>
         )}

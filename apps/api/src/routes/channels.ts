@@ -177,7 +177,9 @@ const patchChannel = z.object({
   // chatfuel/manychat: the Page the bot fronts — lets Janis's Meta webhook
   // resolve this channel when the page is subscribed as a secondary receiver
   page_id: z.string().max(60).optional(),
+  page_name: z.string().max(120).optional(),
   ig_page_id: z.string().max(60).optional(),
+  ig_name: z.string().max(120).optional(),
   phone_number_id: z.string().max(60).optional(),
   // manychat: api.manychat.com bearer token — lets Janis push replies
   // server-side (operator sends, replies past the card's sync window);
@@ -650,16 +652,28 @@ export function channelApiRoutes(db: Db) {
       }
     }
     if (body.page_id !== undefined) {
-      if (body.page_id === '') delete creds.page_id;
-      else creds.page_id = body.page_id;
+      if (body.page_id === '') {
+        delete creds.page_id;
+        delete creds.page_name;
+      } else creds.page_id = body.page_id;
     }
     if (body.ig_page_id !== undefined) {
-      if (body.ig_page_id === '') delete creds.ig_page_id;
-      else creds.ig_page_id = body.ig_page_id;
+      if (body.ig_page_id === '') {
+        delete creds.ig_page_id;
+        delete creds.ig_name;
+      } else creds.ig_page_id = body.ig_page_id;
     }
     if (body.phone_number_id !== undefined) {
       if (body.phone_number_id === '') delete creds.phone_number_id;
       else creds.phone_number_id = body.phone_number_id;
+    }
+    if (body.page_name !== undefined) {
+      if (body.page_name === '') delete creds.page_name;
+      else creds.page_name = body.page_name;
+    }
+    if (body.ig_name !== undefined) {
+      if (body.ig_name === '') delete creds.ig_name;
+      else creds.ig_name = body.ig_name;
     }
     if (body.manychat_token !== undefined) {
       const t = body.manychat_token.trim();

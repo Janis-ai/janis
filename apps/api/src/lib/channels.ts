@@ -26,7 +26,9 @@ type ChannelRow = typeof channels.$inferSelect;
 export interface ChannelCredentials {
   via?: 'oauth' | 'manual' | 'legacy'; // how the channel was created
   page_id?: string; // messenger / instagram
+  page_name?: string; // display name for the linked Meta page
   ig_page_id?: string; // instagram feed on a bot-platform channel
+  ig_name?: string; // display name for the linked instagram account
   // migrated legacy bots: a page-inbox human reply (standby echo) pauses the
   // bot; the pause lapses after takeover_timeout minutes (legacy ~5)
   takeover_from_page_inbox?: boolean;
