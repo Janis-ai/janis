@@ -84,7 +84,6 @@ export function MetaAssetList({ rows }: { rows: AssetRow[] }) {
                       `Disconnect ${s.label} from ${r.title}? Inbound messages stop arriving — re-link anytime.`,
                       [
                         { key: 'ok', label: 'Disconnect', danger: true },
-                        { key: 'cancel', label: 'Cancel' },
                       ],
                     )) === 'ok'
                   )
@@ -106,7 +105,6 @@ export function MetaAssetList({ rows }: { rows: AssetRow[] }) {
                         `Take ${s.label} over from ${s.bound!.workspace_name}${s.bound!.owner_email ? ` (${s.bound!.owner_email})` : ''}? ${s.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
                         [
                           { key: 'ok', label: 'Take over', danger: true },
-                          { key: 'cancel', label: 'Cancel' },
                         ],
                       )) === 'ok'
                     )
