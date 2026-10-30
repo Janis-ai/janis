@@ -140,29 +140,34 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           </span>
         </summary>
         <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
-          In your Meta app (developers.facebook.com → Messenger → Webhooks), subscribe the Page with:
-          <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
-            <div>URL: {apiOrigin}/channels/meta/webhook</div>
-            <div>Verify token: {ch.meta.verify_token ?? '—'}</div>
-          </div>
-          {!session.data?.connected ? (
-            <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-              <a className="btn" href={`/api/meta/connect?agent=${ch.agent_id}`}>
-                Connect Meta
-              </a>{' '}
-              to pick your Page — or paste its ID manually:
-              <div className="row" style={{ marginTop: 8, gap: 8 }}>
-                <input
-                  placeholder="Facebook Page ID"
-                  value={pageId}
-                  onChange={(e) => setPageId(e.target.value)}
-                  style={{ flex: 1 }}
-                />
-                <button className="btn" disabled={savePage.isPending} onClick={() => savePage.mutate()}>
-                  Save
-                </button>
+          {session.isPending || (connectId && pending.isPending) ? (
+            <div className="muted" style={{ marginTop: 8 }}>Loading Pages…</div>
+          ) : !session.data?.connected ? (
+            <>
+              In your Meta app (developers.facebook.com → Messenger → Webhooks), subscribe the Page
+              with:
+              <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
+                <div>URL: {apiOrigin}/channels/meta/webhook</div>
+                <div>Verify token: {ch.meta.verify_token ?? '—'}</div>
               </div>
-            </div>
+              <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+                <a className="btn" href={`/api/meta/connect?agent=${ch.agent_id}`}>
+                  Connect Meta
+                </a>{' '}
+                to pick your Page — or paste its ID manually:
+                <div className="row" style={{ marginTop: 8, gap: 8 }}>
+                  <input
+                    placeholder="Facebook Page ID"
+                    value={pageId}
+                    onChange={(e) => setPageId(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <button className="btn" disabled={savePage.isPending} onClick={() => savePage.mutate()}>
+                    Save
+                  </button>
+                </div>
+              </div>
+            </>
           ) : pending.data ? (
             <>
               <div className="asset-list" style={{ marginTop: 8 }}>
