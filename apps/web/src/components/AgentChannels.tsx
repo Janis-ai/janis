@@ -461,8 +461,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         : 'free',
     bound,
     ownLabel: boundCh ? `${label} on ${boundCh.agent_name}` : undefined,
-    connectLabel: `Connect ${label}`,
-    disconnectLabel: `Disconnect ${label}`,
+    connectLabel: 'Connect',
+    disconnectLabel: 'Disconnect',
     onConnect: (takeover) => link.mutate({ ...payload, takeover } as never),
     // the shared list already confirms — call the mutation directly
     onDisconnect: boundCh ? () => removeChannel.mutate(boundCh.id) : undefined,
@@ -477,7 +477,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         {
           key: `${pg.id}:m`,
           title: pg.name,
-          sub: 'Facebook Page · Messenger',
+          href: `https://facebook.com/${pg.id}`,
+          sub: 'Messenger',
           extra:
             msgr && msgr.agent_id === agentId && launchUrl(msgr) ? (
               <a href={launchUrl(msgr)} target="_blank" rel="noreferrer">
@@ -494,7 +495,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
         rows.push({
           key: `${pg.id}:i`,
           title: pg.name,
-          sub: `Facebook Page · Instagram${ig.username ? ` @${ig.username}` : ''}`,
+          href: `https://facebook.com/${pg.id}`,
+          sub: `Instagram${ig.username ? ` @${ig.username}` : ''}`,
           extra:
             igCh && igCh.agent_id === agentId && launchUrl(igCh) ? (
               <a href={launchUrl(igCh)} target="_blank" rel="noreferrer">
@@ -1352,7 +1354,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       {connectId && pickerOpen && (
         <div className="card connect-card" style={{ marginTop: 20 }}>
           <div className="row">
-            <strong className="grow" style={{ fontSize: 15 }}>Link your Meta surfaces</strong>
+            <strong className="grow" style={{ fontSize: 15 }}>Connect to Meta</strong>
             <button
               className="btn"
               onClick={() => {
@@ -1364,10 +1366,6 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             </button>
             <a className="btn" href={`/api/meta/connect?agent=${agentId}`} onClick={() => dropParams('meta_connect')}>Switch account</a>
             <button className="btn danger" onClick={() => disconnect.mutate()}>Disconnect</button>
-          </div>
-          <div className="muted" style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
-            Connecting a Page or number pipes its inbound messages into {agent.name}'s shared
-            inbox — the agent answers, and the team can take over any conversation.
           </div>
           {pending.isLoading && (
             <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>

@@ -55,7 +55,9 @@ export interface AssetSurface {
 export interface AssetRow {
   key: string;
   title: string;
-  /** e.g. 'Facebook Page · Messenger' */
+  /** External profile link (facebook.com/<id>, instagram.com/<user>) */
+  href?: string;
+  /** e.g. 'Messenger' or 'Instagram' */
   sub: string;
   extra?: ReactNode;
   surface: AssetSurface;
@@ -70,7 +72,13 @@ export function MetaAssetList({ rows }: { rows: AssetRow[] }) {
         return (
           <div key={r.key} className="asset-row">
             <div className="grow">
-              <strong>{r.title}</strong>
+              <strong>
+                {r.href ? (
+                  <a href={r.href} target="_blank" rel="noreferrer">{r.title}</a>
+                ) : (
+                  r.title
+                )}
+              </strong>
               <div className="muted">{r.sub}</div>
               {r.extra}
             </div>
@@ -247,20 +255,14 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           until it's handed back.
         </div>
       </details>
-      <details
-        className="webhook-details"
-        open
-        style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}
-      >
-        <summary>
-          <span className="details-title" style={{ fontSize: 14 }}>Link your Meta surfaces</span>
-          <span className="details-sub">
-            optional — inbound messages on linked surfaces land in this agent's shared inbox, even
-            when the bot doesn't forward them
-          </span>
-        </summary>
+      <div style={{ marginTop: 20, paddingTop: 8 }}>
+        <strong style={{ fontSize: 15 }}>Connect to Meta</strong>
+        <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+          Optional — link your Facebook Page or Instagram account so Janis sees every message,
+          even ones your bot never forwards.
+        </div>
         <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
-          {session.isPending || (connectId && pending.isPending && !pending.data) ? (
+          {session.isPending || (session.data?.connected && !pending.data) ? (
             <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 10 }}>
               {[0, 1, 2].map((i) => (
                 <span key={i} className="nav-skel" style={{ width: `${70 - i * 15}%` }} />
@@ -307,7 +309,8 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                     const msgr: AssetRow = {
                       key: `${pg.id}:m`,
                       title: pg.name,
-                      sub: 'Facebook Page · Messenger',
+                      href: `https://facebook.com/${pg.id}`,
+                      sub: 'Messenger',
                       surface: {
                         key: `${pg.id}:m`,
                         label: 'Messenger',
@@ -320,8 +323,8 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                               : 'free',
                         bound: pg.bound,
                         ownLabel: `Messenger on ${msgrOwn?.name}`,
-                        connectLabel: 'Connect Messenger',
-                        disconnectLabel: 'Disconnect Messenger',
+                        connectLabel: 'Connect',
+                        disconnectLabel: 'Disconnect',
                         onConnect: (takeover: boolean) =>
                           link.mutate({ page_id: pg.id, surface: 'messenger', takeover }),
                         onDisconnect: () => savePage.mutate({ page_id: '' }),
@@ -335,7 +338,8 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                       rows.push({
                         key: `${pg.id}:i`,
                         title: pg.name,
-                        sub: `Facebook Page · Instagram${ig.username ? ` @${ig.username}` : ''}`,
+                        href: `https://facebook.com/${pg.id}`,
+                        sub: `Instagram${ig.username ? ` @${ig.username}` : ''}`,
                         surface: {
                           key: `${pg.id}:i`,
                           label: 'Instagram',
@@ -348,8 +352,8 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                                 : 'free',
                           bound: ig.bound,
                           ownLabel: `Instagram on ${igOwn?.name}`,
-                          connectLabel: `Connect Instagram${ig.username ? ` @${ig.username}` : ''}`,
-                          disconnectLabel: 'Disconnect Instagram',
+                          connectLabel: 'Connect',
+                          disconnectLabel: 'Disconnect',
                           onConnect: (takeover: boolean) =>
                             link.mutate({ page_id: pg.id, surface: 'instagram', takeover }),
                           onDisconnect: () => savePage.mutate({ ig_page_id: '' }),
@@ -378,8 +382,8 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                               : 'free',
                         bound: num.bound,
                         ownLabel: `WhatsApp on ${waOwn?.name}`,
-                        connectLabel: 'Connect WhatsApp',
-                        disconnectLabel: 'Disconnect WhatsApp',
+                        connectLabel: 'Connect',
+                        disconnectLabel: 'Disconnect',
                         onConnect: (takeover: boolean) =>
                           link.mutate({ phone_number_id: num.id, surface: 'whatsapp', takeover }),
                         onDisconnect: () => savePage.mutate({ phone_number_id: '' }),
@@ -406,7 +410,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           messages join the same conversation, and a human replying in Page Inbox pauses the agent
           here too.
         </div>
-      </details>
+      </div>
     </>
   );
 }
