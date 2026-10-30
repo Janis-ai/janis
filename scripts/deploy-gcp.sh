@@ -36,6 +36,11 @@ PROJECT_NUMBER=$(gcloud projects describe "$PROJECT" --format='value(projectNumb
 export PROJECT PROJECT_NUMBER BASE
 BASE="https://${SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"
 
+# Gate: typecheck + api/web suites must be green before we spend a build.
+# The post-deploy probe only proves the container answers — it can't catch
+# a broken feature. SKIP_TESTS=1 bypasses for emergencies.
+./scripts/preflight.sh
+
 gcloud builds submit --config cloudbuild.yaml --project "$PROJECT"
 
 python3 - <<'PY'

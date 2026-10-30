@@ -64,6 +64,14 @@ just the email. Sessions kept skipping it (reconciled from git log
    Note: `/` is the public landing even when authed — smoke probes must hit
    console routes (/conversations, /ask), not `/`.
 
+Steps 1–2 are ENFORCED (added 2026-10-30): `scripts/preflight.sh` runs
+typecheck + api + web suites (~65s) and gates both `deploy-gcp.sh` (before
+the Cloud Build) and `git push` (`.githooks/pre-push`, installed by root
+`npm run prepare` → `core.hooksPath .githooks`; run `npm run prepare` once
+on a fresh clone). A red suite aborts the deploy/push. `SKIP_TESTS=1` is
+the emergency bypass — say why in the commit message. Commits themselves
+stay ungated so commit-every-turn stays cheap.
+
 ## UI work discipline (learned 2026-10-30)
 
 - **Reuse before you build.** If an existing component already does most of

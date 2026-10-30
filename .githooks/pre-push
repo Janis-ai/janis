@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Runs the same gate as deploy-gcp.sh before anything leaves the machine.
+# Installed via `git config core.hooksPath .githooks` (root `npm run prepare`).
+# Bypass once with SKIP_TESTS=1 git push, or --no-verify.
+exec "$(git rev-parse --show-toplevel)/scripts/preflight.sh"

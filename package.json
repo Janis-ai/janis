@@ -16,7 +16,9 @@
     "test": "npm run test -w apps/api",
     "test:ui": "node scripts/ui/smoke.mjs",
     "db:generate": "npm run db:generate -w apps/api",
-    "demo-agent": "npm run demo-agent -w apps/api"
+    "demo-agent": "npm run demo-agent -w apps/api",
+    "prepare": "git config core.hooksPath .githooks",
+    "preflight": "./scripts/preflight.sh"
   },
   "devDependencies": {
     "playwright": "^1.64.0"
