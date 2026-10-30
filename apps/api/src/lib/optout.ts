@@ -89,15 +89,7 @@ export async function applySmsOpt(
 
   let convId = existing?.conversationId;
   if (!convId) {
-    const [conv] = await db
-      .insert(conversations)
-      .values({ agentId: channel.agentId, externalId, userProfile: profile })
-      .returning();
-    convId = conv.id;
-    emitHookEvent(db, channel.agentId, 'new_conversation', conv);
-    await db
-      .insert(channelBindings)
-      .values({ channelId: channel.id, conversationId: convId, platformUserId: from });
+    convId = (await seedSmsThread(db, channel, from, profile)).convId;
   }
 
   await db.insert(messages).values({
@@ -281,14 +273,39 @@ async function seedSmsThread(
   from: string,
   profile: UserProfile,
 ): Promise<{ convId: string }> {
-  const [conv] = await db
-    .insert(conversations)
-    .values({ agentId: channel.agentId, externalId: `sms:${from}`, userProfile: profile })
-    .returning();
-  emitHookEvent(db, channel.agentId, 'new_conversation', conv);
-  await db
-    .insert(channelBindings)
-    .values({ channelId: channel.id, conversationId: conv.id, platformUserId: from });
+  // The conversation may exist without a binding on THIS channel — an
+  // older channel's thread survives its channel (the binding doesn't), or
+  // the thread predates this channel entirely. Reuse it: a blind insert
+  // 500s on conversations_agent_external.
+  const externalId = `sms:${from}`;
+  let [conv] = await db
+    .select()
+    .from(conversations)
+    .where(and(eq(conversations.agentId, channel.agentId), eq(conversations.externalId, externalId)))
+    .limit(1);
+  if (!conv) {
+    const [created] = await db
+      .insert(conversations)
+      .values({ agentId: channel.agentId, externalId, userProfile: profile })
+      .returning();
+    conv = created;
+    emitHookEvent(db, channel.agentId, 'new_conversation', conv);
+  }
+  const [existingBinding] = await db
+    .select({ channelId: channelBindings.channelId })
+    .from(channelBindings)
+    .where(
+      and(
+        eq(channelBindings.channelId, channel.id),
+        eq(channelBindings.platformUserId, from),
+      ),
+    )
+    .limit(1);
+  if (!existingBinding) {
+    await db
+      .insert(channelBindings)
+      .values({ channelId: channel.id, conversationId: conv.id, platformUserId: from });
+  }
   const contactId = await contactForBinding(db, {
     workspaceId: channel.workspaceId, channelId: channel.id, platformUserId: from, profile,
   });

@@ -403,3 +403,27 @@ describe('SMS double opt-in gate', () => {
     expect(ident?.smsOptedInAt).toBeNull();
   });
 });
+
+describe('SMS gate — conv exists without a binding', () => {
+  it('reuses the orphaned conversation instead of 500ing on the unique key', async () => {
+    const ORPHAN = '+15557770505';
+    // Conv predates this channel (old channel deleted → binding went with it).
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId, externalId: `sms:${ORPHAN}`, userProfile: { id: ORPHAN } })
+      .returning();
+    const res = await post(`/sms/${channel.id}`, {
+      MessageSid: 'SM-O1', From: ORPHAN, To: '+15550001111', Body: 'am I in trouble',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('Reply YES to confirm');
+    // parked on the EXISTING conv, one binding, no second conversation
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(msgs.some((m) => m.text === 'am I in trouble')).toBe(true);
+    const convs = await db
+      .select()
+      .from(conversations)
+      .where(and(eq(conversations.agentId, agentId), eq(conversations.externalId, `sms:${ORPHAN}`)));
+    expect(convs).toHaveLength(1);
+  });
+});
