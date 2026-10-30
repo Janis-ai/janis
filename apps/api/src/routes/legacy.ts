@@ -310,7 +310,7 @@ function chatfuelAttrs(raw: Record<string, unknown>): Record<string, unknown> {
 export async function normalizeChatfuel(c: Context): Promise<Normalized> {
   const raw = await rawParams(c);
   const userId = str(raw['messenger user id'] ?? raw['chatfuel user id']);
-  const text = USER_INPUT_KEYS.map((k) => raw[k]).find((v) => v != null && v !== '');
+  const text = str(USER_INPUT_KEYS.map((k) => raw[k]).find((v) => v != null && v !== ''));
   const ev = str(raw.dfEvent ?? raw.event);
   const ctxNames = str(raw.dfContext ?? raw.context);
   const lifespan = num(raw.dfLifespan ?? raw['context lifespan']);
@@ -341,13 +341,12 @@ export async function normalizeChatfuel(c: Context): Promise<Normalized> {
 
 export async function normalizeManychat(c: Context): Promise<{ norm: Normalized; subscriberId?: string }> {
   const b = await rawParams(c);
-  const subscriberId = b.id != null ? String(b.id) : undefined;
+  const subscriberId = str(b.id);
   const custom = (b.custom_fields ?? {}) as Record<string, unknown>;
-  const text =
-    (custom['user input'] != null && custom['user input'] !== '' ? custom['user input'] : b['last_input_text']) as
-      | string
-      | undefined;
-  const ev = custom['event'] != null && custom['event'] !== '' ? String(custom['event']) : undefined;
+  const text = str(
+    custom['user input'] != null && custom['user input'] !== '' ? custom['user input'] : b['last_input_text'],
+  );
+  const ev = str(custom['event']);
   const tags = Array.isArray(b.tags) ? (b.tags as { name?: string }[]) : [];
   const params: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(b)) {
