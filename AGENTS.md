@@ -409,6 +409,13 @@ drizzle-kit/workbox-build, nothing to drop directly).
     + widget article embeds (bootstrap help_suggestions = top-viewed
     published articles; tappable cards under the greeting on an empty
     transcript, gated by show_help_link).
+
+    BONUS (same pattern, Mike-requested): agent INSTRUCTIONS version
+    history — agent_instruction_revisions snapshots system_prompt/
+    greeting/quick_replies on every content-changing config PATCH;
+    GET/POST restore endpoints; collapsible Version history inside the
+    Instructions card. Restore is admin-gated and merges guidance
+    fields only (unrelated config untouched).
 30. Rate-limit tail — inbound webchat per-(channel,visitor) throttle DONE
     (POST /chat/:token/messages, dbRateLimit); still open: widget CAPTCHA
     after N, blocklist, per-plan tiers.
