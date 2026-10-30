@@ -1386,7 +1386,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .connect-card { border-color: var(--accent-dim); }
 .asset-list { margin-top: 10px; }
 .asset-row {
-  display: flex; align-items: center; gap: 10px; padding: 10px 0;
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 0;
   border-top: 1px solid var(--border);
 }
 /* Foreign-bound asset action — Take over button with the owning

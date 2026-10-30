@@ -69,6 +69,23 @@ export interface AssetRow {
 
 export function MetaAssetList({ rows }: { rows: AssetRow[] }) {
   const [confirmEl, confirm] = useConfirm();
+  const boundNote = (info: {
+    agent_name: string;
+    workspace_name: string;
+    owner_email?: string | null;
+  }) => (
+    <span className="muted asset-bound-note">
+      Agent: {info.agent_name}
+      <br />
+      Workspace: {info.workspace_name}
+      {info.owner_email ? (
+        <>
+          <br />
+          Owner: <a href={`mailto:${info.owner_email}`}>{info.owner_email}</a>
+        </>
+      ) : null}
+    </span>
+  );
   return (
     <div className="asset-list" style={{ marginTop: 8 }}>
       {rows.map((r) => {
@@ -130,29 +147,13 @@ export function MetaAssetList({ rows }: { rows: AssetRow[] }) {
                   Take over
                 </button>
                 {takeoverInfo ? (
-                  <span className="muted asset-bound-note">
-                    Agent: {takeoverInfo.agent_name}
-                    <br />
-                    Workspace: {takeoverInfo.workspace_name}
-                    {takeoverInfo.owner_email ? (
-                      <>
-                        <br />
-                        Owner: {takeoverInfo.owner_email}
-                      </>
-                    ) : null}
-                  </span>
+                  boundNote(takeoverInfo)
                 ) : s.ownLabel ? (
                   <span className="muted asset-bound-note">{s.ownLabel}</span>
                 ) : null}
               </div>
             ) : s.state === 'bound' && s.bound ? (
-              <span
-                className="muted"
-                title={`bound to ${s.bound.agent_name} on ${s.bound.workspace_name}`}
-              >
-                from {s.bound.workspace_name}/{s.bound.agent_name}
-                {s.bound.owner_email ? ` (${s.bound.owner_email})` : ''}
-              </span>
+              <div className="asset-bound">{boundNote(s.bound)}</div>
             ) : (
               <button className="btn" disabled={s.busy} onClick={() => s.onConnect(false)}>
                 {s.connectLabel}
@@ -468,21 +469,11 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
             </div>
           </div>
         ) : pending.data ? (
-          <>
-            <MetaAssetList rows={assetRows} />
-            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-              Inbound events join the same conversation — each surface is linked separately.
-            </div>
-          </>
+          <MetaAssetList rows={assetRows} />
         ) : null}
         {link.error && (
           <div className="error" style={{ marginTop: 6, fontSize: 12 }}>{link.error.message}</div>
         )}
-        <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
-          Janis listens as a <em>secondary receiver</em> — the bot stays in control; inbound
-          messages join the same conversation, and a human replying in Page Inbox pauses the agent
-          here too.
-        </div>
       </div>
     </>
   );
