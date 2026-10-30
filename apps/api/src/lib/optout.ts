@@ -19,9 +19,9 @@ type ChannelRow = typeof channels.$inferSelect;
 /** CTIA keywords — whole-message match only ("stop" inside a sentence is
  *  not an opt-out). STOP-group → suppress; START-group → resubscribe;
  *  HELP → deterministic help reply (no state change). */
-const OPT_OUT = new Set(['stop', 'stopall', 'unsubscribe', 'cancel', 'end', 'quit']);
-const OPT_IN = new Set(['start', 'unstop']);
-const HELP = new Set(['help']);
+const OPT_OUT = new Set(['stop', 'stopall', 'unsubscribe', 'cancel', 'end', 'quit', 'opt out', 'optout', 'opt-out']);
+const OPT_IN = new Set(['start', 'unstop', 'subscribe']);
+const HELP = new Set(['help', 'info']);
 
 export function smsOptKeyword(text: string): 'out' | 'in' | 'help' | null {
   const t = text.trim().toLowerCase().replace(/[.!?\s]+$/, '');
