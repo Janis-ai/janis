@@ -647,7 +647,8 @@ export function ContactDetail() {
             // Two provenance tiers: `claimed` is what the visitor stated in
             // chat (save_user_profile facts); other top-level keys are
             // system-asserted traits (API push, future CRM syncs).
-            const { claimed, learned, ...system } = c.metadata ?? {};
+            const { claimed, learned, account, ...system } = c.metadata ?? {};
+            const acct = account as { workspace?: string; role?: string; plan?: string } | undefined;
             const sysKeys = Object.entries(system).filter(([, v]) => v != null && typeof v !== 'object');
             const l = learned as {
               summary?: string; job_title?: string; company?: string;
@@ -670,6 +671,12 @@ export function ContactDetail() {
                     {sysKeys.map(([k, v]) => (
                       <div key={k}>{k}: {String(v)}</div>
                     ))}
+                  </div>
+                )}
+                {!!acct && (
+                  <div style={{ marginTop: 6 }}>
+                    <span className="muted">Account:</span>{' '}
+                    {[acct.workspace, acct.role, acct.plan ? `${acct.plan} plan` : ''].filter(Boolean).join(' · ')}
                   </div>
                 )}
                 {!!(l?.summary || learnedRows.length) && (

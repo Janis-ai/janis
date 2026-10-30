@@ -5,9 +5,10 @@
  *  interests, durable facts — landed under metadata.learned so it never
  *  clobbers operator-entered fields or claimed traits. Runs from the
  *  sweep, bounded per tick so LLM cost stays a trickle. */
-import { desc, eq, sql } from 'drizzle-orm';
-import { agents, contacts, conversations, messages } from '../db/schema.js';
+import { and, desc, eq, isNotNull, sql } from 'drizzle-orm';
+import { agents, contacts, conversations, memberships, messages, workspaces } from '../db/schema.js';
 import { llmFor } from './llm.js';
+import { effectivePlanKey } from './plans.js';
 import { recordLlmUsage } from './usage.js';
 import type { Db } from '../db/client.js';
 
@@ -94,6 +95,26 @@ export async function consolidateConversationContact(db: Db, convId: string): Pr
   const has = Object.values(learned).some((v) =>
     Array.isArray(v) ? v.length > 0 : Boolean(v),
   );
+  // Verified account context — a signed-in visitor's identity is fact, not
+  // inference: which workspace they're in, their role, and its plan land
+  // under metadata.account (separate from transcript-derived `learned`).
+  const prof = (conv.userProfile ?? {}) as { identity_verified?: boolean; external_id?: string };
+  let account: Record<string, unknown> | undefined;
+  if (prof.identity_verified && prof.external_id) {
+    const [m] = await db
+      .select({ ws: workspaces.name, wsId: memberships.workspaceId, role: memberships.role })
+      .from(memberships)
+      .innerJoin(workspaces, eq(memberships.workspaceId, workspaces.id))
+      .where(and(eq(memberships.userId, prof.external_id), isNotNull(memberships.acceptedAt)))
+      .limit(1);
+    if (m) {
+      account = {
+        workspace: m.ws,
+        role: m.role,
+        plan: await effectivePlanKey(db, m.wsId),
+      };
+    }
+  }
   await db
     .update(contacts)
     .set({
@@ -105,6 +126,15 @@ export async function consolidateConversationContact(db: Db, convId: string): Pr
       updatedAt: new Date(),
     })
     .where(eq(contacts.id, conv.contactId));
+  if (account) {
+    await db
+      .update(contacts)
+      .set({
+        metadata: sql`jsonb_set(${contacts.metadata}, '{account}', ${JSON.stringify(account)}::jsonb, true)`,
+        updatedAt: new Date(),
+      })
+      .where(eq(contacts.id, conv.contactId));
+  }
   return has;
 }
 
