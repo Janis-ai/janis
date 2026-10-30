@@ -251,6 +251,9 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
   });
   const url = data?.urls[ch.kind as 'chatfuel' | 'manychat'];
+  // Bot-platform setup is gated on the Meta link: the Page webhook is what
+  // gives the agent the whole thread, not just card-forwarded turns.
+  const metaConnected = Boolean(ch.meta.page_id || ch.meta.ig_page_id);
   const { data: me } = useMe();
   // A surface bound to a sibling channel in THIS workspace — takeover info
   // for the caption under Take over (bound rows carry it from the API).
@@ -400,6 +403,21 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
       ];
   return (
     <>
+      {!metaConnected && (
+        <div className="muted" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6 }}>
+          <strong style={{ fontSize: 14 }}>Connect your Page first</strong>
+          <div style={{ marginTop: 2 }}>
+            Link the Facebook Page or Instagram your{' '}
+            {ch.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} bot runs on. Janis needs the
+            Page's webhook to see the whole conversation — not just the messages the bot
+            forwards — so the agent answers with full context and handovers between the bot
+            and your team work both ways. The{' '}
+            {ch.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} setup steps appear once it's
+            linked.
+          </div>
+        </div>
+      )}
+      {metaConnected && (
       <details className="webhook-details" open style={{ marginTop: 8 }}>
         <summary>
           <span className="details-title">
@@ -492,11 +510,13 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
         </div>
         {ch.kind === 'manychat' && <ManyChatTokenField channel={ch} />}
       </details>
+      )}
       <div style={{ marginTop: 20, paddingTop: 8 }}>
         <strong style={{ fontSize: 15 }}>Connect to Meta</strong>
         <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
-          Optional — link your Facebook Page or Instagram account so Janis sees every message,
-          even ones your bot never forwards.
+          {metaConnected
+            ? 'Linked — Janis sees every message on this Page, even ones your bot never forwards.'
+            : 'Pick the Page or Instagram your bot runs on — the setup steps unlock once it\u2019s linked.'}
         </div>
         {pending.isError ? (
           <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
