@@ -15,6 +15,13 @@ import { env } from '../env.js';
 
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
 
+/** TwiML <Message> body — raw text kills the whole response: 'msg & data
+ *  rates' unescaped makes Twilio drop the reply silently (seen live). */
+const xmlText = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const TWIML_MSG = (s: string) =>
+  `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${xmlText(s)}</Message></Response>`;
+
 /**
  * Twilio messaging webhook. The number's SmsUrl points at
  * POST /sms/:channelId. Unlike voice there's no live socket — the customer
@@ -61,11 +68,7 @@ export function smsRoutes(db: Db) {
           : kw === 'help'
             ? 'Reply STOP to end these messages. For help, keep texting — the team sees every message.'
             : 'You have been resubscribed to messages.';
-      return c.text(
-        `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${reply}</Message></Response>`,
-        200,
-        { 'Content-Type': 'text/xml' },
-      );
+      return c.text(TWIML_MSG(reply), 200, { 'Content-Type': 'text/xml' });
     }
 
     // A2P double opt-in (see /sms-optin.html): a first-time texter gets the
@@ -77,13 +80,9 @@ export function smsRoutes(db: Db) {
         const [agent] = await db.select().from(agents).where(eq(agents.id, channel.agentId));
         if (agent) void resumeAfterConsent(db, agent, gate.consentedConvId);
       }
-      return c.text(
-        gate.reply
-          ? `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${gate.reply}</Message></Response>`
-          : EMPTY_TWIML,
-        200,
-        { 'Content-Type': 'text/xml' },
-      );
+      return c.text(gate.reply ? TWIML_MSG(gate.reply) : EMPTY_TWIML, 200, {
+        'Content-Type': 'text/xml',
+      });
     }
 
     await handleChannelMessage(db, channel, {
