@@ -93,6 +93,27 @@ export function Avatar({
 /** Titled code card with a copy button — used for embed snippets and docs.
  *  `lang` syntax-highlights (js/html/sh) via the tiny tokenizer in
  *  lib/highlight; omitted for plain mono text. */
+/** Docs-style two-column table — head row, then rows keyed on the first
+ *  cell (mono) with the rest muted. Shared by the guide pages. */
+export function Table({ head, rows }: { head: string[]; rows: string[][] }) {
+  return (
+    <table className="docs-table">
+      <thead>
+        <tr>{head.map((h) => <th key={h}>{h}</th>)}</tr>
+      </thead>
+      <tbody>
+        {rows.map((r) => (
+          <tr key={r[0]}>
+            {r.map((c, i) => (
+              <td key={i} className={i === 0 ? 'mono' : 'muted'}>{c}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 /** Framed guide screenshot — platform UI captures inside the docs. */
 export function DocShot({ src, alt }: { src: string; alt: string }) {
   return (

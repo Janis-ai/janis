@@ -2,7 +2,7 @@ import { useEffect } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import { useMe } from '../api/hooks';
 import { api } from '../api/client';
-import { BrandImg, Code, SiteFooter } from '../components/bits';
+import { BrandImg, Code, SiteFooter, Table } from '../components/bits';
 import OperatorDocs from './OperatorDocs';
 
 const INBOUND = [
@@ -48,25 +48,6 @@ const AUTOMATION = [
   ['GET /v1/knowledge', 'List the agent\'s URL-sourced knowledge files — { id, name, source_url, status, refresh_hours }.'],
   ['POST /v1/knowledge/:fileId/refresh', 'Re-crawl a URL source now (off-cadence). Idempotent; a failed crawl degrades, never evicts.'],
 ];
-
-function Table({ head, rows }: { head: string[]; rows: string[][] }) {
-  return (
-    <table className="docs-table">
-      <thead>
-        <tr>{head.map((h) => <th key={h}>{h}</th>)}</tr>
-      </thead>
-      <tbody>
-        {rows.map((r) => (
-          <tr key={r[0]}>
-            {r.map((c, i) => (
-              <td key={i} className={i === 0 ? 'mono' : 'muted'}>{c}</td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
 
 export default function Docs() {
   const { data } = useMe();

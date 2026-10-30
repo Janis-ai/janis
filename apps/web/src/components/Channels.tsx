@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
 import { Sun, Moon, Monitor } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
 import { useAgents, useChannels, useMe } from '../api/hooks';
 import { CodeBlock } from './bits';
+import { ChatfuelGuide, ManyChatGuide } from './BotChannelGuide';
 import { useConfirm } from './Prompt';
 import { friendlyError } from '../lib/friendlyError';
 import { track } from '../lib/analytics';
@@ -444,83 +444,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
             code={url ?? '…'}
           />
         </div>
-        {ch.kind === 'chatfuel' ? (
-          <ol className="muted" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.7, paddingLeft: 18 }}>
-            <li>
-              In Chatfuel, create a block named <strong>Janis</strong> — the name matters if you
-              use suggested replies: their taps route back through this block.
-            </li>
-            <li>
-              Open your <strong>Default Message</strong>: replace its contents with a{' '}
-              <strong>User Input</strong> card that saves the answer to{' '}
-              <span className="mono">{'{{user input}}'}</span>, then a{' '}
-              <strong>Go to block</strong> card pointing at <strong>Janis</strong>.
-            </li>
-            <li>
-              In the <strong>Janis</strong> block, add a <strong>JSON API</strong> card: type{' '}
-              <strong>POST</strong>, the URL above, and send user attributes —{' '}
-              <span className="mono">messenger user id</span> and{' '}
-              <span className="mono">user input</span> must be included (the card's send-all
-              default covers them).
-            </li>
-            <li>
-              Leave <strong>Report errors in the bot</strong> off, then{' '}
-              <strong>Test the request</strong> — expect <span className="mono">200 OK</span>.
-            </li>
-            <li>
-              Clear keyword rules that would fire ahead of the default message, so every
-              message reaches the Janis block.
-            </li>
-          </ol>
-        ) : (
-          <ol className="muted" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.7, paddingLeft: 18 }}>
-            <li>
-              In ManyChat, open <strong>Settings → Messenger → Default Reply → Edit</strong>.
-            </li>
-            <li>
-              Replace the first step with a <strong>Dynamic</strong> step and click the purple
-              area to add a request.
-            </li>
-            <li>
-              Method <strong>POST</strong>, the URL above, and under <strong>Body</strong> pick{' '}
-              <strong>Full Subscriber Data</strong> — the subscriber's{' '}
-              <span className="mono">id</span> and{' '}
-              <span className="mono">custom_fields.user input</span> are what Janis reads.
-            </li>
-            <li>
-              <strong>Test this request</strong> → <span className="mono">200</span>, then{' '}
-              <strong>Save</strong>. Keep the Default Reply enabled, set it to fire{' '}
-              <strong>every time</strong>, and <strong>Publish</strong> the flow.
-            </li>
-            <li>
-              Paste your ManyChat API token below (Settings → API) — Janis then pushes replies
-              through ManyChat directly, so answers still arrive if a reply runs past the
-              request's time limit, and teammate replies reach the subscriber too.
-            </li>
-          </ol>
-        )}
-        <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
-          {ch.kind === 'chatfuel' ? (
-            <>
-              Other attributes the card sends are stored on the contact; send an{' '}
-              <span className="mono">event</span> attribute (e.g. from a button flow) to reach
-              the agent without visible text.
-            </>
-          ) : (
-            <>
-              Subscriber custom fields are stored on the contact; a custom field named{' '}
-              <span className="mono">event</span> reaches the agent without visible text.
-            </>
-          )}{' '}
-          While a teammate owns the conversation the endpoint answers empty — the bot goes
-          silent until it's handed back.
-        </div>
-        <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-          Full guide:{' '}
-          <Link to={`/docs?guide=operator#${ch.kind}`}>
-            Docs → {ch.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} channel
-          </Link>
-        </div>
+        {ch.kind === 'chatfuel' ? <ChatfuelGuide /> : <ManyChatGuide />}
         {ch.kind === 'manychat' && <ManyChatTokenField channel={ch} />}
       </details>
       )}
