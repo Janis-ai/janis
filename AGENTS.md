@@ -333,12 +333,19 @@ is a day on launch)*
     Inc. (Josh Barkin's old co — never owned Janis), and the FB page
     sits under "Josh Barkin's Business" portfolio. Works today, fragile
     on any re-verification (WABA display name, messaging tiers, audit).
-    Fix: create/verify a portfolio under Janis's real legal entity
-    (the one on the Stripe account), re-do Tech Provider access
-    verification there, then move the app (App Settings → Basic →
-    Business portfolio) + page + any WABA. App Review approvals
-    (instagram_manage_messages) live on the app — they survive the
-    move. Do NOT unbind Stagename until the new verification is green.
+    Fix: migrate to TANGERINE TORPEDO LLC — Mike's real entity,
+    portfolio verified Feb 2025 (id 727327874029058), website field
+    already lists janis.ai. Steps: verify janis.ai domain under it →
+    move the app (App Settings → Basic → Business portfolio → remove
+    Stagename → connect Tangerine Torpedo) → release + re-add the FB
+    page (Mike has full control on both sides — no Josh coordination
+    needed) → migrate WABA or create fresh under it → re-do Tech
+    Provider access verification there (~5d) for onboard-others WABA.
+    App Review approvals (instagram_manage_messages) live on the app —
+    they survive the move; re-check App Review perms after. Do NOT
+    unbind Stagename until each asset is confirmed live on Torpedo.
+    Also worth a footer line: "Janis by Tangerine Torpedo LLC" so the
+    entity↔brand link is visible to reviewers.
 
 *B. Quick wins — ALL DONE or moot* (10 plan-meter + /billing/status ✓,
 11 Agents View/Manage ✓, 12 per-event notify prefs grid ✓, 13 DB_POOL_MAX
