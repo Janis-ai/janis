@@ -389,6 +389,11 @@ export function SourceList({
             <input
               ref={inputRef}
               className="input grow"
+              name="knowledge-source"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
               placeholder="Paste a link or write a fact…"
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -426,6 +431,10 @@ export function SourceList({
               className="input"
               style={{ fontSize: 12, maxWidth: 260 }}
               type="password"
+              name="source-auth-header"
+              autoComplete="new-password"
+              data-1p-ignore
+              data-lpignore="true"
               placeholder="Auth header (private links)"
               title="Optional — sent as the Authorization header when the link is crawled; stored encrypted and never shown again"
               value={authHeader}
