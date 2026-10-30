@@ -158,6 +158,19 @@ deleted via deleteAgentsCascade; loadtest+devin@janis.local throwaway
 account removed. 31 decided pending_actions and real thread history
 left untouched (records, not residue).
 
+**Meta asset picker UX:** the "still no loader" mystery was CSS — the
+skeleton spans used `.nav-skel`, which is scoped `.sidebar .nav-skel`,
+so outside the sidebar they had no height/background and rendered as
+invisible empty inline elements. Both asset loaders (agent picker +
+Chatfuel/ManyChat card) now use `.spin`. Surface labels self-link:
+Messenger→m.me/<page>, Instagram→instagram.com/<user>, WhatsApp→
+wa.me/<num> (Launch-chat row removed as redundant). Take over now
+stacks Agent/Workspace/Owner beneath the button — `AssetSurface.owner`
+carries same-workspace sibling binds (bound rows already had it from
+the API). Bot-ingest card also wrapped MetaAssetList in muted 12px
+copy — unwrapped so both call sites render it identically, and
+ownLabels use agent_name (was channel name on the bot card).
+
 ## Recently shipped (late Oct 2026 session)
 
 Team table unification, notification prefs → modal editors everywhere,
