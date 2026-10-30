@@ -415,7 +415,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
         ),
       ];
   return (
-    <>
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
       {!metaConnected && (
         <div className="muted" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6 }}>
           <strong style={{ fontSize: 14 }}>Connect Meta first</strong>
@@ -431,13 +431,13 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
         </div>
       )}
       {metaConnected && (
-      <details className="webhook-details" open style={{ marginTop: 8 }}>
-        <summary>
-          <span className="details-title">
-            {ch.kind === 'chatfuel' ? 'Chatfuel setup' : 'ManyChat setup'}
-          </span>
-          <span className="details-sub">your bot's HTTP step calls this URL — the reply comes back in the response</span>
-        </summary>
+      <div style={{ marginTop: 16, order: 2 }}>
+        <strong style={{ fontSize: 15 }}>
+          {ch.kind === 'chatfuel' ? 'Chatfuel setup' : 'ManyChat setup'}
+        </strong>
+        <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+          your bot's HTTP step calls this URL — the reply comes back in the response
+        </div>
         <div style={{ marginTop: 8 }}>
           <CodeBlock
             title={ch.kind === 'chatfuel' ? 'JSON API card — POST this URL' : 'Dynamic request — POST this URL'}
@@ -446,9 +446,9 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
         </div>
         {ch.kind === 'chatfuel' ? <ChatfuelGuide /> : <ManyChatGuide />}
         {ch.kind === 'manychat' && <ManyChatTokenField channel={ch} />}
-      </details>
+      </div>
       )}
-      <div style={{ marginTop: 20, paddingTop: 8 }}>
+      <div style={{ marginTop: 20, paddingTop: 8, order: 1 }}>
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <strong style={{ fontSize: 15 }}>Connect to Meta</strong>
           {metaConnected && (
@@ -540,7 +540,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           <div className="error" style={{ marginTop: 6, fontSize: 12 }}>{link.error.message}</div>
         )}
       </div>
-    </>
+    </div>
   );
 }
 
