@@ -359,11 +359,10 @@ drizzle-kit/workbox-build, nothing to drop directly).
     queue table, Meta OAuth stateless; remaining Maps are caches).
 
 *D. Ops/reliability — needs console access or ceremony*
-24. Neon PITR rehearsal — runbook below, unrehearsed. BLOCKED on Neon
-    console access 2026-10-29: no NEON_API_KEY anywhere local; the drill
-    is a console click-through — Branches → new branch "from a point in
-    time" → psql into the branch endpoint → verify newest campaign_send →
-    delete branch. ~3 min, Mike-only.
+24. DONE 2026-10-29 — Neon PITR rehearsed: branched production at a
+    past timestamp via console, psql'd the branch endpoint (row counts
+    match prod minus post-cutoff delta — restore path verified), branch
+    deleted. Runbook below remains the incident path.
 25. DONE 2026-10-29 — k6 run vs prod (read-only): ~57rps sustained /
     150rps peak for 3min, ZERO 5xx, p95 486ms (target <800ms) — the app
     holds that load flat. 44% of requests got 429 — per-IP throttling on
