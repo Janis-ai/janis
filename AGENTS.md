@@ -376,12 +376,20 @@ drizzle-kit/workbox-build, nothing to drop directly).
 26. DONE — Cloud Monitoring → Slack live (status/monitoring below).
 
 *E. Product depth tail (pull by customer demand)*
-27. Eval tail — missing: run-diff dashboards, multi-model compare.
-    (Scheduled runs, regression alerts, regression→verified-fix
-    suggestions, history, rescue→test suggestions all DONE —
-    closest-to-done differentiator.)
+27. DONE 2026-10-30 — eval tail closed: run-diff view in Tests → run
+    history (flip badges ▼regressed/▲fixed/+new/−removed, expandable
+    before-vs-now reply pairs, /test-runs returns reply text) serves
+    both regression hunting and A/B model compare ('Try a variant' ab
+    batches diff against their baseline the same way). (Scheduled runs,
+    regression alerts, regression→verified-fix suggestions, history,
+    rescue→test suggestions were already DONE.)
 28. Intent tail — sentiment, auto-topic clustering, confidence scores.
-29. Help center tail — version history, widget article embeds.
+29. DONE 2026-10-30 — help center tail closed: article version history
+    (help_article_revisions snapshot-per-save, GET revisions + POST
+    restore w/ slug re-dedupe, collapsible history in the edit form)
+    + widget article embeds (bootstrap help_suggestions = top-viewed
+    published articles; tappable cards under the greeting on an empty
+    transcript, gated by show_help_link).
 30. Rate-limit tail — inbound webchat per-(channel,visitor) throttle DONE
     (POST /chat/:token/messages, dbRateLimit); still open: widget CAPTCHA
     after N, blocklist, per-plan tiers.
