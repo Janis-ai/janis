@@ -87,22 +87,25 @@ export async function consolidateConversationContact(db: Db, convId: string): Pr
   } catch {
     return false;
   }
+  // Stamp consolidated_at even when the transcript yields nothing — the
+  // sweep's "newer than last consolidation" check is the throttle, and an
+  // unstamped conv would be re-extracted every tick forever. It re-picks
+  // only when new messages land (lastMessageAt > consolidated_at).
   const has = Object.values(learned).some((v) =>
     Array.isArray(v) ? v.length > 0 : Boolean(v),
   );
-  if (!has) return false;
   await db
     .update(contacts)
     .set({
       metadata: sql`jsonb_set(${contacts.metadata}, '{learned}', coalesce(${contacts.metadata}->'learned', '{}'::jsonb) || ${JSON.stringify({
-        ...learned,
+        ...(has ? learned : {}),
         consolidated_at: new Date().toISOString(),
         source_conversation: conv.id,
       })}::jsonb, true)`,
       updatedAt: new Date(),
     })
     .where(eq(contacts.id, conv.contactId));
-  return true;
+  return has;
 }
 
 /** Sweep pass — conversations with contact + inbound traffic newer than the
