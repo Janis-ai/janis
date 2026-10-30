@@ -3,7 +3,7 @@ import { Sun, Moon, Monitor } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
-import { useAgents } from '../api/hooks';
+import { useAgents, useChannels } from '../api/hooks';
 import { CodeBlock } from './bits';
 import { useConfirm } from './Prompt';
 import { friendlyError } from '../lib/friendlyError';
@@ -74,16 +74,17 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
     enabled: Boolean(connectId),
     retry: false,
   });
-  const [pick, setPick] = useState('');
+  const { data: chList } = useChannels();
+  const [confirmEl, confirm] = useConfirm();
   const link = useMutation({
-    mutationFn: () =>
+    mutationFn: (b: { page_id: string; takeover?: boolean }) =>
       api<{ channel: Channel }>('/api/meta/link', {
         method: 'POST',
         body: JSON.stringify({
           connect_id: connectId,
           agent_id: ch.agent_id,
           kind: ch.kind,
-          page_id: pick,
+          ...b,
         }),
       }),
     onSuccess: () => {
@@ -144,25 +145,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
             <div>URL: {apiOrigin}/channels/meta/webhook</div>
             <div>Verify token: {ch.meta.verify_token ?? '—'}</div>
           </div>
-          {pending.data?.pages?.length ? (
-            <div className="row" style={{ marginTop: 8, gap: 8 }}>
-              <select value={pick} onChange={(e) => setPick(e.target.value)} style={{ flex: 1 }}>
-                <option value="">Pick the Page this bot fronts…</option>
-                {pending.data.pages.map((pg) => (
-                  <option key={pg.id} value={pg.id}>
-                    {pg.name}
-                  </option>
-                ))}
-              </select>
-              <button
-                className="btn"
-                disabled={!pick || link.isPending}
-                onClick={() => link.mutate()}
-              >
-                {link.isPending ? 'Linking…' : 'Link page'}
-              </button>
-            </div>
-          ) : !session.data?.connected ? (
+          {!session.data?.connected ? (
             <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
               <a className="btn" href={`/api/meta/connect?agent=${ch.agent_id}`}>
                 Connect Meta
@@ -180,30 +163,70 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                 </button>
               </div>
             </div>
-          ) : (
-            <div className="row" style={{ marginTop: 8, gap: 8 }}>
-              <input
-                placeholder="Facebook Page ID"
-                value={pageId}
-                onChange={(e) => setPageId(e.target.value)}
-                style={{ flex: 1 }}
-              />
-              <button className="btn" disabled={savePage.isPending} onClick={() => savePage.mutate()}>
-                Save
-              </button>
+          ) : pending.data ? (
+            <div className="asset-list" style={{ marginTop: 8 }}>
+              {(pending.data.pages ?? []).map((pg) => {
+                const own = (chList?.channels ?? []).find(
+                  (x) => x.meta.page_id === pg.id && x.id !== ch.id,
+                );
+                const linkedHere = ch.meta.page_id === pg.id;
+                return (
+                  <div key={pg.id} className="asset-row">
+                    <div className="grow">
+                      <strong>{pg.name}</strong>
+                      <div className="muted">Facebook Page</div>
+                    </div>
+                    {linkedHere ? (
+                      <span className="badge active">Linked</span>
+                    ) : own ? (
+                      <span className="muted">on {own.name}</span>
+                    ) : pg.bound ? (
+                      <div className="asset-bound">
+                        <button
+                          className="btn"
+                          disabled={link.isPending}
+                          onClick={async () => {
+                            if (
+                              (await confirm(
+                                `Take this Page over from ${pg.bound!.workspace_name}${pg.bound!.owner_email ? ` (${pg.bound!.owner_email})` : ''}? ${pg.bound!.agent_name} loses it — inbound messages come here instead.`,
+                                [
+                                  { key: 'ok', label: 'Take over' },
+                                  { key: 'cancel', label: 'Cancel' },
+                                ],
+                              )) === 'ok'
+                            )
+                              link.mutate({ page_id: pg.id, takeover: true });
+                          }}
+                        >
+                          Take over
+                        </button>
+                        <span className="muted asset-bound-note">
+                          on {pg.bound.workspace_name} · {pg.bound.agent_name}
+                        </span>
+                      </div>
+                    ) : (
+                      <button
+                        className="btn"
+                        disabled={link.isPending}
+                        onClick={() => link.mutate({ page_id: pg.id })}
+                      >
+                        Link page
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          )}
-          {link.error && <div className="error" style={{ marginTop: 6, fontSize: 12 }}>{link.error.message}</div>}
-          {ch.meta.page_id && (
-            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-              Linked to page {ch.meta.page_id}
-            </div>
+          ) : null}
+          {link.error && (
+            <div className="error" style={{ marginTop: 6, fontSize: 12 }}>{link.error.message}</div>
           )}
           Janis listens as a <em>secondary receiver</em> — the bot stays in control; inbound
           messages join the same conversation, and a human replying in Page Inbox pauses the agent
           here too.
         </div>
       </details>
+      {confirmEl}
     </>
   );
 }
