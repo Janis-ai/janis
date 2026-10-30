@@ -1,0 +1,11 @@
+import postgres from 'postgres';
+const sql = postgres(process.env.DATABASE_URL, { max: 1, ssl: 'require' });
+const wsn = await sql`select count(*) c from workspaces`;
+const camps = await sql`select w.name ws_name, w.id, count(c.id) campaigns from campaigns c join workspaces w on w.id = c.workspace_id group by 1,2 order by 3 desc`;
+const chans = await sql`select w.name ws_name, ch.kind, count(*) n from channels ch join workspaces w on w.id = ch.workspace_id where ch.kind in ('email','gmail','outlook','resend') group by 1,2 order by 1`;
+const sup = await sql`select w.name, count(*) n from suppressions s join workspaces w on w.id=s.workspace_id group by 1 order by 2 desc`;
+console.log('workspaces:', wsn[0].c);
+console.log('campaigns by ws:', JSON.stringify(camps));
+console.log('email channels:', JSON.stringify(chans));
+console.log('existing suppressions:', JSON.stringify(sup));
+await sql.end();

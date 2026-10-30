@@ -421,8 +421,12 @@ drizzle-kit/workbox-build, nothing to drop directly).
     a generic card model rather than retrofitting.
 
 *F. Writing/marketing (non-code)*
-33. Reactivation email sequence — 3 emails (approvals-led), subjects/
-    preview/CTA → app.janis.ai.
+33. Reactivation email sequence — per-segment drafts live in
+    ~/Documents/janis-campaign/campaign.md (A1/A2/B/C/D + merge fields).
+    Suppressions loaded (24 legacy welcome-list opt-outs → prod
+    suppressions, Michael's workspace). Remaining: MIKE REVIEWS THE COPY,
+    then send waves per campaign.md — gated on Mike's explicit go, never
+    dispatch from a session unprompted.
 34. docs/marketing/reactivation/RUNBOOK.md exists — verify against the
     checklist (export steps, send tool, UTMs, community posts,
     import-legacy workflow, metrics). NB: its 3-email drip send plan is

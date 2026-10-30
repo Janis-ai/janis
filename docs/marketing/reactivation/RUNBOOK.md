@@ -9,10 +9,17 @@
       (scripts/archive-legacy-collections.mjs) then segmented into
       ~/Documents/janis-campaign/ — 18,819 contacts in 5 segments;
       *_verified.csv = 18,130 after email verification.
-- [ ] Suppression list applied — merge any prior unsubscribes/bounces into
-      the contacts suppression table before the first send. (23 prior
-      unsubscribes already excluded from the campaign CSVs at build time —
-      still load them into the suppressions table.)
+- [x] Suppression list applied — DONE 2026-10-29: the 24 unique
+      `unsubscribed_lists.welcome` opt-outs (dumped via
+      scripts/tmp/dump-unsubs.mjs → janis-campaign/unsubscribed.csv) are in
+      prod `suppressions` for Michael's workspace
+      (acd296f3-61e1-46c5-ae57-6cdbddbdca85), kind=email,
+      source=legacy_unsubscribed_lists.
+- [ ] **Mike reviews email copy** — the per-segment drafts in
+      ~/Documents/janis-campaign/campaign.md (A1/A2/B/C/D variants +
+      merge fields) get a founder read-through before the first wave.
+      Campaign send stays gated on Mike's explicit go — do NOT schedule
+      or dispatch from a session without it.
 - [x] Resend events webhook live — `email.delivered/bounced/complained` →
       `/channels/email/events` (configured 2026-09). Bounces feed
       suppression automatically; complaints must kill the sequence for that
