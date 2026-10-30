@@ -257,6 +257,10 @@ is a day on launch)*
    brand reg (Starter) → campaign (Customer Care use case) →
    messaging service → US number → add SMS channel in console
    (setSmsWebhook auto-wires inbound; TWILIO_* envs already live).
+   2026-10-29: campaign REJECTED 30882 (T&C) — static terms/privacy
+   lacked the CTIA clauses; fixed + live, resubmission filed. NB: until
+   approval, outbound is blocked provider-side (30034 undelivered —
+   inbound + prompt generation verified live, delivery needs the reg).
 6. DONE 2026-10-19 — Azure app reg + `MS_*` envs live; Outlook channel
    verified end-to-end (Graph /reply threading in lib/outlook.ts).
 7. DONE 2026-10-20 — WorkOS prod env live (API key + client_id verified
