@@ -480,6 +480,10 @@
     '#janis-power{text-align:center;font-size:11px;color:#9ca3af;padding:4px;background:#fff}' +
     '#janis-help{display:block;text-align:center;font-size:12px;color:#2563eb;padding:4px;text-decoration:none;background:#fff;border-top:1px solid #f3f4f6}' +
     '#janis-help:hover{text-decoration:underline}' +
+    '.janis-help-suggest{display:flex;flex-direction:column;gap:6px;margin:4px 0 8px;max-width:85%}' +
+    '.janis-help-suggest .janis-help-label{font-size:11px;color:#6b7280}' +
+    '.janis-help-card{display:block;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;background:#fff;color:#111;font-size:13px;text-decoration:none;line-height:1.35}' +
+    '.janis-help-card:hover{border-color:#2563eb;color:#2563eb}' +
     '.janis-loading{text-align:center;color:#9ca3af;font-size:12px;padding:18px 0}' +
     '#janis-form :disabled{opacity:.55;cursor:default}' +
     // in-conversation widgets — agent-emitted interactive components
@@ -629,6 +633,9 @@
     '#janis-panel.janis-dark #janis-attach,#janis-panel.janis-dark #janis-emoji{background:#1f2937;border-top-color:#374151}' +
     '#janis-panel.janis-dark .janis-chip{background:#374151;color:#e5e7eb}' +
     '#janis-panel.janis-dark #janis-help{background:#1f2937;border-top-color:#374151;color:#60a5fa}' +
+    '#janis-panel.janis-dark .janis-help-card{background:#1f2937;border-color:#374151;color:#e5e7eb}' +
+    '#janis-panel.janis-dark .janis-help-card:hover{border-color:#60a5fa;color:#60a5fa}' +
+    '#janis-panel.janis-dark .janis-help-suggest .janis-help-label{color:#9ca3af}' +
     '#janis-panel.janis-dark #janis-power{background:#1f2937;color:#6b7280}' +
     '#janis-panel.janis-dark .janis-status{color:#6b7280}' +
     '#janis-panel.janis-dark .janis-file{background:rgba(255,255,255,.12)}' +
@@ -2276,6 +2283,27 @@
     state.qrsEl = row;
   }
 
+  // Suggested-article cards — rendered once under the greeting on an empty
+  // transcript, like Intercom's pre-chat suggestions. Each card opens the
+  // published article in a new tab; the point is deflection before typing.
+  function renderHelpSuggestions(list) {
+    var box = el('div', {}, { class: 'janis-help-suggest' });
+    var label = el('div', {}, { class: 'janis-help-label' });
+    label.textContent = 'Suggested articles';
+    box.appendChild(label);
+    list.forEach(function (s) {
+      var a = document.createElement('a');
+      a.className = 'janis-help-card';
+      a.href = s.url;
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.textContent = s.title;
+      box.appendChild(a);
+    });
+    msgs.appendChild(box);
+    if (state.pinBottom) scrollBottom();
+  }
+
   function markFailed(entry) {
     hideTyping();
     hideDelivered();
@@ -2375,6 +2403,14 @@
             }
             if (state.config && state.config.quick_replies && state.config.quick_replies.length) {
               renderChips(state.config.quick_replies);
+            }
+            if (
+              state.config &&
+              state.config.show_help_link !== false &&
+              state.config.help_suggestions &&
+              state.config.help_suggestions.length
+            ) {
+              renderHelpSuggestions(state.config.help_suggestions);
             }
           }
         }

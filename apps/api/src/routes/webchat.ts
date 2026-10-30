@@ -513,11 +513,19 @@ export function webchatRoutes(db: Db) {
       : [];
     // help_url emits whenever a destination exists — the toggle rides as
     // show_help_link so the console preview can flip it live.
-    const helpUrl =
-      externalHelp ??
-      (helpCount > 0
-        ? `${helpHost ? `https://${helpHost}` : env.webOrigin}/help/${channel.agentId}`
-        : null);
+    const helpBase = `${helpHost ? `https://${helpHost}` : env.webOrigin}/help/${channel.agentId}`;
+    const helpUrl = externalHelp ?? (helpCount > 0 ? helpBase : null);
+    // Suggested-article cards — the built-in centre's top-viewed pages
+    // (position breaks ties), shown under the greeting before the visitor
+    // types. External help_url can't enumerate its articles, so none emit.
+    const helpSuggestions = externalHelp
+      ? []
+      : await db
+          .select({ id: helpArticles.id, slug: helpArticles.slug, title: helpArticles.title })
+          .from(helpArticles)
+          .where(and(eq(helpArticles.agentId, channel.agentId), eq(helpArticles.status, 'published')))
+          .orderBy(desc(helpArticles.viewCount), asc(helpArticles.position))
+          .limit(3);
     return c.json({
       name: channel.name,
       agent_name: agent?.name ?? 'Assistant',
@@ -540,6 +548,10 @@ export function webchatRoutes(db: Db) {
       quick_replies: creds.quick_replies?.length ? creds.quick_replies : agentReplies,
       help_url: helpUrl,
       show_help_link: creds.show_help_link !== false,
+      help_suggestions: helpSuggestions.map((s) => ({
+        title: s.title,
+        url: `${helpBase}/${s.slug ?? s.id}`,
+      })),
       // 'Text us' footer — the number emits whenever an SMS channel exists
       // (the preview needs it even before the toggle is saved on);
       // sms_footer carries the toggle and gates the render.
