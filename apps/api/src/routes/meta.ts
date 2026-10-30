@@ -122,7 +122,7 @@ async function ownerEmails(db: Db, wsIds: string[]): Promise<Map<string, string>
 const linkBody = z.object({
   connect_id: z.string(),
   agent_id: z.string().uuid(),
-  kind: z.enum(['messenger', 'instagram', 'whatsapp']),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'chatfuel', 'manychat']),
   page_id: z.string().optional(),
   phone_number_id: z.string().optional(),
   // Take over a binding owned by another workspace — removes that channel
@@ -469,9 +469,40 @@ export function metaApiRoutes(db: Db) {
       credentials.page_id = page.id;
     }
     credentials.access_token = pageToken;
+    const botKind = body.kind === 'chatfuel' || body.kind === 'manychat';
+    if (botKind) name = `${body.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} (${page.name})`;
 
     const conflict = await resolveConflict(credentials.page_id!);
     if (conflict) return c.json(conflict.body, conflict.status as 409);
+
+    // Bot channels may pre-exist from the Connect card (kind only, no page
+    // creds) — claim the page onto the existing row instead of duplicating.
+    if (botKind) {
+      const [existing] = await db
+        .select()
+        .from(channels)
+        .where(and(eq(channels.agentId, agent.id), eq(channels.kind, body.kind)))
+        .limit(1);
+      if (existing) {
+        const [row] = await db
+          .update(channels)
+          .set({
+            name,
+            credentials: { ...(existing.credentials as ChannelCredentials), ...credentials },
+          })
+          .where(eq(channels.id, existing.id))
+          .returning();
+        await fetch(`${GRAPH}/${page.id}/subscribed_apps`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({
+            subscribed_fields: 'messages,messaging_postbacks',
+            access_token: pageToken,
+          }),
+        }).catch(() => {});
+        return c.json({ channel: toChannel(row, agent.name) }, 201);
+      }
+    }
 
     const [row] = await db
       .insert(channels)

@@ -62,6 +62,34 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
         `/api/agents/${ch.agent_id}/bot`,
       ),
   });
+  const session = useQuery({
+    queryKey: ['meta-session'],
+    queryFn: () =>
+      api<{ connected: boolean; connect_id?: string }>('/api/meta/session'),
+  });
+  const connectId = session.data?.connected ? session.data.connect_id ?? '' : '';
+  const pending = useQuery({
+    queryKey: ['meta-pending', connectId],
+    queryFn: () => api<PendingAssets>(`/api/meta/pending?id=${connectId}`),
+    enabled: Boolean(connectId),
+    retry: false,
+  });
+  const [pick, setPick] = useState('');
+  const link = useMutation({
+    mutationFn: () =>
+      api<{ channel: Channel }>('/api/meta/link', {
+        method: 'POST',
+        body: JSON.stringify({
+          connect_id: connectId,
+          agent_id: ch.agent_id,
+          kind: ch.kind,
+          page_id: pick,
+        }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+    },
+  });
   const [pageId, setPageId] = useState(ch.meta.page_id ?? '');
   const savePage = useMutation({
     mutationFn: () =>
@@ -116,17 +144,43 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
             <div>URL: {apiOrigin}/channels/meta/webhook</div>
             <div>Verify token: {ch.meta.verify_token ?? '—'}</div>
           </div>
-          <div className="row" style={{ marginTop: 8, gap: 8 }}>
-            <input
-              placeholder="Facebook Page ID"
-              value={pageId}
-              onChange={(e) => setPageId(e.target.value)}
-              style={{ flex: 1 }}
-            />
-            <button className="btn" disabled={savePage.isPending} onClick={() => savePage.mutate()}>
-              Save
-            </button>
-          </div>
+          {pending.data?.pages?.length ? (
+            <div className="row" style={{ marginTop: 8, gap: 8 }}>
+              <select value={pick} onChange={(e) => setPick(e.target.value)} style={{ flex: 1 }}>
+                <option value="">Pick the Page this bot fronts…</option>
+                {pending.data.pages.map((pg) => (
+                  <option key={pg.id} value={pg.id}>
+                    {pg.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="btn"
+                disabled={!pick || link.isPending}
+                onClick={() => link.mutate()}
+              >
+                {link.isPending ? 'Linking…' : 'Link page'}
+              </button>
+            </div>
+          ) : (
+            <div className="row" style={{ marginTop: 8, gap: 8 }}>
+              <input
+                placeholder="Facebook Page ID"
+                value={pageId}
+                onChange={(e) => setPageId(e.target.value)}
+                style={{ flex: 1 }}
+              />
+              <button className="btn" disabled={savePage.isPending} onClick={() => savePage.mutate()}>
+                Save
+              </button>
+            </div>
+          )}
+          {link.error && <div className="error" style={{ marginTop: 6, fontSize: 12 }}>{link.error.message}</div>}
+          {ch.meta.page_id && (
+            <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+              Linked to page {ch.meta.page_id}
+            </div>
+          )}
           Janis listens as a <em>secondary receiver</em> — the bot stays in control; inbound
           messages join the same conversation, and a human replying in Page Inbox pauses the agent
           here too.
