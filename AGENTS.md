@@ -430,11 +430,12 @@ drizzle-kit/workbox-build, nothing to drop directly).
     first send is a re-permission ask, NOT a drip — waves A1→A2→B→C→D,
     verify-first (DONE — *_verified.csv = 18,130 of 18,819), send from
     mail.janis.ai, A1 hand-personalized from Mike's real address.
-35. Agency economics decision — "what does my 12th client cost?" —
-    ANALYSIS WRITTEN (docs/marketing/agency-economics.md): keep Connect
-    wholesale/retail, no separate agency plan, retail ≥ wholesale already
-    enforced, per-agent member scoping stays gated until a real agency
-    asks. Only remaining: founder sign-off on the recommended posture.
+35. DONE 2026-10-29 — Agency economics DECIDED (docs/marketing/
+    agency-economics.md): Connect wholesale/retail is the agency path —
+    no separate agency plan, retail ≥ wholesale enforced server-side,
+    per-agent member scoping stays gated until a real agency asks. A
+    net-terms wholesale-invoice path gets built only if an agency asks
+    for off-platform billing.
 36. Proof assets — 2–3 testimonials, logo wall, vs-Chatbase/Intercom
     comparison pages, trust/security page.
 37. `/for/:slug` landing variants — copy written; ship when campaign

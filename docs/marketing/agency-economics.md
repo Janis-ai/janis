@@ -40,7 +40,7 @@ trade-off: support load lands on Janis only for platform issues (the agency
 owns tier-1 for their clients), and the Connect payout flow is already
 built + tested (billing.test.ts stubs Stripe end-to-end).
 
-## Decision (needs founder sign-off)
+## Decision — SIGNED OFF 2026-10-29
 
 - **Recommended posture**: keep Connect as the agency path — don't build a
   separate "agency plan." The wholesale/retail split is honest, self-serve,
