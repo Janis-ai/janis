@@ -9,7 +9,7 @@ import { useConfirm } from './Prompt';
 import { friendlyError } from '../lib/friendlyError';
 import { track } from '../lib/analytics';
 
-interface BoundAsset {
+export interface BoundAsset {
   workspace_name: string;
   agent_name: string;
   owner_email?: string | null;
@@ -28,6 +28,113 @@ export interface PendingAssets {
     name?: string;
     phone_numbers: { id: string; display_phone_number?: string; bound?: BoundAsset | null }[];
   }[];
+}
+
+/** One linkable surface on an asset row — shared by the Meta picker and
+ *  bot-platform channel cards. `state`: linked (this channel owns it → red
+ *  Disconnect), own (a sibling channel in this workspace owns it → inert),
+ *  bound (another workspace → Take over with confirm), free (→ Connect). */
+export interface AssetSurface {
+  key: string;
+  label: string;
+  state: 'linked' | 'own' | 'bound' | 'free';
+  bound?: BoundAsset | null;
+  /** Shown when state==='own' — "on <channel>" / "on <agent>" */
+  ownLabel?: string;
+  connectLabel: string;
+  disconnectLabel: string;
+  onConnect: (takeover: boolean) => void;
+  onDisconnect?: () => void;
+  busy?: boolean;
+  extra?: ReactNode;
+}
+
+export interface AssetRow {
+  key: string;
+  title: string;
+  sub: string;
+  extra?: ReactNode;
+  surfaces: AssetSurface[];
+}
+
+export function MetaAssetList({ rows }: { rows: AssetRow[] }) {
+  const [confirmEl, confirm] = useConfirm();
+  return (
+    <div className="asset-list" style={{ marginTop: 8 }}>
+      {rows.map((r) => (
+        <div key={r.key} className="asset-row">
+          <div className="grow">
+            <strong>{r.title}</strong>
+            <div className="muted">{r.sub}</div>
+            {r.extra}
+          </div>
+          {r.surfaces.map((s) => {
+            if (s.state === 'linked') {
+              return (
+                <button
+                  key={s.key}
+                  className="btn danger"
+                  disabled={s.busy}
+                  onClick={s.onDisconnect}
+                >
+                  {s.disconnectLabel}
+                </button>
+              );
+            }
+            if (s.state === 'own') {
+              return (
+                <span key={s.key} className="muted">
+                  {s.ownLabel}
+                </span>
+              );
+            }
+            if (s.state === 'bound' && s.bound) {
+              return (
+                <div key={s.key} className="asset-bound">
+                  <button
+                    className="btn"
+                    disabled={s.busy}
+                    onClick={async () => {
+                      if (
+                        (await confirm(
+                          `Take ${s.label} over from ${s.bound!.workspace_name}${s.bound!.owner_email ? ` (${s.bound!.owner_email})` : ''}? ${s.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
+                          [
+                            { key: 'ok', label: 'Take over' },
+                            { key: 'cancel', label: 'Cancel' },
+                          ],
+                        )) === 'ok'
+                      )
+                        s.onConnect(true);
+                    }}
+                  >
+                    Take over
+                  </button>
+                  <span
+                    className="muted asset-bound-note"
+                    title={`bound to ${s.bound.agent_name} on ${s.bound.workspace_name}`}
+                  >
+                    on {s.bound.workspace_name} · {s.bound.agent_name}
+                    {s.bound.owner_email ? ` (${s.bound.owner_email})` : ''}
+                  </span>
+                </div>
+              );
+            }
+            return (
+              <button
+                key={s.key}
+                className="btn"
+                disabled={s.busy}
+                onClick={() => s.onConnect(false)}
+              >
+                {s.connectLabel}
+              </button>
+            );
+          })}
+        </div>
+      ))}
+      {confirmEl}
+    </div>
+  );
 }
 
 export const KIND_LABEL: Record<string, string> = {
@@ -72,10 +179,10 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
     queryKey: ['meta-pending', connectId],
     queryFn: () => api<PendingAssets>(`/api/meta/pending?id=${connectId}`),
     enabled: Boolean(connectId),
+    placeholderData: (prev) => prev,
     retry: false,
   });
   const { data: chList } = useChannels();
-  const [confirmEl, confirm] = useConfirm();
   const disconnect = useMutation({
     mutationFn: () => api('/api/meta/session', { method: 'DELETE' }),
     onSuccess: () => {
@@ -152,8 +259,12 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           </span>
         </summary>
         <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
-          {session.isPending || (connectId && pending.isPending) ? (
-            <div className="muted" style={{ marginTop: 8 }}>Loading Pages…</div>
+          {session.isPending || (connectId && pending.isPending && !pending.data) ? (
+            <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {[0, 1, 2].map((i) => (
+                <span key={i} className="nav-skel" style={{ width: `${70 - i * 15}%` }} />
+              ))}
+            </div>
           ) : !session.data?.connected ? (
             <>
               <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
@@ -181,194 +292,102 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
               </div>
             </>
           ) : pending.data ? (
-            <>
-              <div className="row" style={{ marginTop: 8, fontSize: 12 }}>
-                <span className="grow muted">Meta connected</span>
-                <a href={`/api/meta/connect?agent=${ch.agent_id}`}>Switch account</a>
-                <button
-                  className="btn ghost sm"
-                  disabled={disconnect.isPending}
-                  onClick={() => disconnect.mutate()}
-                >
-                  Disconnect
-                </button>
-              </div>
-              <div className="asset-list" style={{ marginTop: 8 }}>
-                {(pending.data.pages ?? []).map((pg) => {
-                  const ig = pg.instagram;
-                  const surfaces: {
-                    label: string;
-                    id: string;
-                    linked: boolean;
-                    bound?: BoundAsset | null;
-                    own?: Channel;
-                  }[] = [
-                    {
-                      label: 'Messenger',
-                      id: pg.id,
-                      linked: ch.meta.page_id === pg.id,
-                      bound: pg.bound,
-                      own: (chList?.channels ?? []).find(
-                        (x) => x.meta.page_id === pg.id && x.id !== ch.id,
-                      ),
-                    },
-                  ];
-                  if (ig) {
-                    surfaces.push({
-                      label: `Instagram${ig.username ? ` @${ig.username}` : ''}`,
-                      id: ig.id,
-                      linked: ch.meta.ig_page_id === ig.id,
-                      bound: ig.bound,
-                      own: (chList?.channels ?? []).find(
-                        (x) =>
-                          (x.meta.page_id === ig.id || x.meta.ig_page_id === ig.id) &&
-                          x.id !== ch.id,
-                      ),
-                    });
-                  }
-                  return (
-                    <div key={pg.id} className="asset-row">
-                      <div className="grow">
-                        <strong>{pg.name}</strong>
-                        <div className="muted">Facebook Page</div>
-                      </div>
-                      {surfaces.map((s) => (
-                        <span key={s.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                          {s.linked ? (
-                            <button
-                              className="btn danger"
-                              disabled={savePage.isPending}
-                              onClick={() =>
-                                savePage.mutate(
-                                  s.label === 'Messenger' ? { page_id: '' } : { ig_page_id: '' },
-                                )
-                              }
-                            >
-                              Disconnect {s.label}
-                            </button>
-                          ) : s.own ? (
-                            <span className="muted">{s.label} on {s.own.name}</span>
-                          ) : s.bound ? (
-                            <span>
-                              <button
-                                className="btn"
-                                disabled={link.isPending}
-                                onClick={async () => {
-                                  if (
-                                    (await confirm(
-                                      `Take ${s.label} over from ${s.bound!.workspace_name}${s.bound!.owner_email ? ` (${s.bound!.owner_email})` : ''}? ${s.bound!.agent_name} loses it — inbound messages come here instead.`,
-                                      [
-                                        { key: 'ok', label: 'Take over' },
-                                        { key: 'cancel', label: 'Cancel' },
-                                      ],
-                                    )) === 'ok'
-                                  )
-                                    link.mutate({
-                                      page_id: pg.id,
-                                      surface: s.label === 'Messenger' ? 'messenger' : 'instagram',
-                                      takeover: true,
-                                    });
-                                }}
-                              >
-                                Take over
-                              </button>{' '}
-                              <span className="muted" style={{ fontSize: 12 }}>
-                                on {s.bound.workspace_name} · {s.bound.agent_name}
-                              </span>
-                            </span>
-                          ) : (
-                            <button
-                              className="btn"
-                              disabled={link.isPending}
-                              onClick={() =>
-                                link.mutate({
-                                  page_id: pg.id,
-                                  surface: s.label === 'Messenger' ? 'messenger' : 'instagram',
-                                })
-                              }
-                            >
-                              Connect {s.label}
-                            </button>
-                          )}
-                        </span>
-                      ))}
-                    </div>
-                  );
-                })}
-              </div>
-              {(pending.data.whatsapp ?? []).map((w) =>
-                w.phone_numbers.map((num) => {
-                  const linked = ch.meta.phone_number_id === num.id;
-                  const own = (chList?.channels ?? []).find(
-                    (x) => x.meta.phone_number_id === num.id && x.id !== ch.id,
-                  );
-                  return (
-                    <div key={num.id} className="asset-row">
-                      <div className="grow">
-                        <strong>{num.display_phone_number ?? w.name ?? num.id}</strong>
-                        <div className="muted">WhatsApp</div>
-                        {num.bound && !linked && !own && (
-                          <div className="muted" style={{ fontSize: 12 }}>
-                            on {num.bound.workspace_name} · {num.bound.agent_name}
-                            {num.bound.owner_email ? ` (${num.bound.owner_email})` : ''}
-                          </div>
-                        )}
-                      </div>
-                      {linked ? (
-                        <button
-                          className="btn danger"
-                          disabled={savePage.isPending}
-                          onClick={() => savePage.mutate({ phone_number_id: '' })}
-                        >
-                          Disconnect WhatsApp
-                        </button>
-                      ) : own ? (
-                        <span className="muted">WhatsApp on {own.name}</span>
-                      ) : num.bound ? (
-                        <button
-                          className="btn"
-                          disabled={link.isPending}
-                          onClick={async () => {
-                            if (
-                              (await confirm(
-                                `Take WhatsApp over from ${num.bound!.workspace_name}${num.bound!.owner_email ? ` (${num.bound!.owner_email})` : ''}? ${num.bound!.agent_name} loses it — inbound messages come here instead.`,
-                                [
-                                  { key: 'ok', label: 'Take over' },
-                                  { key: 'cancel', label: 'Cancel' },
-                                ],
-                              )) === 'ok'
-                            )
-                              link.mutate({
-                                phone_number_id: num.id,
-                                surface: 'whatsapp',
-                                takeover: true,
-                              });
-                          }}
-                        >
-                          Take over
-                        </button>
-                      ) : (
-                        <button
-                          className="btn"
-                          disabled={link.isPending}
-                          onClick={() =>
-                            link.mutate({
-                              phone_number_id: num.id,
-                              surface: 'whatsapp',
-                            })
-                          }
-                        >
-                          Connect WhatsApp
-                        </button>
-                      )}
-                    </div>
-                  );
-                }),
-              )}
-              <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
-                Inbound events join the same conversation — each surface is linked separately.
-              </div>
-            </>
+            (() => {
+              const own = (id: string, keys: (keyof Channel['meta'])[]) =>
+                (chList?.channels ?? []).find(
+                  (x) => keys.some((k) => x.meta[k] === id) && x.id !== ch.id,
+                );
+              const rows: AssetRow[] = [
+                ...(pending.data.pages ?? [])
+                  .slice()
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((pg) => ({
+                    key: pg.id,
+                    title: pg.name,
+                    sub: 'Facebook Page',
+                    surfaces: [
+                      {
+                        key: `${pg.id}:m`,
+                        label: 'Messenger',
+                        state: (ch.meta.page_id === pg.id
+                          ? 'linked'
+                          : own(pg.id, ['page_id', 'ig_page_id'])
+                            ? 'own'
+                            : pg.bound
+                              ? 'bound'
+                              : 'free') as AssetSurface['state'],
+                        bound: pg.bound,
+                        ownLabel: `Messenger on ${own(pg.id, ['page_id', 'ig_page_id'])?.name}`,
+                        connectLabel: 'Connect Messenger',
+                        disconnectLabel: 'Disconnect Messenger',
+                        onConnect: (takeover: boolean) =>
+                          link.mutate({ page_id: pg.id, surface: 'messenger', takeover }),
+                        onDisconnect: () => savePage.mutate({ page_id: '' }),
+                        busy: link.isPending || savePage.isPending,
+                      },
+                      ...(pg.instagram
+                        ? [
+                            {
+                              key: `${pg.id}:i`,
+                              label: 'Instagram',
+                              state: (ch.meta.ig_page_id === pg.instagram.id
+                                ? 'linked'
+                                : own(pg.instagram.id, ['page_id', 'ig_page_id'])
+                                  ? 'own'
+                                  : pg.instagram.bound
+                                    ? 'bound'
+                                    : 'free') as AssetSurface['state'],
+                              bound: pg.instagram.bound,
+                              ownLabel: `Instagram on ${own(pg.instagram.id, ['page_id', 'ig_page_id'])?.name}`,
+                              connectLabel: `Connect Instagram${pg.instagram.username ? ` @${pg.instagram.username}` : ''}`,
+                              disconnectLabel: 'Disconnect Instagram',
+                              onConnect: (takeover: boolean) =>
+                                link.mutate({ page_id: pg.id, surface: 'instagram', takeover }),
+                              onDisconnect: () => savePage.mutate({ ig_page_id: '' }),
+                              busy: link.isPending || savePage.isPending,
+                            },
+                          ]
+                        : []),
+                    ],
+                  })),
+                ...(pending.data.whatsapp ?? []).flatMap((w) =>
+                  w.phone_numbers.map((num) => ({
+                    key: num.id,
+                    title: num.display_phone_number ?? num.id,
+                    sub: `WhatsApp Business${w.name ? ` · ${w.name}` : ''}`,
+                    surfaces: [
+                      {
+                        key: `${num.id}:w`,
+                        label: 'WhatsApp',
+                        state: (ch.meta.phone_number_id === num.id
+                          ? 'linked'
+                          : own(num.id, ['phone_number_id'])
+                            ? 'own'
+                            : num.bound
+                              ? 'bound'
+                              : 'free') as AssetSurface['state'],
+                        bound: num.bound,
+                        ownLabel: `WhatsApp on ${own(num.id, ['phone_number_id'])?.name}`,
+                        connectLabel: 'Connect WhatsApp',
+                        disconnectLabel: 'Disconnect WhatsApp',
+                        onConnect: (takeover: boolean) =>
+                          link.mutate({ phone_number_id: num.id, surface: 'whatsapp', takeover }),
+                        onDisconnect: () => savePage.mutate({ phone_number_id: '' }),
+                        busy: link.isPending || savePage.isPending,
+                      },
+                    ],
+                  })),
+                ),
+              ];
+              return (
+                <>
+                  <MetaAssetList rows={rows} />
+                  <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                    Inbound events join the same conversation — each surface is linked separately.
+                  </div>
+                </>
+              );
+            })()
           ) : null}
           {link.error && (
             <div className="error" style={{ marginTop: 6, fontSize: 12 }}>{link.error.message}</div>
@@ -378,7 +397,6 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           here too.
         </div>
       </details>
-      {confirmEl}
     </>
   );
 }

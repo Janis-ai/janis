@@ -6,7 +6,7 @@ import { Lock } from 'lucide-react';
 import type { Agent, Channel } from '@janis/shared';
 import { useBillingStatus, useChannels, useMe } from '../api/hooks';
 import { Empty } from './bits';
-import { KIND_LABEL, type PendingAssets } from './Channels';
+import { KIND_LABEL, MetaAssetList, type AssetRow, type AssetSurface, type BoundAsset, type PendingAssets } from './Channels';
 import { useConfirm } from './Prompt';
 import { friendlyError } from '../lib/friendlyError';
 
@@ -122,6 +122,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     queryFn: () => api<PendingAssets>(`/api/meta/pending?id=${connectId}`),
     // skip the Meta API call entirely while the picker is collapsed
     enabled: pickerOpen && Boolean(connectId),
+    placeholderData: (prev) => prev,
     retry: false,
   });
 
@@ -438,6 +439,88 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           ? `https://m.me/${ch.meta.page_id}`
           : undefined;
 
+
+  // Shared asset-list rows — same grammar as the bot-channel cards
+  // (linked → red Disconnect, same-ws sibling → inert note, cross-ws →
+  // Take over, free → Connect).
+  const surf = (
+    key: string,
+    label: string,
+    bound: BoundAsset | null | undefined,
+    boundCh: Channel | undefined,
+    payload: Record<string, unknown>,
+  ): AssetSurface => ({
+    key,
+    label,
+    state: boundCh
+      ? boundCh.agent_id === agentId
+        ? 'linked'
+        : 'own'
+      : bound
+        ? 'bound'
+        : 'free',
+    bound,
+    ownLabel: boundCh ? `${label} on ${boundCh.agent_name}` : undefined,
+    connectLabel: `Connect ${label}`,
+    disconnectLabel: `Disconnect ${label}`,
+    onConnect: (takeover) => link.mutate({ ...payload, takeover } as never),
+    onDisconnect: boundCh ? () => void disconnectChannel(boundCh) : undefined,
+    busy: link.isPending || removeChannel.isPending,
+  });
+  const assetRows: AssetRow[] = [
+    ...sortedPages.map((pg) => {
+      const msgr = linkedChannels.get(pg.id);
+      const ig = pg.instagram;
+      const igCh = ig ? linkedChannels.get(ig.id) : undefined;
+      return {
+        key: pg.id,
+        title: pg.name,
+        sub: 'Facebook Page',
+        extra: (
+          <>
+            {msgr && msgr.agent_id === agentId && launchUrl(msgr) && (
+              <a href={launchUrl(msgr)} target="_blank" rel="noreferrer">
+                Launch chat on Messenger ↗
+              </a>
+            )}
+            {igCh && igCh.agent_id === agentId && launchUrl(igCh) && (
+              <a href={launchUrl(igCh)} target="_blank" rel="noreferrer" style={{ display: 'block' }}>
+                Launch chat on Instagram ↗
+              </a>
+            )}
+          </>
+        ),
+        surfaces: [
+          surf(`${pg.id}:m`, 'Messenger', pg.bound, msgr, { kind: 'messenger', page_id: pg.id }),
+          ...(ig
+            ? [surf(`${pg.id}:i`, 'Instagram', ig.bound, igCh, { kind: 'instagram', page_id: pg.id })]
+            : []),
+        ],
+      };
+    }),
+    ...sortedWabas.flatMap((w) =>
+      w.phone_numbers.map((n) => {
+        const wa = linkedChannels.get(n.id);
+        return {
+          key: n.id,
+          title: n.display_phone_number ?? n.id,
+          sub: `WhatsApp Business${w.name ? ` · ${w.name}` : ''}`,
+          extra:
+            wa && wa.agent_id === agentId && launchUrl(wa) ? (
+              <a href={launchUrl(wa)} target="_blank" rel="noreferrer">
+                Launch chat on WhatsApp ↗
+              </a>
+            ) : undefined,
+          surfaces: [
+            surf(`${n.id}:w`, 'WhatsApp', n.bound, wa, {
+              kind: 'whatsapp',
+              phone_number_id: n.id,
+            }),
+          ],
+        };
+      }),
+    ),
+  ];
   /** Does the channel page carry anything beyond the row's own actions?
    *  OAuth Meta channels have no channel-specific settings (their webhook
    *  details only exist for manual Meta apps) — for those the row is just
@@ -1298,146 +1381,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           )}
           {pending.data && (
             <>
-              <div className="asset-list">
-                {sortedPages.map((pg) => {
-                  const msgr = linkedChannels.get(pg.id);
-                  const igCh = pg.instagram ? linkedChannels.get(pg.instagram.id) : undefined;
-                  return (
-                    <div key={pg.id} className="asset-row">
-                      <div className="grow">
-                        <strong>{pg.name}</strong>
-                        <div className="muted">Facebook Page</div>
-                        {msgr && msgr.agent_id === agentId && launchUrl(msgr) && (
-                          <a href={launchUrl(msgr)} target="_blank" rel="noreferrer">
-                            Launch chat on Messenger ↗
-                          </a>
-                        )}
-                        {igCh && igCh.agent_id === agentId && launchUrl(igCh) && (
-                          <a href={launchUrl(igCh)} target="_blank" rel="noreferrer" style={{ display: 'block' }}>
-                            Launch chat on Instagram ↗
-                          </a>
-                        )}
-                      </div>
-                      {msgr ? (
-                        msgr.agent_id === agentId ? (
-                          <button className="btn danger" disabled={removeChannel.isPending}
-                            onClick={() => void disconnectChannel(msgr)}>
-                            Disconnect Messenger
-                          </button>
-                        ) : (
-                          <span className="muted">Messenger on {msgr.agent_name}</span>
-                        )
-                      ) : pg.bound ? (
-                        <div className="asset-bound">
-                          <button className="btn" disabled={link.isPending}
-                            onClick={async () => {
-                              if (await confirm(
-                                `Take Messenger over from ${pg.bound!.workspace_name}${pg.bound!.owner_email ? ` (${pg.bound!.owner_email})` : ''}? ${pg.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
-                                [{ key: 'ok', label: 'Take over' }, { key: 'cancel', label: 'Cancel' }],
-                              ) === 'ok') link.mutate({ kind: 'messenger', page_id: pg.id, takeover: true });
-                            }}>
-                            Take over
-                          </button>
-                          <span className="muted asset-bound-note"
-                            title={`bound to ${pg.bound.agent_name} on ${pg.bound.workspace_name}`}>
-                            on {pg.bound.workspace_name} · {pg.bound.agent_name}
-                            {pg.bound.owner_email ? ` (${pg.bound.owner_email})` : ''}
-                          </span>
-                        </div>
-                      ) : (
-                        <button className="btn" disabled={link.isPending}
-                          onClick={() => link.mutate({ kind: 'messenger', page_id: pg.id })}>
-                          Connect Messenger
-                        </button>
-                      )}
-                      {pg.instagram && (
-                        igCh ? (
-                          igCh.agent_id === agentId ? (
-                            <button className="btn danger" disabled={removeChannel.isPending}
-                              onClick={() => void disconnectChannel(igCh)}>
-                              Disconnect Instagram
-                            </button>
-                          ) : (
-                            <span className="muted">Instagram on {igCh.agent_name}</span>
-                          )
-                        ) : pg.instagram.bound ? (
-                          <div className="asset-bound">
-                            <button className="btn" disabled={link.isPending}
-                              onClick={async () => {
-                                if (await confirm(
-                                  `Take Instagram over from ${pg.instagram!.bound!.workspace_name}${pg.instagram!.bound!.owner_email ? ` (${pg.instagram!.bound!.owner_email})` : ''}? ${pg.instagram!.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
-                                  [{ key: 'ok', label: 'Take over' }, { key: 'cancel', label: 'Cancel' }],
-                                ) === 'ok') link.mutate({ kind: 'instagram', page_id: pg.id, takeover: true });
-                              }}>
-                              Take over
-                            </button>
-                            <span className="muted asset-bound-note"
-                              title={`bound to ${pg.instagram.bound.agent_name} on ${pg.instagram.bound.workspace_name}`}>
-                              on {pg.instagram.bound.workspace_name} · {pg.instagram.bound.agent_name}
-                              {pg.instagram.bound.owner_email ? ` (${pg.instagram.bound.owner_email})` : ''}
-                            </span>
-                          </div>
-                        ) : (
-                          <button className="btn" disabled={link.isPending}
-                            onClick={() => link.mutate({ kind: 'instagram', page_id: pg.id })}>
-                            Connect Instagram{pg.instagram.username ? ` @${pg.instagram.username}` : ''}
-                          </button>
-                        )
-                      )}
-                    </div>
-                  );
-                })}
-                {sortedWabas.flatMap((w) =>
-                  w.phone_numbers.map((n) => {
-                    const wa = linkedChannels.get(n.id);
-                    return (
-                      <div key={n.id} className="asset-row">
-                        <div className="grow">
-                          <strong>{n.display_phone_number ?? n.id}</strong>
-                          <div className="muted">WhatsApp Business{w.name ? ` · ${w.name}` : ''}</div>
-                          {wa && wa.agent_id === agentId && launchUrl(wa) && (
-                            <a href={launchUrl(wa)} target="_blank" rel="noreferrer">
-                              Launch chat on WhatsApp ↗
-                            </a>
-                          )}
-                        </div>
-                        {wa ? (
-                          wa.agent_id === agentId ? (
-                            <button className="btn danger" disabled={removeChannel.isPending}
-                              onClick={() => void disconnectChannel(wa)}>
-                              Disconnect WhatsApp
-                            </button>
-                          ) : (
-                            <span className="muted">WhatsApp on {wa.agent_name}</span>
-                          )
-                        ) : n.bound ? (
-                          <div className="asset-bound">
-                            <button className="btn" disabled={link.isPending}
-                              onClick={async () => {
-                                if (await confirm(
-                                  `Take WhatsApp over from ${n.bound!.workspace_name}${n.bound!.owner_email ? ` (${n.bound!.owner_email})` : ''}? ${n.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
-                                  [{ key: 'ok', label: 'Take over' }, { key: 'cancel', label: 'Cancel' }],
-                                ) === 'ok') link.mutate({ kind: 'whatsapp', phone_number_id: n.id, takeover: true });
-                              }}>
-                              Take over
-                            </button>
-                            <span className="muted asset-bound-note"
-                              title={`bound to ${n.bound.agent_name} on ${n.bound.workspace_name}`}>
-                              on {n.bound.workspace_name} · {n.bound.agent_name}
-                              {n.bound.owner_email ? ` (${n.bound.owner_email})` : ''}
-                            </span>
-                          </div>
-                        ) : (
-                          <button className="btn" disabled={link.isPending}
-                            onClick={() => link.mutate({ kind: 'whatsapp', phone_number_id: n.id })}>
-                            Connect WhatsApp
-                          </button>
-                        )}
-                      </div>
-                    );
-                  }),
-                )}
-              </div>
+              <MetaAssetList rows={assetRows} />
               {!hasAssets && <Empty>No Pages or WhatsApp numbers found on that Meta login.</Empty>}
             </>
           )}
