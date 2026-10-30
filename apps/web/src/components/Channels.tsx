@@ -144,12 +144,6 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
             <div className="muted" style={{ marginTop: 8 }}>Loading Pages…</div>
           ) : !session.data?.connected ? (
             <>
-              In your Meta app (developers.facebook.com → Messenger → Webhooks), subscribe the Page
-              with:
-              <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
-                <div>URL: {apiOrigin}/channels/meta/webhook</div>
-                <div>Verify token: {ch.meta.verify_token ?? '—'}</div>
-              </div>
               <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
                 <a className="btn" href={`/api/meta/connect?agent=${ch.agent_id}`}>
                   Connect Meta
@@ -166,6 +160,12 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                     Save
                   </button>
                 </div>
+              </div>
+              Manual path — subscribe the Page to our webhook in your Meta app
+              (developers.facebook.com → Messenger → Webhooks):
+              <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
+                <div>URL: {apiOrigin}/channels/meta/webhook</div>
+                <div>Verify token: {ch.meta.verify_token ?? '—'}</div>
               </div>
             </>
           ) : pending.data ? (
