@@ -109,21 +109,20 @@ export async function consolidateConversationContact(db: Db, convId: string): Pr
  *  contact's last consolidation, bounded per tick (LLM cost is a trickle).
  *  A failed extract leaves consolidated_at stale → retried next tick. */
 export async function sweepContactConsolidation(db: Db, limit = 3): Promise<number> {
-  const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const rows = await db
     .select({ id: conversations.id })
     .from(conversations)
     .where(
       sql`${conversations.contactId} is not null
-        and ${conversations.lastMessageAt} > ${cutoff}
+        and ${conversations.lastMessageAt} > now() - interval '30 days'
         and exists (select 1 from messages m where m.conversation_id = ${conversations.id} and m.direction = 'in')
         and coalesce(
           (select (c.metadata->'learned'->>'consolidated_at')::timestamptz
              from ${contacts} c where c.id = ${conversations.contactId}),
           '-infinity'::timestamptz
-        ) < ${conversations.lastMessageAt}
-        order by ${conversations.lastMessageAt} desc`,
+        ) < ${conversations.lastMessageAt}`,
     )
+    .orderBy(desc(conversations.lastMessageAt))
     .limit(limit);
   let n = 0;
   for (const r of rows) {
