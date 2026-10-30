@@ -76,6 +76,13 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
   });
   const { data: chList } = useChannels();
   const [confirmEl, confirm] = useConfirm();
+  const disconnect = useMutation({
+    mutationFn: () => api('/api/meta/session', { method: 'DELETE' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['meta-session'] });
+      void qc.invalidateQueries({ queryKey: ['meta-pending'] });
+    },
+  });
   const link = useMutation({
     mutationFn: (b: { page_id: string; takeover?: boolean }) =>
       api<{ channel: Channel }>('/api/meta/link', {
@@ -170,6 +177,17 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
             </>
           ) : pending.data ? (
             <>
+              <div className="row" style={{ marginTop: 8, fontSize: 12 }}>
+                <span className="grow muted">Meta connected</span>
+                <a href={`/api/meta/connect?agent=${ch.agent_id}`}>Switch account</a>
+                <button
+                  className="btn ghost sm"
+                  disabled={disconnect.isPending}
+                  onClick={() => disconnect.mutate()}
+                >
+                  Disconnect
+                </button>
+              </div>
               <div className="asset-list" style={{ marginTop: 8 }}>
                 {(pending.data.pages ?? []).map((pg) => {
                   const own = (chList?.channels ?? []).find(
