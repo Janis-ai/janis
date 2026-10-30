@@ -93,6 +93,24 @@ export function Avatar({
 /** Titled code card with a copy button — used for embed snippets and docs.
  *  `lang` syntax-highlights (js/html/sh) via the tiny tokenizer in
  *  lib/highlight; omitted for plain mono text. */
+/** Framed guide screenshot — platform UI captures inside the docs. */
+export function DocShot({ src, alt }: { src: string; alt: string }) {
+  return (
+    <img
+      src={src}
+      alt={alt}
+      style={{
+        display: 'block',
+        maxWidth: 560,
+        width: '100%',
+        borderRadius: 8,
+        border: '1px solid var(--border)',
+        margin: '10px 0 4px',
+      }}
+    />
+  );
+}
+
 export function CodeBlock({ title, code, lang }: { title: string; code: string; lang?: CodeLang }) {
   const [copied, setCopied] = useState(false);
   const copy = () => {

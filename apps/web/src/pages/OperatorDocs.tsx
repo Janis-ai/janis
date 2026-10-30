@@ -1,5 +1,5 @@
 import { usePageTitle } from '../lib/title';
-import { Code } from '../components/bits';
+import { Code, DocShot } from '../components/bits';
 
 const STATES = [
   ['Needs human', 'The agent escalated (handoff, failure, or a routing rule). This is your work queue — claim it, reply, release.'],
@@ -314,12 +314,15 @@ content-type: application/json
           In Chatfuel, create a block named <strong>Janis</strong> — the name
           matters: quick-reply taps and card buttons route back through this
           block.
+          <DocShot src="/img/docs/cf-step1.png" alt="Chatfuel — create a block" />
         </li>
         <li>
           Open your <strong>Default Message</strong>: replace its contents with a{' '}
           <strong>User Input</strong> card that saves the answer to{' '}
           <span className="mono">{'{{user input}}'}</span>, then a{' '}
           <strong>Go to block</strong> card pointing at <strong>Janis</strong>.
+          <DocShot src="/img/docs/cf-step2.png" alt="Chatfuel — User Input card saving to {{user input}}" />
+          <DocShot src="/img/docs/cf-step3.png" alt="Chatfuel — Go to block card pointing at the Janis block" />
         </li>
         <li>
           In the <strong>Janis</strong> block, add a <strong>JSON API</strong>{' '}
@@ -327,17 +330,24 @@ content-type: application/json
           attributes — <span className="mono">messenger user id</span> and{' '}
           <span className="mono">user input</span> must be included (the card's
           send-all default covers them).
+          <DocShot src="/img/docs/cf-step4.png" alt="Chatfuel — JSON API card set to POST with user attributes" />
         </li>
         <li>
           Leave <strong>Report errors in the bot</strong> off, then{' '}
           <strong>Test the request</strong> — expect{' '}
           <span className="mono">200 OK</span>.
+          <DocShot src="/img/docs/cf-step5.png" alt="Chatfuel — Test the request returning 200 OK" />
         </li>
         <li>
           Clear keyword rules that would fire ahead of the default message, so
           every message reaches the Janis block.
+          <DocShot src="/img/docs/cf-step7.png" alt="Chatfuel — clearing competing keyword rules" />
         </li>
       </ol>
+      <p className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>
+        Screenshots are from the platform's classic builder — styling differs
+        today but the card and field names are the same.
+      </p>
 
       <h3>Testing</h3>
       <p className="muted" style={{ lineHeight: 1.6 }}>
@@ -487,10 +497,13 @@ content-type: application/json
         <li>
           In ManyChat, open <strong>Settings → Messenger → Default Reply →
           Edit</strong>.
+          <DocShot src="/img/docs/mc-editdefault.png" alt="ManyChat — Settings → Default Reply → Edit" />
         </li>
         <li>
           Replace the first step with a <strong>Dynamic</strong> step and click
           the purple area to add a request.
+          <DocShot src="/img/docs/mc-step3.png" alt="ManyChat — replace the step with a Dynamic step" />
+          <DocShot src="/img/docs/mc-step4.png" alt="ManyChat — click the purple area to add a dynamic request" />
         </li>
         <li>
           Method <strong>POST</strong>, the URL from step 1, and under{' '}
@@ -498,20 +511,27 @@ content-type: application/json
           the subscriber's <span className="mono">id</span> and{' '}
           <span className="mono">custom_fields.user input</span> are what Janis
           reads.
+          <DocShot src="/img/docs/mc-step5.png" alt="ManyChat — request body set to Full Subscriber Data" />
         </li>
         <li>
           <strong>Test this request</strong> → <span className="mono">200</span>,
           then <strong>Save</strong>. Keep the Default Reply enabled, set it to
           fire <strong>every time</strong>, and <strong>Publish</strong> the
           flow.
+          <DocShot src="/img/docs/mc-everytime.png" alt="ManyChat — Default Reply set to fire every time and publish" />
         </li>
         <li>
           Paste your ManyChat API token into the channel card (ManyChat
           Settings → API) — Janis then pushes replies through ManyChat
           directly, so answers still arrive if a reply runs past the request's
           time limit, and teammate replies reach the subscriber too.
+          <DocShot src="/img/docs/mc-gettoken.png" alt="ManyChat — copy the API token under Settings → API" />
         </li>
       </ol>
+      <p className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>
+        Screenshots are from the platform's classic builder — styling differs
+        today but the field names are the same.
+      </p>
 
       <h3>Testing</h3>
       <p className="muted" style={{ lineHeight: 1.6 }}>
