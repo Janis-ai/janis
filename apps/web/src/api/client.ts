@@ -4,6 +4,8 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** The full error body — carries UI hints like google_connect flags. */
+    public data?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -22,9 +24,11 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     throw err;
   }
   if (!res.ok) {
-    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    const body = (await res.json().catch(() => ({}))) as Record<string, unknown> & {
+      error?: string;
+    };
     noteApiFailure(path, res.status, body.error);
-    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`);
+    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body);
   }
   return (await res.json()) as T;
 }

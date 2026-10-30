@@ -21,7 +21,7 @@ import { env } from '../env.js';
 import { deliverWebhook, replayDelivery } from '../lib/webhooks.js';
 import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
 import { fetchUrlText, normalizeSourceUrl, refreshKnowledgeSource } from '../lib/urlSource.js';
-import { fetchGoogleSourceText, llmForAgent } from '../lib/googleSource.js';
+import { fetchGoogleSourceText, googleSourceTarget, llmForAgent } from '../lib/googleSource.js';
 import { importHelpCentre, MAX_KNOWLEDGE_SOURCES } from '../lib/helpCentreImport.js';
 import {
   detectKnowledgeGaps,
@@ -1547,6 +1547,20 @@ export function agentRoutes(db: Db) {
       try {
         fetched = await fetchUrlText(sourceUrl, { headers });
       } catch (err) {
+        // A Google link with no usable grant that also fails anonymously is
+        // almost always a private file — offer the connect flow, which is
+        // what mints the grant this fetch needs. The UI reads the flag and
+        // shows a Connect button inline.
+        if (!g.err && googleSourceTarget(sourceUrl)) {
+          return c.json(
+            {
+              error:
+                'this Google file isn’t publicly shared — connect Google in Abilities → integrations to grant access to your Docs, Sheets and Slides, or share the file "anyone with the link"',
+              google_connect: true,
+            },
+            422,
+          );
+        }
         return c.json(
           { error: g.err?.message ?? (err instanceof Error ? err.message : 'fetch failed') },
           422,

@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Agent, AgentConfig, HelpArticle } from '@janis/shared';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 import { HelpCenter } from './HelpCenter';
 import { Modal } from './Modal';
 import { FileText, Globe, Newspaper, RefreshCw, StickyNote, Trash2 } from 'lucide-react';
@@ -130,6 +130,7 @@ export function SourceList({
   // Authorization, stored encrypted server-side, never read back.
   const [authHeader, setAuthHeader] = useState('');
   const [error, setError] = useState('');
+  const [googleConnect, setGoogleConnect] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const [articlesOpen, setArticlesOpen] = useState(false);
   const [noteDraft, setNoteDraft] = useState('');
@@ -218,10 +219,14 @@ export function SourceList({
       setAuthHeader('');
       setPendingUrl(null);
       setImportMsg('');
+      setGoogleConnect(false);
       invalidate();
       if (forTopic) onTopicSettled?.();
     },
-    onError: (e) => setError(e.message),
+    onError: (e) => {
+      setError(e.message);
+      setGoogleConnect(e instanceof ApiError && e.data?.google_connect === true);
+    },
   });
 
   const importCentre = useMutation({
@@ -255,7 +260,10 @@ export function SourceList({
       invalidate();
       if (forTopic) onTopicSettled?.();
     },
-    onError: (e) => setError(e.message),
+    onError: (e) => {
+      setError(e.message);
+      setGoogleConnect(e instanceof ApiError && e.data?.google_connect === true);
+    },
   });
 
   const upload = async (list: FileList | null) => {
@@ -447,6 +455,16 @@ export function SourceList({
               {error && (
                 <div className="error" style={{ marginTop: 8 }}>
                   {error}
+                  {googleConnect && (
+                    <div style={{ marginTop: 8 }}>
+                      <a
+                        className="btn"
+                        href={`/api/google/connect?agent_id=${agentId}&tpl=google-docs`}
+                      >
+                        Connect Google
+                      </a>
+                    </div>
+                  )}
                 </div>
               )}
               <div className="row" style={{ marginTop: 14, gap: 8, justifyContent: 'flex-end' }}>
