@@ -4536,6 +4536,9 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     // While a suite runs, last_run lands per test — poll so checkmarks
     // light up live instead of appearing all at once at the end.
     refetchInterval: batch ? 3000 : false,
+    // Filter/sort swaps used to blank `data` mid-fetch — the empty-state
+    // guard unmounted ScenarioList and its toolbar state reset to All.
+    placeholderData: (prev) => prev,
   });
   const { data: runsData } = useQuery({
     queryKey: ['agent-test-runs', agentId],
@@ -5454,6 +5457,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           tests={tests}
           groupBy="conversation"
           paged={{
+            filter: testQuery.filter,
+            sort: testQuery.sort,
             counts: testCounts ?? { all: 0, failing: 0, passing: 0, unrun: 0 },
             hasMore: !!hasNextPage,
             loadingMore: isFetchingNextPage,

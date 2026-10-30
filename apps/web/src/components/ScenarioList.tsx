@@ -35,6 +35,10 @@ export type ScenarioCounts = {
  *  growing slice. Counts/filters/sort delegate to the server so the
  *  toolbar never lies about rows that aren't loaded yet. */
 export interface ScenarioListPaging {
+  /** Server-side query echo — the toolbar reads these so a remount
+   *  mid-fetch can't clobber the filter the user just picked. */
+  filter: Filter;
+  sort: Sort;
   counts: ScenarioCounts;
   hasMore: boolean;
   loadingMore: boolean;
@@ -94,16 +98,20 @@ export function ScenarioList({
   deletingGroup?: boolean;
   paged?: ScenarioListPaging;
 }) {
-  const [filter, setFilter] = useState<Filter>('all');
-  const [sort, setSort] = useState<Sort>('attention');
+  const [localFilter, setLocalFilter] = useState<Filter>('all');
+  const [localSort, setLocalSort] = useState<Sort>('attention');
+  const filter = paged?.filter ?? localFilter;
+  const sort = paged?.sort ?? localSort;
   const [foldAll, setFoldAll] = useState<FoldSignal>({ seq: 0, open: false });
   const applyFilter = (f: Filter) => {
-    setFilter(f);
-    if (f !== filter) paged?.onQueryChange({ filter: f, sort });
+    if (paged) {
+      if (f !== filter) paged.onQueryChange({ filter: f, sort });
+    } else setLocalFilter(f);
   };
   const applySort = (s: Sort) => {
-    setSort(s);
-    if (s !== sort) paged?.onQueryChange({ filter, sort: s });
+    if (paged) {
+      if (s !== sort) paged.onQueryChange({ filter, sort: s });
+    } else setLocalSort(s);
   };
   // "See matched scenario" deep links — a filter that would hide the
   // target row drops back to All so the reveal can find it. Paged mode:
@@ -114,7 +122,7 @@ export function ScenarioList({
       const id = (e as CustomEvent<string>).detail;
       if (!id) return;
       if (tests.some((t) => t.id === id)) {
-        if (!paged) setFilter('all');
+        if (!paged) setLocalFilter('all');
       } else paged?.onRevealMissing(id);
     };
     window.addEventListener(REVEAL_SCENARIO, onReveal);
