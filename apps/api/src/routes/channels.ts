@@ -210,6 +210,7 @@ const GRAPH = 'https://graph.facebook.com/v21.0';
  *  show a bare id until this resolves it once via Graph (the stored page
  *  token can read its own page). Missing/failed lookups just keep the id. */
 async function backfillSurfaceNames(
+  db: Db,
   channel: typeof channels.$inferSelect,
 ): Promise<ChannelCredentials> {
   const creds = { ...(channel.credentials as ChannelCredentials) };
@@ -315,7 +316,7 @@ export function channelApiRoutes(db: Db) {
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
     await resolveChatIdentity(db, row.channel);
-    row.channel.credentials = await backfillSurfaceNames(row.channel);
+    row.channel.credentials = await backfillSurfaceNames(db, row.channel);
     return c.json({ channel: toChannel(row.channel, row.agentName) });
   });
 
