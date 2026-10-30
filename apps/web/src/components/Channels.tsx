@@ -262,7 +262,9 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           even ones your bot never forwards.
         </div>
         <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
-          {session.isPending || (session.data?.connected && !pending.data) ? (
+          {pending.isError ? (
+            <div className="muted" style={{ marginTop: 8 }}>Couldn't load your Pages — try again later.</div>
+          ) : session.isPending || (session.data?.connected && !pending.data) ? (
             <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 10 }}>
               {[0, 1, 2].map((i) => (
                 <span key={i} className="nav-skel" style={{ width: `${70 - i * 15}%` }} />
