@@ -21,6 +21,7 @@ import { env } from '../env.js';
 import { deliverWebhook, replayDelivery } from '../lib/webhooks.js';
 import { extractKnowledgeText, UnsupportedFileError } from '../lib/knowledge.js';
 import { fetchUrlText, normalizeSourceUrl, refreshKnowledgeSource } from '../lib/urlSource.js';
+import { fetchGoogleSourceText, llmForAgent } from '../lib/googleSource.js';
 import { importHelpCentre, MAX_KNOWLEDGE_SOURCES } from '../lib/helpCentreImport.js';
 import {
   detectKnowledgeGaps,
@@ -1525,11 +1526,32 @@ export function agentRoutes(db: Db) {
       .where(eq(knowledgeFiles.agentId, agent.id));
     if (count >= MAX_KNOWLEDGE_SOURCES)
       return c.json({ error: `knowledge file limit reached (${MAX_KNOWLEDGE_SOURCES})` }, 409);
+    // Google-file links fetch through the agent's Google connection so
+    // private docs work; no usable grant falls back to the anonymous export
+    // crawl (link-shared files still land). The google error wins over the
+    // crawler's generic "HTTP 401" — it names the actual fix.
+    const g = await fetchGoogleSourceText(
+      db,
+      c.get('workspaceId'),
+      agent.id,
+      sourceUrl,
+      () => llmFor(db, agent),
+    ).then(
+      (r) => ({ r, err: null as Error | null }),
+      (e: unknown) => ({ r: null, err: e instanceof Error ? e : new Error(String(e)) }),
+    );
     let fetched: { text: string; sizeBytes: number; imageUrl?: string };
-    try {
-      fetched = await fetchUrlText(sourceUrl, { headers });
-    } catch (err) {
-      return c.json({ error: err instanceof Error ? err.message : 'fetch failed' }, 422);
+    if (g.r) {
+      fetched = g.r;
+    } else {
+      try {
+        fetched = await fetchUrlText(sourceUrl, { headers });
+      } catch (err) {
+        return c.json(
+          { error: g.err?.message ?? (err instanceof Error ? err.message : 'fetch failed') },
+          422,
+        );
+      }
     }
     const now = new Date();
     const [row] = await db

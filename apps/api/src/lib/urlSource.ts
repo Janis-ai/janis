@@ -5,6 +5,7 @@ import { knowledgeFiles } from '../db/schema.js';
 import { fireEventWebhook } from './eventWebhook.js';
 import { decryptSecret } from './secrets.js';
 import { fetchShopifySourceText } from './shopifySync.js';
+import { fetchGoogleSourceText, llmForAgent } from './googleSource.js';
 
 const MAX_CHARS = 80_000;
 const FETCH_TIMEOUT_MS = 15_000;
@@ -348,9 +349,34 @@ export async function refreshKnowledgeSource(
         });
       return true;
     }
-    const { text, sizeBytes, imageUrl, finalUrl } = file.sourceUrl!.startsWith('shopify://')
-      ? await fetchShopifySourceText(db, file)
-      : await fetchUrlText(file.sourceUrl!, { headers: sourceHeaders });
+    // Google-file links prefer the agent's OAuth connection (private docs);
+    // a dead/missing grant falls back to the anonymous export crawl. The
+    // google error wins over a generic HTTP failure — it names the fix.
+    let page: { text: string; sizeBytes: number; imageUrl?: string | null; finalUrl: string };
+    if (file.sourceUrl!.startsWith('shopify://')) {
+      page = await fetchShopifySourceText(db, file);
+    } else {
+      const g = await fetchGoogleSourceText(
+        db,
+        file.workspaceId,
+        file.agentId,
+        file.sourceUrl!,
+        llmForAgent(db, file.agentId, file.workspaceId),
+      ).then(
+        (r) => ({ r, err: null as Error | null }),
+        (e: unknown) => ({ r: null, err: e instanceof Error ? e : new Error(String(e)) }),
+      );
+      if (g.r) {
+        page = { ...g.r, finalUrl: file.sourceUrl! };
+      } else {
+        try {
+          page = await fetchUrlText(file.sourceUrl!, { headers: sourceHeaders });
+        } catch (err) {
+          throw g.err ?? err;
+        }
+      }
+    }
+    const { text, sizeBytes, imageUrl, finalUrl } = page;
     const rot = rotReason(file.text ?? '', file.sourceUrl!, text, finalUrl);
     if (rot) return degrade(rot);
     // No-change crawls keep the last-good row but skip the text/size

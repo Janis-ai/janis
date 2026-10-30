@@ -94,6 +94,19 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Google-file URLs as knowledge sources + scope re-add:** pasting a
+private Doc/Sheet/Deck/Drive link into Teach it now fetches through the
+agent's Google connection (new `lib/googleSource.ts`) instead of the
+anonymous export crawl that 404s on non-public files. Docs/Slides text is
+flattened from textRuns, Sheets render per-tab via values.batchGet, and
+opaque drive/file links probe metadata → each native API → binary download
+(picked files, extractKnowledgeText). Falls back to the public export
+crawl when there's no connection; the google error names the fix ("share
+with X / pick it"). SCOPES re-added `auth/documents` (Google OAuth review
+had flagged it — Mike chose justification over dropping) and added
+`auth/presentations.readonly` (minimal for decks; create stays under
+drive.file). Consent-screen + KB-paste flows are the verification demo.
+
 **Bot-platform ingest parity + setup docs:** `POST /bot/:key/{chatfuel,
 manychat}` now covers the legacy doc contract end-to-end. Event-only
 posts (`{{event}}`/`dfEvent` with no typed text) reach the agent as

@@ -17,14 +17,18 @@ import { TOOL_TEMPLATES } from '../lib/toolTemplates.js';
 // the granted refresh token lands on agent_connections (provider 'google').
 // Runtime mints short-lived access tokens per run via connections.ts.
 const STATE_TTL_MS = 15 * 60 * 1000;
-// drive.file (non-restricted) covers docs the agent creates or the user
-// picks — the Docs/Slides APIs accept it for files in the grant, so the
-// broader auth/documents scope was dropped (OAuth review flagged it; the
-// picked set is the intended share boundary anyway). drive.readonly would
-// let *_list enumerate ALL files but lands in Google's restricted tier
-// (CASA assessment); not worth it for a convenience listing.
+// Scope story for OAuth verification: documents + spreadsheets +
+// presentations.readonly let operators paste private Doc/Sheet/Deck links
+// as agent knowledge sources (googleSource.ts) and let tools act on a file
+// by pasted id — narrower drive.file-only grants would 404 anything not
+// picked first. drive.file still covers the picker set, app-created files,
+// and Slides create (no Slides tool writes existing decks, so readonly
+// suffices). drive.readonly would let *_list enumerate ALL files but lands
+// in Google's restricted tier (CASA assessment); not worth it.
 const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/documents',
+  'https://www.googleapis.com/auth/presentations.readonly',
   'https://www.googleapis.com/auth/drive.file',
   'openid',
   'email',
