@@ -6,10 +6,12 @@ import { and, asc, desc, eq, ilike, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
+  helpArticleRevisions,
   helpArticles,
   helpSearchLog,
   helpVotes,
   knowledgeFiles,
+  users,
   workspaces,
 } from '../db/schema.js';
 import { sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -88,6 +90,42 @@ async function ownsArticle(db: Db, workspaceId: string, id: string) {
     .where(and(eq(helpArticles.id, id), eq(agents.workspaceId, workspaceId)))
     .limit(1);
   return row?.help_articles ?? null;
+}
+
+/** Snapshot an article's saved state into its append-only revision log. */
+async function snapshotRevision(
+  db: Db,
+  article: typeof helpArticles.$inferSelect,
+  userId?: string,
+) {
+  await db.insert(helpArticleRevisions).values({
+    articleId: article.id,
+    workspaceId: article.workspaceId,
+    title: article.title,
+    slug: article.slug,
+    category: article.category,
+    seoTitle: article.seoTitle,
+    seoDescription: article.seoDescription,
+    body: article.body,
+    status: article.status,
+    createdBy: userId ?? null,
+  });
+}
+
+/** Did a PATCH touch content? Position-only saves shouldn't make noise. */
+function contentChanged(
+  prev: typeof helpArticles.$inferSelect,
+  next: typeof helpArticles.$inferSelect,
+) {
+  return (
+    prev.title !== next.title ||
+    prev.slug !== next.slug ||
+    prev.category !== next.category ||
+    prev.seoTitle !== next.seoTitle ||
+    prev.seoDescription !== next.seoDescription ||
+    prev.body !== next.body ||
+    prev.status !== next.status
+  );
 }
 
 /** Console CRUD — manage an agent's help-center articles. */
@@ -179,6 +217,7 @@ export function articleRoutes(db: Db) {
         publishedAt: b.status === 'published' ? new Date() : null,
       })
       .returning();
+    await snapshotRevision(db, row, c.get('user').id);
     return c.json({ article: toHelpArticle(row) }, 201);
   });
 
@@ -276,6 +315,77 @@ Rules for the body: plain text, short paragraphs, under 400 words. State the ans
       })
       .where(eq(helpArticles.id, existing.id))
       .returning();
+    if (contentChanged(existing, row)) await snapshotRevision(db, row, c.get('user').id);
+    return c.json({ article: toHelpArticle(row) });
+  });
+
+  // Edit history — every content-changing save, newest first. Meta only:
+  // restore reads the row server-side, no need to ship bodies in the list.
+  app.get('/:id/revisions', async (c) => {
+    const existing = await ownsArticle(db, c.get('workspaceId'), c.req.param('id'));
+    if (!existing) return c.json({ error: 'not found' }, 404);
+    const rows = await db
+      .select({
+        id: helpArticleRevisions.id,
+        title: helpArticleRevisions.title,
+        category: helpArticleRevisions.category,
+        status: helpArticleRevisions.status,
+        body: helpArticleRevisions.body,
+        created_at: helpArticleRevisions.createdAt,
+        editor: users.name,
+      })
+      .from(helpArticleRevisions)
+      .leftJoin(users, eq(helpArticleRevisions.createdBy, users.id))
+      .where(eq(helpArticleRevisions.articleId, existing.id))
+      .orderBy(desc(helpArticleRevisions.createdAt))
+      .limit(100);
+    return c.json({
+      revisions: rows.map((r) => ({
+        id: r.id,
+        title: r.title,
+        category: r.category,
+        status: r.status,
+        preview: r.body.slice(0, 240),
+        created_at: r.created_at.toISOString(),
+        editor: r.editor,
+      })),
+    });
+  });
+
+  // Roll back to a prior revision — the restore lands as its own revision
+  // (through the same content-change snapshot), so history stays append-only.
+  app.post('/:id/revisions/:revId/restore', async (c) => {
+    const existing = await ownsArticle(db, c.get('workspaceId'), c.req.param('id'));
+    if (!existing) return c.json({ error: 'not found' }, 404);
+    const [rev] = await db
+      .select()
+      .from(helpArticleRevisions)
+      .where(
+        and(
+          eq(helpArticleRevisions.id, c.req.param('revId')),
+          eq(helpArticleRevisions.articleId, existing.id),
+        ),
+      )
+      .limit(1);
+    if (!rev) return c.json({ error: 'not found' }, 404);
+    const publishing = rev.status === 'published' && existing.status !== 'published';
+    const [row] = await db
+      .update(helpArticles)
+      .set({
+        title: rev.title,
+        // The old slug may have been claimed by a sibling since — dedupe.
+        slug: rev.slug === null ? null : await uniqueSlug(db, existing.agentId, rev.slug, existing.id),
+        category: rev.category,
+        seoTitle: rev.seoTitle,
+        seoDescription: rev.seoDescription,
+        body: rev.body,
+        status: rev.status,
+        publishedAt: publishing ? new Date() : existing.publishedAt,
+        updatedAt: new Date(),
+      })
+      .where(eq(helpArticles.id, existing.id))
+      .returning();
+    if (contentChanged(existing, row)) await snapshotRevision(db, row, c.get('user').id);
     return c.json({ article: toHelpArticle(row) });
   });
 

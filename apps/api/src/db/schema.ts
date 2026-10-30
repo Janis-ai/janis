@@ -1023,6 +1023,33 @@ export const helpArticles = pgTable(
   ],
 );
 
+/** One snapshot per saved article content change — append-only edit history.
+ *  POST/PATCH snapshot the new state (each save = one row, latest = current);
+ *  restore copies an older row's fields back through the same path, so a
+ *  rollback is itself a revision and history is never rewritten. */
+export const helpArticleRevisions = pgTable(
+  'help_article_revisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    articleId: uuid('article_id')
+      .notNull()
+      .references(() => helpArticles.id, { onDelete: 'cascade' }),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    title: text('title').notNull(),
+    slug: text('slug'),
+    category: text('category').notNull().default('General'),
+    seoTitle: text('seo_title'),
+    seoDescription: text('seo_description'),
+    body: text('body').notNull().default(''),
+    status: text('status', { enum: ['draft', 'published'] }).notNull().default('draft'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('help_article_revisions_article').on(t.articleId, t.createdAt)],
+);
+
 /** Every customer-facing help-center search — results=0 rows are the content
  *  roadmap: what customers asked for and couldn't find. */
 export const helpSearchLog = pgTable(

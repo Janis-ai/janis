@@ -2,7 +2,78 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Agent, HelpArticle } from '@janis/shared';
 import { api } from '../api/client';
+import { timeAgo } from './bits';
 import type { KnowledgeFile } from './SourceList';
+
+interface Revision {
+  id: string;
+  title: string;
+  category: string;
+  status: string;
+  preview: string;
+  created_at: string;
+  editor: string | null;
+}
+
+/** Append-only edit history for one article — newest first, restore puts an
+ *  old version's content back as a new save (history is never rewritten). */
+function RevisionHistory({
+  articleId,
+  onRestored,
+}: {
+  articleId: string;
+  onRestored: (a: HelpArticle) => void;
+}) {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['article-revisions', articleId],
+    queryFn: () => api<{ revisions: Revision[] }>(`/api/articles/${articleId}/revisions`),
+  });
+  const restore = useMutation({
+    mutationFn: (revId: string) =>
+      api<{ article: HelpArticle }>(
+        `/api/articles/${articleId}/revisions/${revId}/restore`,
+        { method: 'POST' },
+      ),
+    onSuccess: (d) => {
+      void qc.invalidateQueries({ queryKey: ['articles'] });
+      void qc.invalidateQueries({ queryKey: ['article-revisions', articleId] });
+      onRestored(d.article);
+    },
+  });
+  const revs = data?.revisions ?? [];
+  if (revs.length <= 1) return null; // only the current save — nothing to roll back to
+  return (
+    <details style={{ marginTop: 8 }}>
+      <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>
+        Version history — {revs.length} saved versions
+      </summary>
+      <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
+        {revs.map((r, i) => (
+          <div key={r.id} className="row" style={{ alignItems: 'flex-start' }}>
+            <span className="grow">
+              <strong>{r.title}</strong>{' '}
+              <span className="muted">
+                · {r.status} · {timeAgo(r.created_at)} ago
+                {r.editor ? ` · ${r.editor}` : ''}
+                {i === 0 ? ' · current' : ''}
+              </span>
+              <div className="muted" style={{ marginTop: 2 }}>
+                {r.preview}
+                {r.preview.length >= 240 ? '…' : ''}
+              </div>
+            </span>
+            {i > 0 && (
+              <button className="btn sm" disabled={restore.isPending} onClick={() => restore.mutate(r.id)}>
+                {restore.isPending ? 'Restoring…' : 'Restore'}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
 
 interface Form {
   title: string;
@@ -224,6 +295,15 @@ export function HelpCenter({ agent }: { agent: Agent }) {
         </button>
         <button className="btn sm" onClick={() => setEditing(null)}>Cancel</button>
       </div>
+      {editing !== 'new' && editing && (
+        <RevisionHistory
+          articleId={editing.id}
+          onRestored={(a) => {
+            setForm(fromArticle(a));
+            invalidate();
+          }}
+        />
+      )}
     </div>
   );
 
