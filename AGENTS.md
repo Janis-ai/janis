@@ -349,10 +349,11 @@ drizzle-kit/workbox-build, nothing to drop directly).
     Files / Websites / Gaps / Help center). Branding-tab piece superseded
     by the per-channel Bubble editor (channel page: live preview,
     Appearance/Developer sections, custom domain).
-21. Webhook recipes in Docs — ManyChat/GHL HTTP-Request → POST /v1/events
-    handoff recipe; also external-change → POST
-    /:id/knowledge/:fileId/refresh (repo commit / Zapier / doc-change
-    trigger for fresher-than-cadence knowledge).
+21. DONE 2026-10-30 — webhook recipes in Docs: ManyChat/GHL → /v1/events
+    handoff (pre-existing) plus external-change → knowledge refresh via
+    the new agent-key endpoints GET /v1/knowledge + POST
+    /v1/knowledge/:fileId/refresh (agent-scoped, idempotent re-crawl,
+    failed crawl degrades rather than evicting last-good).
 22. DONE — `analytics_events` + POST /api/track + lib/analytics.ts
     track() wired into landing/console events.
 23. DONE — in-process state audit closed (convLock advisory lock, voice
