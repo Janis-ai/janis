@@ -133,9 +133,9 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
       </details>
       <details className="webhook-details" open style={{ marginTop: 8 }}>
         <summary>
-          <span className="details-title">See every message</span>
+          <span className="details-title">Pages</span>
           <span className="details-sub">
-            optional — subscribe the Page so inbound texts arrive even when the bot doesn't forward
+            optional — subscribe a Page so inbound texts arrive even when the bot doesn't forward
             them
           </span>
         </summary>
@@ -164,24 +164,32 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
               </div>
             </div>
           ) : pending.data ? (
-            <div className="asset-list" style={{ marginTop: 8 }}>
-              {(pending.data.pages ?? []).map((pg) => {
-                const own = (chList?.channels ?? []).find(
-                  (x) => x.meta.page_id === pg.id && x.id !== ch.id,
-                );
-                const linkedHere = ch.meta.page_id === pg.id;
-                return (
-                  <div key={pg.id} className="asset-row">
-                    <div className="grow">
-                      <strong>{pg.name}</strong>
-                      <div className="muted">Facebook Page</div>
-                    </div>
-                    {linkedHere ? (
-                      <span className="badge active">Linked</span>
-                    ) : own ? (
-                      <span className="muted">on {own.name}</span>
-                    ) : pg.bound ? (
-                      <div className="asset-bound">
+            <>
+              <div className="asset-list" style={{ marginTop: 8 }}>
+                {(pending.data.pages ?? []).map((pg) => {
+                  const own = (chList?.channels ?? []).find(
+                    (x) => x.meta.page_id === pg.id && x.id !== ch.id,
+                  );
+                  const linkedHere = ch.meta.page_id === pg.id;
+                  return (
+                    <div key={pg.id} className="asset-row">
+                      <div className="grow">
+                        <strong>{pg.name}</strong>
+                        <div className="muted">
+                          Facebook Page{pg.instagram ? ` · also @${pg.instagram.username ?? pg.instagram.id}` : ''}
+                        </div>
+                        {pg.bound && !linkedHere && !own && (
+                          <div className="muted" style={{ fontSize: 12 }}>
+                            on {pg.bound.workspace_name} · {pg.bound.agent_name}
+                            {pg.bound.owner_email ? ` (${pg.bound.owner_email})` : ''}
+                          </div>
+                        )}
+                      </div>
+                      {linkedHere ? (
+                        <span className="badge active">Linked</span>
+                      ) : own ? (
+                        <span className="muted">on {own.name}</span>
+                      ) : pg.bound ? (
                         <button
                           className="btn"
                           disabled={link.isPending}
@@ -200,23 +208,23 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                         >
                           Take over
                         </button>
-                        <span className="muted asset-bound-note">
-                          on {pg.bound.workspace_name} · {pg.bound.agent_name}
-                        </span>
-                      </div>
-                    ) : (
-                      <button
-                        className="btn"
-                        disabled={link.isPending}
-                        onClick={() => link.mutate({ page_id: pg.id })}
-                      >
-                        Link page
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                      ) : (
+                        <button
+                          className="btn"
+                          disabled={link.isPending}
+                          onClick={() => link.mutate({ page_id: pg.id })}
+                        >
+                          Link page
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>
+                Linking a Page covers Messenger and Instagram events for this channel.
+              </div>
+            </>
           ) : null}
           {link.error && (
             <div className="error" style={{ marginTop: 6, fontSize: 12 }}>{link.error.message}</div>
