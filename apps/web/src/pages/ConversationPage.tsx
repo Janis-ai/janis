@@ -16,6 +16,7 @@ import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
+import { useConfirm } from '../components/Prompt';
 import { Paperclip, RefreshCw, Star, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
@@ -446,6 +447,16 @@ export default function ConversationPage() {
     onError: (e) => setError(e.message),
   });
 
+  const [confirmEl, confirm] = useConfirm();
+  const del = useMutation({
+    mutationFn: () => api(`/api/conversations/${id}`, { method: 'DELETE' }),
+    onSuccess: () => {
+      invalidate();
+      navigate('/conversations');
+    },
+    onError: (e) => setError(e.message),
+  });
+
   // Status control — routes each target through the endpoint that owns its
   // side effects: takeover claims the channel thread, resume releases it,
   // PATCH handles plain flag changes (and resolves open alerts on 'active').
@@ -832,6 +843,7 @@ export default function ConversationPage() {
 
   return (
     <div className="conv-layout">
+      {confirmEl}
       <div className="conv-main">
         <div className="row">
           <input
@@ -1556,6 +1568,20 @@ export default function ConversationPage() {
                   {archive.isPending ? 'Working…' : 'Unarchive'}
                 </button>
               </>
+            )}
+            {canTeach && (
+              <button
+                className="btn danger"
+                title="Permanently delete this conversation and its transcript — archive keeps it searchable"
+                disabled={del.isPending}
+                onClick={async () => {
+                  if (await confirm('Permanently delete this conversation and its entire transcript? This cannot be undone — archive keeps it out of the inbox but searchable.', [{ key: 'ok', label: 'Delete', danger: true }])) {
+                    del.mutate();
+                  }
+                }}
+              >
+                {del.isPending ? 'Deleting…' : 'Delete'}
+              </button>
             )}
           </div>
         )}

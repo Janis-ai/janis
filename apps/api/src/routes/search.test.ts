@@ -87,16 +87,23 @@ describe('search filters', () => {
     expect(ids).not.toContain(active.id);
   });
 
-  it('hides archived by default, includes them when filtered', async () => {
+  it('covers archived in a bare search, scopes to it when filtered', async () => {
     const archived = await makeConv('archived-hit', { state: 'archived' });
+    // Slack semantics: archived is a browse-list concept — text search
+    // covers every state without an explicit filter.
     const def = await search('q=archived-hit');
-    expect((await def.json()).conversations.map((c: { id: string }) => c.id)).not.toContain(
+    expect((await def.json()).conversations.map((c: { id: string }) => c.id)).toContain(
       archived.id,
     );
     const filtered = await search('q=archived-hit&state=archived');
     expect(
       (await filtered.json()).conversations.map((c: { id: string }) => c.id),
     ).toContain(archived.id);
+    // and an explicit non-archived state filter still scopes it out
+    const activeOnly = await search('q=archived-hit&state=active');
+    expect(
+      (await activeOnly.json()).conversations.map((c: { id: string }) => c.id),
+    ).not.toContain(archived.id);
   });
 
   it('respects agent_id filter', async () => {

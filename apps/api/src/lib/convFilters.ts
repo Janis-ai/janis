@@ -69,7 +69,7 @@ export const MERCHANT_CONV = sql`coalesce(${conversations.userProfile}->>'kind',
 /** WHERE conditions for conversation listing — workspace scope + filters.
  * Shared by /api/conversations and /api/search so filters behave identically. */
 export function convListConditions(
-  q: z.infer<typeof convListQuery>,
+  q: z.infer<typeof convListQuery> & { q?: string },
   workspaceId: string,
   userId: string,
   scope?: AgentScope,
@@ -135,13 +135,16 @@ export function convListConditions(
   if (signalOrs.length) conditions.push(or(...signalOrs)!);
 
   // archived hidden only in the unfiltered browse view — an explicit
-  // selection (any state/flag/signal) or a topic drill-down shows them
-  if (!stateOrs.length && !flagOrs.length && !signalOrs.length && !q.intent && !q.from && !q.to)
+  // selection (any state/flag/signal), a topic drill-down, or a text
+  // search shows them. Search covers everything like Slack: archived is
+  // a list-view concept, not a search exclusion.
+  const searching = !!q.q?.trim();
+  if (!stateOrs.length && !flagOrs.length && !signalOrs.length && !q.intent && !q.from && !q.to && !searching)
     conditions.push(ne(conversations.state, 'archived'));
   // actively-snoozed conversations hide from every queue except when Snoozed
   // (or Archived — archive wins over snooze) is among the selected states;
-  // drill-downs count everything in the window, snoozed or not
-  if (!states.has('snoozed') && !states.has('archived') && !q.intent && !q.from && !q.to) {
+  // drill-downs and text searches count everything, snoozed or not
+  if (!states.has('snoozed') && !states.has('archived') && !q.intent && !q.from && !q.to && !searching) {
     conditions.push(
       sql`(${conversations.snoozedUntil} is null or ${conversations.snoozedUntil} <= now())`,
     );

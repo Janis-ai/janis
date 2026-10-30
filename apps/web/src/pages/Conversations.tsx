@@ -609,7 +609,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
                   <button className="link small" onClick={() => setFilters(EMPTY_FILTERS)}>
                     Clear all
                   </button>
-                  <span className="filter-hint">Archived threads appear when Archived (or every state) is checked</span>
+                  <span className="filter-hint">Search covers archived threads automatically; this filter only scopes the browse list</span>
                 </div>
               </div>
             </>
