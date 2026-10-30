@@ -21,6 +21,7 @@ import { recordSttUsage } from '../lib/usage.js';
 import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
 import { adoptVisitorConversation, handleChannelMessage } from '../services/channelIngress.js';
 import { processEvents } from '../services/ingest.js';
+import { applyConvEffects } from '../lib/conversationOps.js';
 import { bus } from '../lib/bus.js';
 import { rateLimit, takeDbAllowance } from '../lib/rateLimit.js';
 import { agentWorking, operatorTyping } from '../lib/typingState.js';
@@ -196,6 +197,16 @@ const postMessage = z
   .refine((d) => d.text.trim().length > 0 || (d.attachments?.length ?? 0) > 0, {
     message: 'text or attachments required',
   });
+
+/** Body for the lightweight visitor actions (typing/end/new). They resolve
+ *  the same participant as a message post — without the claim a signed-in
+ *  visitor drops to their anonymous binding and the action silently targets
+ *  the wrong (or no) thread. */
+const visitorAction = z.object({
+  visitor_id: z.string().regex(VISITOR_RE),
+  thread: z.string().max(48).optional(),
+  user: identityClaim.optional(),
+});
 
 async function findChannel(db: Db, token: string) {
   // A non-UUID token (link expanders, typos, scanner probes hitting
@@ -1117,20 +1128,14 @@ export function webchatRoutes(db: Db) {
   // Throttled client-side; drops silently when the thread doesn't exist yet.
   app.post(
     '/:token/typing',
-    zValidator(
-      'json',
-      z.object({
-        visitor_id: z.string().regex(VISITOR_RE),
-        thread: z.string().max(48).optional(),
-      }),
-    ),
+    zValidator('json', visitorAction),
     async (c) => {
       const channel = await findChannel(db, c.req.param('token'));
       if (!channel) return c.json({ error: 'not found' }, 404);
-      const { visitor_id, thread } = c.req.valid('json');
+      const { visitor_id, thread, user } = c.req.valid('json');
       const resolved = simVisitor(channel, visitor_id)
         ? undefined
-        : await resolveIdentity(c, db, channel, undefined);
+        : await resolveIdentity(c, db, channel, user);
       const participant = participantFor(resolved, visitor_id, threadFor(thread));
       const conv = await findConversation(db, channel, participant);
       if (!conv) return c.json({ ok: true });
@@ -1168,23 +1173,21 @@ export function webchatRoutes(db: Db) {
   app.post(
     '/:token/end',
     rateLimit({ scope: 'chat-end', windowMs: 60_000, max: 10 }),
-    zValidator(
-      'json',
-      z.object({
-        visitor_id: z.string().regex(VISITOR_RE),
-        thread: z.string().max(48).optional(),
-      }),
-    ),
+    zValidator('json', visitorAction),
     async (c) => {
       const channel = await findChannel(db, c.req.param('token'));
       if (!channel) return c.json({ error: 'not found' }, 404);
-      const { visitor_id, thread } = c.req.valid('json');
+      const { visitor_id, thread, user } = c.req.valid('json');
       const resolved = simVisitor(channel, visitor_id)
         ? undefined
-        : await resolveIdentity(c, db, channel, undefined);
+        : await resolveIdentity(c, db, channel, user);
       const participant = participantFor(resolved, visitor_id, threadFor(thread));
       const conv = await findConversation(db, channel, participant);
-      if (!conv || conv.state === 'archived') return c.json({ ok: true, state: 'archived' });
+      // Report the truth — the widget re-syncs its ended state off this
+      // response, and a fake 'archived' leaves it showing an ended note on a
+      // chat that never closed.
+      if (!conv) return c.json({ ok: true, state: 'new' });
+      if (conv.state === 'archived') return c.json({ ok: true, state: 'archived' });
       const [agent] = await db.select().from(agents).where(eq(agents.id, channel.agentId)).limit(1);
       if (!agent) return c.json({ error: 'not found' }, 404);
       await processEvents(db, agent, [
@@ -1194,6 +1197,20 @@ export function webchatRoutes(db: Db) {
           reason: 'customer ended the chat',
         },
       ]);
+      if (conv.state === 'human') {
+        // A 'resolve' event can't archive a human-owned thread — the operator
+        // owns the agent-side close. The customer ending their own chat still
+        // wins, so finish the same transition an operator archive runs (CSAT,
+        // hooks, Meta thread release, alert sweep).
+        const [after] = await db
+          .update(conversations)
+          .set({ state: 'archived', archivedAt: new Date() })
+          .where(eq(conversations.id, conv.id))
+          .returning();
+        if (after) {
+          await applyConvEffects(db, agent.workspaceId, conv, after, { state: 'archived' }, null);
+        }
+      }
       return c.json({ ok: true, state: 'archived' });
     },
   );
@@ -1204,20 +1221,14 @@ export function webchatRoutes(db: Db) {
   app.post(
     '/:token/new',
     rateLimit({ scope: 'chat-new', windowMs: 60_000, max: 5 }),
-    zValidator(
-      'json',
-      z.object({
-        visitor_id: z.string().regex(VISITOR_RE),
-        thread: z.string().max(48).optional(),
-      }),
-    ),
+    zValidator('json', visitorAction),
     async (c) => {
       const channel = await findChannel(db, c.req.param('token'));
       if (!channel) return c.json({ error: 'not found' }, 404);
-      const { visitor_id, thread } = c.req.valid('json');
+      const { visitor_id, thread, user } = c.req.valid('json');
       const resolved = simVisitor(channel, visitor_id)
         ? undefined
-        : await resolveIdentity(c, db, channel, undefined);
+        : await resolveIdentity(c, db, channel, user);
       const participant = participantFor(resolved, visitor_id, threadFor(thread));
       const conv = await findConversation(db, channel, participant);
       if (!conv) return c.json({ ok: true, state: 'new' });
@@ -1238,15 +1249,22 @@ export function webchatRoutes(db: Db) {
         })
         .returning();
       emitHookEvent(db, created.agentId, 'new_conversation', created);
+      // Upsert, not update — when the conv was found via the u: externalId
+      // fallback the binding row may not exist at all (it dies with a conv
+      // deleted from the inbox). A bare update then moves nothing and the
+      // visitor stays anchored to the archived thread forever — each "Start
+      // a new chat" just mints another orphan fork.
       await db
-        .update(channelBindings)
-        .set({ conversationId: created.id })
-        .where(
-          and(
-            eq(channelBindings.channelId, channel.id),
-            eq(channelBindings.platformUserId, participant),
-          ),
-        );
+        .insert(channelBindings)
+        .values({
+          channelId: channel.id,
+          conversationId: created.id,
+          platformUserId: participant,
+        })
+        .onConflictDoUpdate({
+          target: [channelBindings.channelId, channelBindings.platformUserId],
+          set: { conversationId: created.id },
+        });
       const [agent] = await db
         .select()
         .from(agents)

@@ -766,7 +766,10 @@
   // once it's ended. The server archives on end (CSAT prompt follows), and
   // /new re-points this visitor's binding at a fresh empty conversation.
   function syncMenu() {
-    var ended = state.convState === 'archived';
+    // The rendered note is the ground truth for "this chat is over" — the
+    // poll can report 'new' (binding gone, identity lapsed) while the note
+    // is still up, and the visitor needs the way out either way.
+    var ended = state.convState === 'archived' || !!msgs.querySelector('.janis-ended');
     menuEnd.style.display = ended ? 'none' : 'block';
     menuNew.style.display = ended ? 'block' : 'none';
   }
@@ -789,13 +792,20 @@
   });
   menuEnd.onclick = function () {
     menu.classList.remove('open');
+    // The identity claim rides along like it does on sends/polls — without
+    // it a signed-in visitor ends a different (anonymous) participant's
+    // thread, i.e. nothing at all.
     fetch(API + '/chat/' + TOKEN + '/end', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ visitor_id: visitor }),
-    }).then(function () {
-      state.convState = 'archived';
-      markEnded();
+      body: JSON.stringify({ visitor_id: visitor, user: state.user || undefined }),
+    }).then(function (r) { return r && r.ok ? r.json() : null; }).then(function (d) {
+      // Only mark ended when the server says it actually archived — a
+      // failed or non-archiving end must not leave a fake ended note.
+      if (d && d.state === 'archived') {
+        state.convState = 'archived';
+        markEnded();
+      }
       return poll();
     }).catch(function () {});
   };
@@ -804,9 +814,12 @@
     fetch(API + '/chat/' + TOKEN + '/new', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ visitor_id: visitor }),
+      body: JSON.stringify({ visitor_id: visitor, user: state.user || undefined }),
     }).then(function (r) { return r && r.ok ? r.json() : null; }).then(function (d) {
-      if (!d || d.state !== 'new') return;
+      // Server declined (chat still open, or nothing to fork) — resync the
+      // menu/transcript off the next poll instead of silently doing nothing.
+      if (!d) return;
+      if (d.state !== 'new') return poll();
       // Fresh conversation — wipe the rendered thread and re-poll so the
       // greeting lands on the empty transcript.
       state.seen = {};
@@ -2589,7 +2602,7 @@
     fetch(API + '/chat/' + TOKEN + '/typing', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ visitor_id: visitor }),
+      body: JSON.stringify({ visitor_id: visitor, user: state.user || undefined }),
     }).catch(function () {});
   }
   // Send stays dead until there's text or a finished attachment — an

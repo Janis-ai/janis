@@ -3,11 +3,11 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { Hono } from 'hono';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { createHmac } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentMembers, agents, channels, contacts, conversations, formSubmissions, helpArticles, memberships, messages, sessions, slackInstallations, slackThreads, usageEvents, users, workspaces } from '../db/schema.js';
+import { agentMembers, agents, channelBindings, channels, contacts, conversations, formSubmissions, helpArticles, memberships, messages, sessions, slackInstallations, slackThreads, usageEvents, users, workspaces } from '../db/schema.js';
 import { generateApiKey, sha256 } from '../lib/crypto.js';
 import { markOperatorTyping } from '../lib/typingState.js';
 import { takeover, humanReply } from '../services/takeover.js';
@@ -440,6 +440,188 @@ describe('webchat widget endpoints', () => {
       body: JSON.stringify({ visitor_id: VISITOR }),
     });
     expect((await again.json()).state).toBe('active');
+  });
+
+  it('end reports the truth when there is no conversation to end', async () => {
+    // Claiming 'archived' here made the widget draw an ended note over a
+    // chat that never existed — and its menu could never recover.
+    const res = await app.request(`/chat/${channelId}/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: 'vis_noconv00000001' }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).state).toBe('new');
+  });
+
+  it('end archives a human-owned thread too — the customer leaving wins', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const VISITOR = 'vis_endhuman000001';
+    await post('I need a person', VISITOR);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, `webchat:${VISITOR}`));
+    await db
+      .update(conversations)
+      .set({ state: 'human', humanSince: new Date() })
+      .where(eq(conversations.id, conv.id));
+
+    const end = await app.request(`/chat/${channelId}/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: VISITOR }),
+    });
+    expect((await end.json()).state).toBe('archived');
+    const [after] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(after.state).toBe('archived');
+    expect(after.archivedAt).not.toBeNull();
+    // same trail as a normal end — resolved note + CSAT prompt
+    const convMsgs = await db
+      .select()
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id));
+    expect(convMsgs.some((m) => (m.flags as { resolved?: boolean }).resolved)).toBe(true);
+    expect(convMsgs.some((m) => (m.payload as { via?: string }).via === 'csat')).toBe(true);
+    // and the thread can be reopened as a fresh chat
+    const fresh = await app.request(`/chat/${channelId}/new`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: VISITOR }),
+    });
+    expect((await fresh.json()).state).toBe('new');
+  });
+
+  it('new recreates a missing binding instead of orphaning the fork', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    // A u: participant with no binding resolves the conv by externalId
+    // fallback — /new must re-attach the binding or the visitor stays
+    // anchored to that archived thread forever.
+    const [ws] = await db.select().from(workspaces).limit(1);
+    const [u] = await db
+      .insert(users)
+      .values({ email: 'rebind@janis.test', name: 'Rebind' })
+      .returning();
+    await db.insert(memberships).values({
+      userId: u.id,
+      workspaceId: ws.id,
+      role: 'admin',
+      acceptedAt: new Date(),
+    });
+    await db.insert(sessions).values({
+      id: sha256('tok-rebind'),
+      userId: u.id,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const VIS = 'vis_newrebind00001';
+    const cookie = { cookie: 'janis_session=tok-rebind' };
+    await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...cookie },
+      body: JSON.stringify({ visitor_id: VIS, text: 'hello' }),
+    });
+    await app.request(`/chat/${channelId}/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...cookie },
+      body: JSON.stringify({ visitor_id: VIS }),
+    });
+    // the binding row dies with a conversation deleted from the inbox —
+    // without it a bare UPDATE moves nothing and every /new mints an orphan
+    await db
+      .delete(channelBindings)
+      .where(
+        and(
+          eq(channelBindings.channelId, channelId),
+          eq(channelBindings.platformUserId, `u:${u.id}`),
+        ),
+      );
+    const fresh = await app.request(`/chat/${channelId}/new`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...cookie },
+      body: JSON.stringify({ visitor_id: VIS }),
+    });
+    expect((await fresh.json()).state).toBe('new');
+    const [b] = await db
+      .select()
+      .from(channelBindings)
+      .where(
+        and(
+          eq(channelBindings.channelId, channelId),
+          eq(channelBindings.platformUserId, `u:${u.id}`),
+        ),
+      );
+    expect(b).toBeDefined();
+    const [boundConv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, b!.conversationId));
+    expect(boundConv.state).not.toBe('archived');
+    // and the poll follows the recreated binding to the fresh thread
+    const poll = await app.request(
+      `/chat/${channelId}/messages?visitor_id=${VIS}`,
+      { headers: cookie },
+    );
+    expect((await poll.json()).state).not.toBe('archived');
+  });
+
+  it('end and new resolve the signed-claim u: participant like sends and polls', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    await db
+      .update(channels)
+      .set({ credentials: { ...(ch.credentials as object), identity_secret: 'sek_test' } })
+      .where(eq(channels.id, channelId));
+    const [u] = await db
+      .insert(users)
+      .values({ email: 'claim-end@janis.test', name: 'Claim End' })
+      .returning();
+    const claim = { id: u.id, email: u.email, name: u.name, sig: '' };
+    claim.sig = createHmac('sha256', 'sek_test')
+      .update(`${claim.id}|${claim.email}|${claim.name}`)
+      .digest('hex');
+    const VIS = 'vis_claimedend0001';
+    await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: VIS, text: 'hi', user: claim }),
+    });
+    // without the claim /end used to hit the (nonexistent) anonymous
+    // participant and fake 'archived' — with it, the u: conv really ends
+    const end = await app.request(`/chat/${channelId}/end`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: VIS, user: claim }),
+    });
+    expect((await end.json()).state).toBe('archived');
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, `webchat:u:${u.id}`));
+    expect(conv.state).toBe('archived');
+
+    const fresh = await app.request(`/chat/${channelId}/new`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visitor_id: VIS, user: claim }),
+    });
+    expect((await fresh.json()).state).toBe('new');
+    // the claimed poll lands on the live fork, not the archived u: thread
+    const q = new URLSearchParams({
+      visitor_id: VIS,
+      u_id: u.id,
+      u_name: u.name,
+      u_email: u.email,
+      u_sig: claim.sig,
+    });
+    const poll = await app.request(`/chat/${channelId}/messages?${q}`);
+    const polled = await poll.json();
+    expect(polled.state).not.toBe('archived');
+    expect(
+      polled.messages.every((m: { text: string }) => m.text !== 'hi'),
+    ).toBe(true);
   });
 
   it('returns messages from the cursor (inclusive — client dedupes by id)', async () => {
