@@ -52,6 +52,9 @@ export function parseReplies(text: string): string[] {
  *  message here and the agent's reply goes back in the response. The key
  *  mints lazily on first view of this card. */
 function BotIngestDetails({ ch }: { ch: Channel }) {
+  const qc = useQueryClient();
+  const apiOrigin =
+    window.location.hostname === 'localhost' ? 'http://localhost:8787' : window.location.origin;
   const { data } = useQuery({
     queryKey: ['agent-bot-key', ch.agent_id],
     queryFn: () =>
@@ -59,36 +62,77 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
         `/api/agents/${ch.agent_id}/bot`,
       ),
   });
+  const [pageId, setPageId] = useState(ch.meta.page_id ?? '');
+  const savePage = useMutation({
+    mutationFn: () =>
+      api(`/api/channels/${ch.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ page_id: pageId.trim() }),
+      }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
+  });
   const url = data?.urls[ch.kind as 'chatfuel' | 'manychat'];
   return (
-    <details className="webhook-details" open style={{ marginTop: 8 }}>
-      <summary>
-        <span className="details-title">Ingest URL</span>
-        <span className="details-sub">paste this into your bot's HTTP step</span>
-      </summary>
-      <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
-        {url ?? '…'}
-      </div>
-      <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
-        {ch.kind === 'chatfuel' ? (
-          <>
-            In Chatfuel: add a <strong>JSON API</strong> card where you want the agent to answer —
-            type POST, this URL, and send <span className="mono">messenger user id</span> and{' '}
-            <span className="mono">user input</span>. The response's messages display as the bot's
-            reply.
-          </>
-        ) : (
-          <>
-            In ManyChat: add an <strong>External Request</strong> action where you want the agent
-            to answer — POST to this URL with the subscriber's <span className="mono">id</span> and{' '}
-            <span className="mono">custom_fields.user input</span>. The response's
-            content.messages display as the bot's reply.
-          </>
-        )}{' '}
-        While a teammate owns the conversation the endpoint answers empty — the bot goes silent
-        until it's handed back.
-      </div>
-    </details>
+    <>
+      <details className="webhook-details" open style={{ marginTop: 8 }}>
+        <summary>
+          <span className="details-title">Ingest URL</span>
+          <span className="details-sub">paste this into your bot's HTTP step</span>
+        </summary>
+        <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
+          {url ?? '…'}
+        </div>
+        <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
+          {ch.kind === 'chatfuel' ? (
+            <>
+              In Chatfuel: add a <strong>JSON API</strong> card where you want the agent to answer —
+              type POST, this URL, and send <span className="mono">messenger user id</span> and{' '}
+              <span className="mono">user input</span>. The response's messages display as the bot's
+              reply.
+            </>
+          ) : (
+            <>
+              In ManyChat: add an <strong>External Request</strong> action where you want the agent
+              to answer — POST to this URL with the subscriber's <span className="mono">id</span>{' '}
+              and <span className="mono">custom_fields.user input</span>. The response's
+              content.messages display as the bot's reply.
+            </>
+          )}{' '}
+          While a teammate owns the conversation the endpoint answers empty — the bot goes silent
+          until it's handed back.
+        </div>
+      </details>
+      <details className="webhook-details" style={{ marginTop: 8 }}>
+        <summary>
+          <span className="details-title">See every message</span>
+          <span className="details-sub">
+            optional — subscribe the Page so inbound texts arrive even when the bot doesn't forward
+            them
+          </span>
+        </summary>
+        <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
+          In your Meta app (developers.facebook.com → Messenger → Webhooks), subscribe the Page with:
+          <div className="mono" style={{ marginTop: 6, fontSize: 13, wordBreak: 'break-all' }}>
+            <div>URL: {apiOrigin}/channels/meta/webhook</div>
+            <div>Verify token: {ch.meta.verify_token ?? '—'}</div>
+          </div>
+          <div className="row" style={{ marginTop: 8, gap: 8 }}>
+            <input
+              placeholder="Facebook Page ID"
+              value={pageId}
+              onChange={(e) => setPageId(e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <button className="btn" disabled={savePage.isPending} onClick={() => savePage.mutate()}>
+              Save
+            </button>
+          </div>
+          Janis listens as a <em>secondary receiver</em> — the bot stays in control; inbound
+          messages join the same conversation, and a human replying in Page Inbox pauses the agent
+          here too.
+        </div>
+      </details>
+    </>
   );
 }
 

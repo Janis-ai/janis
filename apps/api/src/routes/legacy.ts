@@ -1,5 +1,5 @@
 import { Hono, type Context } from 'hono';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, agentSecrets, channelBindings, channels, conversations, messages } from '../db/schema.js';
 import type { ChannelCredentials } from '../lib/channels.js';
@@ -17,6 +17,7 @@ import { reportLegacyUsage, isLegacyPaid } from '../lib/legacyBilling.js';
 
 const PAGE_INBOX_TAG = 'page-inbox-takeover';
 const DF_PAUSE_TAG = 'df-pause';
+const META_FAMILY = new Set(['messenger', 'instagram', 'chatfuel', 'manychat']);
 // Meta app ids that mean "a human spoke", not the bot:
 //   263902037430900 = Page Inbox itself; the Janis apps = replies sent from
 //   the old Slack UI. Echoes from other app ids (Chatfuel etc.) are the bot.
@@ -704,7 +705,27 @@ async function convFor(db: Db, channel: ChannelRow, platformUserId: string) {
     .innerJoin(conversations, eq(channelBindings.conversationId, conversations.id))
     .where(and(eq(channelBindings.channelId, channel.id), eq(channelBindings.platformUserId, platformUserId)))
     .limit(1);
-  return row?.conversation;
+  if (row) return row.conversation;
+  // Meta-family sharing — the thread may be bound to a sibling channel
+  // (chatfuel/manychat ingest vs the Meta webhook) under a kind-keyed
+  // externalId; fall back to the family variants on this agent.
+  if (META_FAMILY.has(channel.kind)) {
+    const [byExt] = await db
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.agentId, channel.agentId),
+          inArray(
+            conversations.externalId,
+            [...META_FAMILY].map((k) => `${k}:${platformUserId}`),
+          ),
+        ),
+      )
+      .limit(1);
+    return byExt;
+  }
+  return undefined;
 }
 
 /** Dedupe on the Meta mid — retries and messaging+standby double-copies. */

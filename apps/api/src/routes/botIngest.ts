@@ -1,5 +1,5 @@
 import { Hono } from 'hono';
-import { and, eq, gt, or, sql, desc } from 'drizzle-orm';
+import { and, eq, gt, inArray, or, sql, desc } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { agents, channels, conversations, messages } from '../db/schema.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
@@ -121,6 +121,42 @@ export function botIngestRoutes(db: Db) {
     if (!channel) return c.json(emptyFor(flavor));
 
     const since = new Date();
+    // The same message can arrive twice when the page is ALSO subscribed to
+    // our Meta webhook (secondary receiver) and the bot card forwards it —
+    // Meta's mid doesn't reach the card, so dedup on sender+text+window.
+    if (norm.text) {
+      const [dup] = await db
+        .select({ id: messages.id })
+        .from(messages)
+        .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+        .where(
+          and(
+            eq(conversations.agentId, agent.id),
+            inArray(
+              conversations.externalId,
+              ['messenger', 'instagram', 'chatfuel', 'manychat'].map(
+                (k) => `${k}:${norm.userId}`,
+              ),
+            ),
+            eq(messages.direction, 'in'),
+            eq(messages.text, norm.text),
+            gt(messages.createdAt, new Date(Date.now() - 90_000)),
+          ),
+        )
+        .limit(1);
+      if (dup) {
+        const [conv] = await db
+          .select({ id: conversations.id, state: conversations.state })
+          .from(conversations)
+          .innerJoin(messages, eq(messages.conversationId, conversations.id))
+          .where(eq(messages.id, dup.id))
+          .limit(1);
+        if (!conv || conv.state === 'human') return c.json(emptyFor(flavor));
+        const reply = await waitForOutbound(db, conv.id, new Date(Date.now() - 90_000));
+        return c.json(reply ? shapeFor(flavor, reply) : emptyFor(flavor));
+      }
+    }
+
     await handleChannelMessage(db, channel, {
       objectId: '',
       senderId: norm.userId,

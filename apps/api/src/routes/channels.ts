@@ -174,6 +174,9 @@ const patchChannel = z.object({
     .optional(),
   // gmail only: extra poll query terms ("label:support -in:spam"); '' clears
   gmail_query: z.string().max(300).optional(),
+  // chatfuel/manychat: the Page the bot fronts — lets Janis's Meta webhook
+  // resolve this channel when the page is subscribed as a secondary receiver
+  page_id: z.string().max(60).optional(),
   // meta channels: mint a fresh webhook verify token (backfills channels
   // created before auto-generation)
   regenerate_verify_token: z.literal(true).optional(),
@@ -636,6 +639,10 @@ export function channelApiRoutes(db: Db) {
         if (b.quick_replies.length) creds.quick_replies = b.quick_replies;
         else delete creds.quick_replies;
       }
+    }
+    if (body.page_id !== undefined) {
+      if (body.page_id === '') delete creds.page_id;
+      else creds.page_id = body.page_id;
     }
     const [updated] = await db
       .update(channels)

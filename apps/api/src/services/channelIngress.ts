@@ -108,6 +108,10 @@ async function refreshProfile(
  * bearer tokens — knowing one already grants transcript read via the poll,
  * so adoption adds no meaningful exposure.
  */
+/** Meta-PSID surfaces — a Chatfuel card, a ManyChat external request, and a
+ *  direct Meta webhook event for the same page user are the same person. */
+const META_PSID_KINDS = new Set(['messenger', 'instagram', 'chatfuel', 'manychat']);
+
 export async function adoptVisitorConversation(
   db: Db,
   channel: ChannelRow,
@@ -363,11 +367,21 @@ export async function handleChannelMessage(
   // insert violates the constraint and gmail polls retry the same mail every
   // sweep forever.
   if (!conv) {
+    // Meta-family surfaces (Meta webhook, Chatfuel, ManyChat) key their
+    // threads on the same PSID but under different kind prefixes — search
+    // all of them so one person keeps one conversation.
+    const extCandidates =
+      META_PSID_KINDS.has(channel.kind) && !participantId.startsWith('u:')
+        ? [...META_PSID_KINDS].map((k) => `${k}:${participantId}`)
+        : [externalId];
     const [byExt] = await db
       .select()
       .from(conversations)
       .where(
-        and(eq(conversations.agentId, channel.agentId), eq(conversations.externalId, externalId)),
+        and(
+          eq(conversations.agentId, channel.agentId),
+          inArray(conversations.externalId, extCandidates),
+        ),
       )
       .limit(1);
     if (byExt) {
@@ -383,7 +397,11 @@ export async function handleChannelMessage(
       //     channel gets its own conversation under a channel-scoped
       //     externalId
       const [bound] = await db
-        .select({ channelId: channelBindings.channelId, credentials: channels.credentials })
+        .select({
+          channelId: channelBindings.channelId,
+          credentials: channels.credentials,
+          kind: channels.kind,
+        })
         .from(channelBindings)
         .innerJoin(channels, eq(channelBindings.channelId, channels.id))
         .where(eq(channelBindings.conversationId, byExt.id))
@@ -405,10 +423,11 @@ export async function handleChannelMessage(
           .set({ externalId: clash ? `${testExt}#legacy` : testExt })
           .where(eq(conversations.id, byExt.id));
       } else if (bound && bound.channelId !== channel.id) {
-        if (participantId.startsWith('u:')) {
-          // Verified Janis users share one thread across surfaces by design
-          // — writes land in the canonical conversation; reads fall back
-          // through the externalId in webchat's findConversation.
+        if (participantId.startsWith('u:') ||
+          (META_PSID_KINDS.has(bound.kind) && META_PSID_KINDS.has(channel.kind))) {
+          // Verified Janis users share one thread across surfaces by design,
+          // and Meta-family surfaces (Meta webhook / Chatfuel / ManyChat)
+          // all key on the same PSID — one person, one conversation.
           conv = byExt;
         } else {
           // Anonymous/PSID threads belong to the channel that owns them —

@@ -89,6 +89,63 @@ describe('bot ingest', () => {
     expect(conv).toBeTruthy();
   }, 20_000);
 
+  it('meta-family merge — bot ingest lands on the existing messenger thread', async () => {
+    const agent = await agentFor(KEY);
+    // A messenger channel + conv + binding for this PSID already exists
+    const [mch] = await db
+      .insert(channels)
+      .values({ workspaceId: wsId, agentId: agent.id, kind: 'messenger', name: 'Page', credentials: {} })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'messenger:psid-shared', userProfile: {} })
+      .returning();
+    const { channelBindings } = await import('../db/schema.js');
+    await db
+      .insert(channelBindings)
+      .values({ channelId: mch.id, conversationId: conv.id, platformUserId: 'psid-shared' });
+
+    const r = await app.request(`/bot/${KEY}/chatfuel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ 'messenger user id': 'psid-shared', 'user input': 'via card' }),
+    });
+    expect(r.status).toBe(200);
+    // inbound landed on the EXISTING messenger conv, not a new chatfuel one
+    const msgs = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+    expect(msgs.some((m) => m.text === 'via card' && m.direction === 'in')).toBe(true);
+    const [other] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'chatfuel:psid-shared'));
+    expect(other).toBeUndefined();
+  }, 20_000);
+
+  it('dedups the same message arriving via webhook + card', async () => {
+    const agent = await agentFor(KEY);
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'messenger:psid-dup', userProfile: {} })
+      .returning();
+    await db.insert(messages).values({
+      conversationId: conv.id,
+      direction: 'in',
+      text: 'same words',
+      createdAt: new Date(),
+    });
+    const r = await app.request(`/bot/${KEY}/chatfuel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ 'messenger user id': 'psid-dup', 'user input': 'same words' }),
+    });
+    expect(r.status).toBe(200);
+    const msgs = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.conversationId, conv.id), eq(messages.direction, 'in')));
+    expect(msgs.filter((m) => m.text === 'same words')).toHaveLength(1);
+  }, 20_000);
+
   it('silent when the conversation is human-owned', async () => {
     const agent = await agentFor(KEY);
     await db
