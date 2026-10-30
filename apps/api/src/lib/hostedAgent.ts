@@ -16,7 +16,7 @@ import { connectionSecrets } from './connections.js';
 import { copilotBuiltins, enabledBuiltins, type BuiltinTool } from './builtinTools.js';
 import { bus } from './bus.js';
 import { toMessage } from './serializers.js';
-import { PLANS, planFor } from './plans.js';
+import { PLANS, effectivePlanKey, planFor } from './plans.js';
 import type { AttachmentRef } from './channels.js';
 import { getUpload } from './uploads.js';
 import { callTool, fabricatedIdReason, harvestProducedIds, identityBlockReason, missingTemplateArgs, toolsFor, type ToolDef } from './toolExec.js';
@@ -728,6 +728,9 @@ export function systemPrompt(
      *  copilot context. They keep the normal escalation ladder so the
      *  escalation flow is testable end-to-end from the console. */
     operator?: boolean;
+    /** Signed-in visitor's plan key — computed at the call site for the
+     *  operator concierge so billing-aware answers cite their tier. */
+    plan?: string;
   } = {},
 ): string {
   const cfg = (agent.config ?? {}) as {
@@ -864,6 +867,18 @@ export function systemPrompt(
     parts.push(
       `\nThis visitor is NOT signed in to Janis — workspace-bound tools (create_agent, change_plan, inspect_agent, account/plan lookups) fail for them. Do not offer to create or change agents, channels, plans or workspaces, and do not ask which workspace to use — point them to sign up or sign in at ${env.webOrigin}/login first (the free plan takes a minute); you can do the setup for them once they are signed in.`,
     );
+  }
+  // Mirror-image for signed-in operators: their plan is verified context,
+  // so plan/billing questions answer from it instead of being asked.
+  if (
+    conv &&
+    !opts.forSuggestion &&
+    env.operatorWorkspaceId &&
+    agent.workspaceId === env.operatorWorkspaceId &&
+    ((conv.userProfile ?? {}) as { identity_verified?: boolean }).identity_verified &&
+    opts.plan
+  ) {
+    parts.push(`\nThis visitor is signed in to Janis — their workspace is on the ${opts.plan} plan.`);
   }
   if (conv?.agentSummary) {
     parts.push(
@@ -5591,10 +5606,25 @@ async function replyAsHostedAgent(
         : undefined;
       return shopperVerified || !td?.identity;
     });
+    // Signed-in visitors get their plan injected as context — resolved from
+    // the verified profile's user id → first workspace → effective plan.
+    let signedPlan: string | undefined;
+    {
+      const prof = (conv?.userProfile ?? {}) as { identity_verified?: boolean; external_id?: string };
+      if (prof.identity_verified && prof.external_id) {
+        const [m] = await db
+          .select({ workspaceId: memberships.workspaceId })
+          .from(memberships)
+          .where(and(eq(memberships.userId, prof.external_id), isNotNull(memberships.acceptedAt)))
+          .limit(1);
+        if (m) signedPlan = await effectivePlanKey(db, m.workspaceId);
+      }
+    }
     let prompt =
       systemPrompt(agent, docs, conv, {
         pendingOffer: openEsc.some((a) => a.type === 'handoff_offer'),
         offerMade: offeredBefore,
+        plan: signedPlan,
         savedWidgets: promptWidgets.map(([name, def]) => ({
           name,
           ...def,
