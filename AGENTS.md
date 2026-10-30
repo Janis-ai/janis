@@ -445,6 +445,10 @@ drizzle-kit/workbox-build, nothing to drop directly).
     transcript mirroring into a chosen channel, marketplace review.
     Build alongside #49 — abstract slackWidgetBlocks/slackMrkdwn into
     a generic card model rather than retrofitting.
+    Mike explicitly asked 2026-10-29 to "mirror the Slack process on
+    Teams" — i.e. Teams parity IS the goal, not a reduced port: the #49
+    Slack audit defines the surface to replicate (mirroring, alerts +
+    dedup, interactive approvals, takeover, notify-prefs).
 
 *F. Writing/marketing (non-code)*
 33. Reactivation email sequence — per-segment drafts live in
