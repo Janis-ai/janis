@@ -1,0 +1,15 @@
+import postgres from 'postgres';
+const sql = postgres(process.env.DATABASE_URL, { max: 1, ssl: 'require' });
+const [ch] = await sql`select credentials from channels where id='44fe2e6f-473f-4a46-8b32-28563772a51d'`;
+const msgs = await sql`select direction, text, created_at, payload->>'via' via, payload->>'sms_pending' p from messages where conversation_id='d14c068a-7b04-43fb-a7f3-7c75f8941ad1' order by created_at`;
+await sql.end();
+console.log('=== conv msgs ===');
+for (const m of msgs) console.log(m.created_at, m.direction, JSON.stringify(m.text), 'via:', m.via, 'pending:', m.p);
+const c = ch.credentials;
+const auth = { Authorization: 'Basic ' + Buffer.from(`${c.twilio_account_sid}:${c.twilio_auth_token}`).toString('base64') };
+const out = await (await fetch(`https://api.twilio.com/2010-04-01/Accounts/${c.twilio_account_sid}/Messages.json?To=%2B14152799179&PageSize=10`, { headers: auth })).json();
+console.log('=== twilio outbound to GV ===');
+for (const m of out.messages ?? []) console.log(m.date_sent, m.status, 'err:', m.error_code, '|', (m.body||'').slice(0,50));
+const inc = await (await fetch(`https://api.twilio.com/2010-04-01/Accounts/${c.twilio_account_sid}/Messages.json?From=%2B14152799179&PageSize=10`, { headers: auth })).json();
+console.log('=== twilio inbound from GV ===');
+for (const m of inc.messages ?? []) console.log(m.date_sent, m.status, 'err:', m.error_code, '|', (m.body||'').slice(0,50));

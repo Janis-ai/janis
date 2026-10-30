@@ -1,0 +1,11 @@
+import postgres from 'postgres';
+const sql = postgres(process.env.DATABASE_URL, { max: 1, ssl: 'require' });
+const conv = await sql`select id, external_id, state, created_at from conversations where id='d14c068a-7b04-43fb-a7f3-7c75f8941ad1'`;
+console.log('conv:', JSON.stringify(conv));
+const msgs = await sql`select direction, text, created_at, payload from messages where conversation_id='d14c068a-7b04-43fb-a7f3-7c75f8941ad1' order by created_at`;
+for (const m of msgs) console.log(m.created_at, m.direction, JSON.stringify(m.text), 'payload:', JSON.stringify({via:m.payload?.via, pending:m.payload?.sms_pending, mid:m.payload?.mid, delivered:m.payload?.delivered, err:m.payload?.delivery_error, error:m.payload?.error}));
+const binds = await sql`select channel_id, platform_user_id from channel_bindings where conversation_id='d14c068a-7b04-43fb-a7f3-7c75f8941ad1'`;
+console.log('bindings:', JSON.stringify(binds));
+const idents = await sql`select channel_id, platform_user_id, sms_opted_in_at, opted_out_at from contact_identities where platform_user_id like '+%' order by created_at desc limit 5`;
+console.log('recent idents:', JSON.stringify(idents));
+await sql.end();
