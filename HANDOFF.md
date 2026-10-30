@@ -94,6 +94,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Widget round 3 — blank transcript after Start a new chat:** menuNew's
+manual reset wiped the DOM but left `state.greetEl` pointing at a
+detached node; the fork's stored greeting row adopted into it via the
+`m.greeting` dedupe and rendered nothing (blank thread). Now calls
+`resetTranscript()` (clears greetEl/typingEl/qrsEl/outbox/deliveredEl).
+The bootstrap greeting block also gated on a fully-empty transcript —
+but /new pre-stores the greeting row, so quick replies/help suggestions/
+greeting widgets never rendered on a fork. Greeting-only transcripts now
+count as empty (stored row adopts into the synthetic greetEl). Embed
+bumped to `/widget.js?v=3`.
+
 **Widget menu redesign + follow-ups (Oct 30, second pass):** "Start a
 new chat" is now ALWAYS in the ⋯ menu — ending is a consequence, not a
 prerequisite (Intercom's model; Mike asked). `/new` archives a live
