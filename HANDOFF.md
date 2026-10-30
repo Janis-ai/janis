@@ -94,6 +94,26 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Bot-platform contract completed:** `lib/botPlatform.ts` is the single
+response builder — `buildBotResponse(flavor, {text, quickReplies,
+widgets, attachments, effects})` drives both the sync card reply and the
+ManyChat sendContent push. Cards/widgets/images now render on
+Chatfuel/ManyChat (generic-template/cards per legacy shapes), and a
+closed `{{…}}` directive grammar the prompt teaches only on bot-channel
+convs (hostedAgent fragment) maps to platform effects: `{{set f=v}}` →
+set_attributes/set_field_value, `{{goto "F"}}` → redirect_to_blocks /
+send_flow (pushed via the sendFlow endpoint), `{{tag}}/{{untag}}` →
+add_tag/remove_tag (ManyChat). Directives are stripped at `message_out`
+store time in ingest.ts (keyed on `chatfuel:`/`manychat:` externalId),
+stored as `payload.effects` + human `channel_effects` labels, so
+transcripts stay clean. Inbound card attrs merge into
+`userProfile.metadata.bot_attrs` — subscriber custom fields ⇄ agent-
+visible traits. qrTitle moved to legacyFormat (import-cycle fix).
+`formatForChannel` now runs on card text (no more literal `**bold**`).
+Operator guide gained full Chatfuel + ManyChat sections (/docs?guide=
+operator#chatfuel|#manychat) — setup→testing→advanced→takeover→
+troubleshooting, hash-anchored, linked from the channel pages.
+
 **Google-file URLs as knowledge sources + scope re-add:** pasting a
 private Doc/Sheet/Deck/Drive link into Teach it now fetches through the
 agent's Google connection (new `lib/googleSource.ts`) instead of the
