@@ -453,16 +453,13 @@ drizzle-kit/workbox-build, nothing to drop directly).
     conversational or form, custom fields, per-channel toggles,
     destinations (CRM/webhook/email notify); collect_forms covers the
     form half.
-    STILL OPEN (Mike ask 2026-10-30 — was drifting): CRM-style contact
-    consolidation — distill conversation context into the contact record
-    automatically (Salesforce-style): summary field on the contact,
-    title/company/lifecycle, attributes into metadata, learned across
-    conversations — not just claimed profile fields. Today the contact
-    only fills in when the visitor states a field or a PATCH asserts it;
-    nothing distills the transcript itself. Design: post-close ingest
-    pass (or periodic) extracts structured contact fields from conv
-    summaries/transcripts → writes contact.notes/attributes; agents'
-    /contacts page surfaces them.
+    SHIPPED 2026-10-30: CRM-style contact consolidation — a bounded sweep
+    (3 convs/tick) picks contact-bound conversations with inbound traffic
+    newer than the contact's last consolidation, distills the transcript
+    via the agent's LLM into summary/job_title/company/lifecycle/
+    interests/facts → metadata.learned (never clobbers claimed or
+    operator-entered fields). Contact page shows it as 'Learned from
+    conversations'. lib/contactConsolidate.ts + sweep hook + Contacts.tsx.
 48. Procedures/runbooks (Chatbase parity — the interesting borrow):
     numbered plain-language SOPs the agent follows stepwise with tool
     calls invoked inline at named steps, vs hoping system-prompt prose
