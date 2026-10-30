@@ -464,39 +464,50 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     connectLabel: `Connect ${label}`,
     disconnectLabel: `Disconnect ${label}`,
     onConnect: (takeover) => link.mutate({ ...payload, takeover } as never),
-    onDisconnect: boundCh ? () => void disconnectChannel(boundCh) : undefined,
+    // the shared list already confirms — call the mutation directly
+    onDisconnect: boundCh ? () => removeChannel.mutate(boundCh.id) : undefined,
     busy: link.isPending || removeChannel.isPending,
   });
   const assetRows: AssetRow[] = [
-    ...sortedPages.map((pg) => {
+    ...sortedPages.flatMap((pg): AssetRow[] => {
       const msgr = linkedChannels.get(pg.id);
       const ig = pg.instagram;
       const igCh = ig ? linkedChannels.get(ig.id) : undefined;
-      return {
-        key: pg.id,
-        title: pg.name,
-        sub: 'Facebook Page',
-        extra: (
-          <>
-            {msgr && msgr.agent_id === agentId && launchUrl(msgr) && (
+      const rows: AssetRow[] = [
+        {
+          key: `${pg.id}:m`,
+          title: pg.name,
+          sub: 'Facebook Page · Messenger',
+          extra:
+            msgr && msgr.agent_id === agentId && launchUrl(msgr) ? (
               <a href={launchUrl(msgr)} target="_blank" rel="noreferrer">
                 Launch chat on Messenger ↗
               </a>
-            )}
-            {igCh && igCh.agent_id === agentId && launchUrl(igCh) && (
-              <a href={launchUrl(igCh)} target="_blank" rel="noreferrer" style={{ display: 'block' }}>
+            ) : undefined,
+          surface: surf(`${pg.id}:m`, 'Messenger', pg.bound, msgr, {
+            kind: 'messenger',
+            page_id: pg.id,
+          }),
+        },
+      ];
+      if (ig) {
+        rows.push({
+          key: `${pg.id}:i`,
+          title: pg.name,
+          sub: `Facebook Page · Instagram${ig.username ? ` @${ig.username}` : ''}`,
+          extra:
+            igCh && igCh.agent_id === agentId && launchUrl(igCh) ? (
+              <a href={launchUrl(igCh)} target="_blank" rel="noreferrer">
                 Launch chat on Instagram ↗
               </a>
-            )}
-          </>
-        ),
-        surfaces: [
-          surf(`${pg.id}:m`, 'Messenger', pg.bound, msgr, { kind: 'messenger', page_id: pg.id }),
-          ...(ig
-            ? [surf(`${pg.id}:i`, 'Instagram', ig.bound, igCh, { kind: 'instagram', page_id: pg.id })]
-            : []),
-        ],
-      };
+            ) : undefined,
+          surface: surf(`${pg.id}:i`, 'Instagram', ig.bound, igCh, {
+            kind: 'instagram',
+            page_id: pg.id,
+          }),
+        });
+      }
+      return rows;
     }),
     ...sortedWabas.flatMap((w) =>
       w.phone_numbers.map((n) => {
@@ -511,12 +522,10 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                 Launch chat on WhatsApp ↗
               </a>
             ) : undefined,
-          surfaces: [
-            surf(`${n.id}:w`, 'WhatsApp', n.bound, wa, {
-              kind: 'whatsapp',
-              phone_number_id: n.id,
-            }),
-          ],
+          surface: surf(`${n.id}:w`, 'WhatsApp', n.bound, wa, {
+            kind: 'whatsapp',
+            phone_number_id: n.id,
+          }),
         };
       }),
     ),
@@ -1341,9 +1350,9 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       {/* Meta OAuth return lands in the asset picker — an active flow,
           so it renders above the ordering regardless of suggestion. */}
       {connectId && pickerOpen && (
-        <div className="card connect-card">
+        <div className="card connect-card" style={{ marginTop: 20 }}>
           <div className="row">
-            <strong className="grow">Meta connected — pick what to link to {agent.name}</strong>
+            <strong className="grow" style={{ fontSize: 15 }}>Link your Meta surfaces</strong>
             <button
               className="btn"
               onClick={() => {
@@ -1356,10 +1365,15 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             <a href={`/api/meta/connect?agent=${agentId}`} onClick={() => dropParams('meta_connect')}>Switch account</a>
             <button className="btn" onClick={() => disconnect.mutate()}>Disconnect</button>
           </div>
+          <div className="muted" style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>
+            Connecting a Page or number pipes its inbound messages into {agent.name}'s shared
+            inbox — the agent answers, and the team can take over any conversation.
+          </div>
           {pending.isLoading && (
-            <div className="row" style={{ marginTop: 8 }}>
-              <span className="spin" />
-              <span className="muted">Looking up your Meta accounts…</span>
+            <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {[0, 1, 2].map((i) => (
+                <span key={i} className="nav-skel" style={{ width: `${70 - i * 15}%` }} />
+              ))}
             </div>
           )}
           {pending.isError && (

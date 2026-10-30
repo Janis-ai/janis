@@ -46,92 +46,91 @@ export interface AssetSurface {
   onConnect: (takeover: boolean) => void;
   onDisconnect?: () => void;
   busy?: boolean;
-  extra?: ReactNode;
 }
 
+/** One asset row = one linkable surface (a page's Messenger, its IG, a
+ *  WABA number) — shared by the Meta picker and bot-platform cards so the
+ *  bound/linked/takeover grammar and the destructive-action confirms are
+ *  identical everywhere. */
 export interface AssetRow {
   key: string;
   title: string;
+  /** e.g. 'Facebook Page · Messenger' */
   sub: string;
   extra?: ReactNode;
-  surfaces: AssetSurface[];
+  surface: AssetSurface;
 }
 
 export function MetaAssetList({ rows }: { rows: AssetRow[] }) {
   const [confirmEl, confirm] = useConfirm();
   return (
     <div className="asset-list" style={{ marginTop: 8 }}>
-      {rows.map((r) => (
-        <div key={r.key} className="asset-row">
-          <div className="grow">
-            <strong>{r.title}</strong>
-            <div className="muted">{r.sub}</div>
-            {r.extra}
-          </div>
-          {r.surfaces.map((s) => {
-            if (s.state === 'linked') {
-              return (
+      {rows.map((r) => {
+        const s = r.surface;
+        return (
+          <div key={r.key} className="asset-row">
+            <div className="grow">
+              <strong>{r.title}</strong>
+              <div className="muted">{r.sub}</div>
+              {r.extra}
+            </div>
+            {s.state === 'linked' ? (
+              <button
+                className="btn danger"
+                disabled={s.busy}
+                onClick={async () => {
+                  if (
+                    (await confirm(
+                      `Disconnect ${s.label} from ${r.title}? Inbound messages stop arriving — re-link anytime.`,
+                      [
+                        { key: 'ok', label: 'Disconnect', danger: true },
+                        { key: 'cancel', label: 'Cancel' },
+                      ],
+                    )) === 'ok'
+                  )
+                    s.onDisconnect?.();
+                }}
+              >
+                {s.disconnectLabel}
+              </button>
+            ) : s.state === 'own' ? (
+              <span className="muted">{s.ownLabel}</span>
+            ) : s.state === 'bound' && s.bound ? (
+              <div className="asset-bound">
                 <button
-                  key={s.key}
                   className="btn danger"
                   disabled={s.busy}
-                  onClick={s.onDisconnect}
+                  onClick={async () => {
+                    if (
+                      (await confirm(
+                        `Take ${s.label} over from ${s.bound!.workspace_name}${s.bound!.owner_email ? ` (${s.bound!.owner_email})` : ''}? ${s.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
+                        [
+                          { key: 'ok', label: 'Take over', danger: true },
+                          { key: 'cancel', label: 'Cancel' },
+                        ],
+                      )) === 'ok'
+                    )
+                      s.onConnect(true);
+                  }}
                 >
-                  {s.disconnectLabel}
+                  Take over
                 </button>
-              );
-            }
-            if (s.state === 'own') {
-              return (
-                <span key={s.key} className="muted">
-                  {s.ownLabel}
+                <span
+                  className="muted asset-bound-note"
+                  title={`bound to ${s.bound.agent_name} on ${s.bound.workspace_name}`}
+                >
+                  on {s.bound.workspace_name} · {s.bound.agent_name}
+                  {s.bound.owner_email ? ` (${s.bound.owner_email})` : ''}
                 </span>
-              );
-            }
-            if (s.state === 'bound' && s.bound) {
-              return (
-                <div key={s.key} className="asset-bound">
-                  <button
-                    className="btn"
-                    disabled={s.busy}
-                    onClick={async () => {
-                      if (
-                        (await confirm(
-                          `Take ${s.label} over from ${s.bound!.workspace_name}${s.bound!.owner_email ? ` (${s.bound!.owner_email})` : ''}? ${s.bound!.agent_name} loses this channel — its conversation history stays, but inbound messages come here instead.`,
-                          [
-                            { key: 'ok', label: 'Take over' },
-                            { key: 'cancel', label: 'Cancel' },
-                          ],
-                        )) === 'ok'
-                      )
-                        s.onConnect(true);
-                    }}
-                  >
-                    Take over
-                  </button>
-                  <span
-                    className="muted asset-bound-note"
-                    title={`bound to ${s.bound.agent_name} on ${s.bound.workspace_name}`}
-                  >
-                    on {s.bound.workspace_name} · {s.bound.agent_name}
-                    {s.bound.owner_email ? ` (${s.bound.owner_email})` : ''}
-                  </span>
-                </div>
-              );
-            }
-            return (
-              <button
-                key={s.key}
-                className="btn"
-                disabled={s.busy}
-                onClick={() => s.onConnect(false)}
-              >
+              </div>
+            ) : (
+              <button className="btn" disabled={s.busy} onClick={() => s.onConnect(false)}>
                 {s.connectLabel}
               </button>
-            );
-          })}
-        </div>
-      ))}
+            )}
+          </div>
+        );
+      })}
       {confirmEl}
     </div>
   );
@@ -250,12 +249,16 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           until it's handed back.
         </div>
       </details>
-      <details className="webhook-details" open style={{ marginTop: 8 }}>
+      <details
+        className="webhook-details"
+        open
+        style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}
+      >
         <summary>
-          <span className="details-title">Pages</span>
+          <span className="details-title" style={{ fontSize: 14 }}>Link your Meta surfaces</span>
           <span className="details-sub">
-            optional — subscribe a Page so inbound texts arrive even when the bot doesn't forward
-            them
+            optional — inbound messages on linked surfaces land in this agent's shared inbox, even
+            when the bot doesn't forward them
           </span>
         </summary>
         <div className="muted" style={{ marginTop: 8, fontSize: 12, lineHeight: 1.6 }}>
@@ -301,23 +304,24 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                 ...(pending.data.pages ?? [])
                   .slice()
                   .sort((a, b) => a.name.localeCompare(b.name))
-                  .map((pg) => ({
-                    key: pg.id,
-                    title: pg.name,
-                    sub: 'Facebook Page',
-                    surfaces: [
-                      {
+                  .flatMap((pg): AssetRow[] => {
+                    const msgrOwn = own(pg.id, ['page_id', 'ig_page_id']);
+                    const msgr: AssetRow = {
+                      key: `${pg.id}:m`,
+                      title: pg.name,
+                      sub: 'Facebook Page · Messenger',
+                      surface: {
                         key: `${pg.id}:m`,
                         label: 'Messenger',
-                        state: (ch.meta.page_id === pg.id
+                        state: ch.meta.page_id === pg.id
                           ? 'linked'
-                          : own(pg.id, ['page_id', 'ig_page_id'])
+                          : msgrOwn
                             ? 'own'
                             : pg.bound
                               ? 'bound'
-                              : 'free') as AssetSurface['state'],
+                              : 'free',
                         bound: pg.bound,
-                        ownLabel: `Messenger on ${own(pg.id, ['page_id', 'ig_page_id'])?.name}`,
+                        ownLabel: `Messenger on ${msgrOwn?.name}`,
                         connectLabel: 'Connect Messenger',
                         disconnectLabel: 'Disconnect Messenger',
                         onConnect: (takeover: boolean) =>
@@ -325,49 +329,57 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                         onDisconnect: () => savePage.mutate({ page_id: '' }),
                         busy: link.isPending || savePage.isPending,
                       },
-                      ...(pg.instagram
-                        ? [
-                            {
-                              key: `${pg.id}:i`,
-                              label: 'Instagram',
-                              state: (ch.meta.ig_page_id === pg.instagram.id
-                                ? 'linked'
-                                : own(pg.instagram.id, ['page_id', 'ig_page_id'])
-                                  ? 'own'
-                                  : pg.instagram.bound
-                                    ? 'bound'
-                                    : 'free') as AssetSurface['state'],
-                              bound: pg.instagram.bound,
-                              ownLabel: `Instagram on ${own(pg.instagram.id, ['page_id', 'ig_page_id'])?.name}`,
-                              connectLabel: `Connect Instagram${pg.instagram.username ? ` @${pg.instagram.username}` : ''}`,
-                              disconnectLabel: 'Disconnect Instagram',
-                              onConnect: (takeover: boolean) =>
-                                link.mutate({ page_id: pg.id, surface: 'instagram', takeover }),
-                              onDisconnect: () => savePage.mutate({ ig_page_id: '' }),
-                              busy: link.isPending || savePage.isPending,
-                            },
-                          ]
-                        : []),
-                    ],
-                  })),
-                ...(pending.data.whatsapp ?? []).flatMap((w) =>
-                  w.phone_numbers.map((num) => ({
-                    key: num.id,
-                    title: num.display_phone_number ?? num.id,
-                    sub: `WhatsApp Business${w.name ? ` · ${w.name}` : ''}`,
-                    surfaces: [
-                      {
+                    };
+                    const rows: AssetRow[] = [msgr];
+                    const ig = pg.instagram;
+                    if (ig) {
+                      const igOwn = own(ig.id, ['page_id', 'ig_page_id']);
+                      rows.push({
+                        key: `${pg.id}:i`,
+                        title: pg.name,
+                        sub: `Facebook Page · Instagram${ig.username ? ` @${ig.username}` : ''}`,
+                        surface: {
+                          key: `${pg.id}:i`,
+                          label: 'Instagram',
+                          state: ch.meta.ig_page_id === ig.id
+                            ? 'linked'
+                            : igOwn
+                              ? 'own'
+                              : ig.bound
+                                ? 'bound'
+                                : 'free',
+                          bound: ig.bound,
+                          ownLabel: `Instagram on ${igOwn?.name}`,
+                          connectLabel: `Connect Instagram${ig.username ? ` @${ig.username}` : ''}`,
+                          disconnectLabel: 'Disconnect Instagram',
+                          onConnect: (takeover: boolean) =>
+                            link.mutate({ page_id: pg.id, surface: 'instagram', takeover }),
+                          onDisconnect: () => savePage.mutate({ ig_page_id: '' }),
+                          busy: link.isPending || savePage.isPending,
+                        },
+                      });
+                    }
+                    return rows;
+                  }),
+                ...(pending.data.whatsapp ?? []).flatMap((w): AssetRow[] =>
+                  w.phone_numbers.map((num) => {
+                    const waOwn = own(num.id, ['phone_number_id']);
+                    return {
+                      key: num.id,
+                      title: num.display_phone_number ?? num.id,
+                      sub: `WhatsApp Business${w.name ? ` · ${w.name}` : ''}`,
+                      surface: {
                         key: `${num.id}:w`,
                         label: 'WhatsApp',
-                        state: (ch.meta.phone_number_id === num.id
+                        state: ch.meta.phone_number_id === num.id
                           ? 'linked'
-                          : own(num.id, ['phone_number_id'])
+                          : waOwn
                             ? 'own'
                             : num.bound
                               ? 'bound'
-                              : 'free') as AssetSurface['state'],
+                              : 'free',
                         bound: num.bound,
-                        ownLabel: `WhatsApp on ${own(num.id, ['phone_number_id'])?.name}`,
+                        ownLabel: `WhatsApp on ${waOwn?.name}`,
                         connectLabel: 'Connect WhatsApp',
                         disconnectLabel: 'Disconnect WhatsApp',
                         onConnect: (takeover: boolean) =>
@@ -375,8 +387,8 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
                         onDisconnect: () => savePage.mutate({ phone_number_id: '' }),
                         busy: link.isPending || savePage.isPending,
                       },
-                    ],
-                  })),
+                    };
+                  }),
                 ),
               ];
               return (
