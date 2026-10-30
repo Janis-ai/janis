@@ -18,12 +18,13 @@ import { TOOL_TEMPLATES } from '../lib/toolTemplates.js';
 // Runtime mints short-lived access tokens per run via connections.ts.
 const STATE_TTL_MS = 15 * 60 * 1000;
 // drive.file (non-restricted) covers docs the agent creates or the user
-// opens — drive.readonly would let *_list enumerate ALL files but lands in
-// Google's restricted tier (CASA assessment); not worth it for a
-// convenience listing.
+// picks — the Docs/Slides APIs accept it for files in the grant, so the
+// broader auth/documents scope was dropped (OAuth review flagged it; the
+// picked set is the intended share boundary anyway). drive.readonly would
+// let *_list enumerate ALL files but lands in Google's restricted tier
+// (CASA assessment); not worth it for a convenience listing.
 const SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
-  'https://www.googleapis.com/auth/documents',
   'https://www.googleapis.com/auth/drive.file',
   'openid',
   'email',

@@ -1054,7 +1054,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Google Docs',
     category: 'Docs & data',
     blurb:
-      'Read, create, and append to Google Docs — Connect grants access on the signed-in account\u2019s documents.',
+      'Read, create, and append to Google Docs — Connect grants access on documents the user picks or the agent creates.',
     docs_url: 'https://developers.google.com/docs/api',
     fields: [],
     secrets: () => ({}),
@@ -1069,7 +1069,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'gdocs_list',
         label: 'List documents',
         description:
-          'List docs the integration created or the user opened via Google — returns ids the other Docs tools need. For an existing doc, ask the user for its link or id instead.',
+          'List docs the integration created or the user opened via Google — returns ids the other Docs tools need. For an existing doc, it must have been picked in the console or created by the agent.',
         method: 'GET',
         url: "https://www.googleapis.com/drive/v3/files?q=mimeType%3D'application%2Fvnd.google-apps.document'&fields=files(id,name,modifiedTime)&orderBy=modifiedTime+desc&pageSize=20",
         headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
