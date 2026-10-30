@@ -45,6 +45,7 @@ const PROFILE_STALE_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Fields we always know from the channel itself. */
 function baseProfile(channel: ChannelRow, msg: InboundMessage): UserProfile {
+  const attrs = botAttrs(msg);
   return {
     id: msg.senderId,
     channel: channel.kind,
@@ -69,10 +70,32 @@ function baseProfile(channel: ChannelRow, msg: InboundMessage): UserProfile {
     // metadata merges per-key on update — cart rides alongside identify
     // traits without touching identity_verified (an anonymous shopper is
     // not "unverified", they just have a cart).
-    ...(msg.user?.traits || msg.cart
-      ? { metadata: { ...(msg.user?.traits ?? {}), ...(msg.cart ? { cart: msg.cart } : {}) } }
+    ...(msg.user?.traits || msg.cart || attrs
+      ? {
+          metadata: {
+            ...(msg.user?.traits ?? {}),
+            ...(msg.cart ? { cart: msg.cart } : {}),
+            // Bot-platform attributes the card forwarded with the message
+            // (Chatfuel user attributes / ManyChat custom fields) — kept in
+            // ONE `bot_attrs` bucket rather than flat-prefixed keys: the
+            // names are merchant-authored and would collide with system
+            // traits (name, email) and each other. Each card post carries
+            // the attribute set fresh, so a per-key metadata merge that
+            // replaces the whole bucket stays correct.
+            ...(attrs ? { bot_attrs: attrs } : {}),
+          },
+        }
       : {}),
   };
+}
+
+/** payload.attrs from a bot-platform normalizer — arbitrary
+ *  merchant-named key/values, or absent on every other channel. */
+function botAttrs(msg: InboundMessage): Record<string, unknown> | null {
+  const a = msg.payload?.attrs;
+  return a && typeof a === 'object' && !Array.isArray(a) && Object.keys(a).length
+    ? (a as Record<string, unknown>)
+    : null;
 }
 
 /** Drop undefined/empty values so a sparse fetch never erases known data. */

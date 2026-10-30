@@ -911,7 +911,7 @@ export function systemPrompt(
   if (!opts.forSuggestion) {
     parts.push(
       '\nYou CAN offer tappable reply buttons — they render as real buttons on the customer\'s chat. When 2-4 short choices would move the conversation forward (e.g. picking a plan, yes/no, sharing an email vs learning more), end your reply with lines starting "BUTTON:" — one per choice, each under 20 characters (e.g. "BUTTON: See pricing").' +
-      (chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp'
+      (chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp' || chan === 'chatfuel' || chan === 'manychat'
         ? ' This channel hard-cuts button labels at 20 characters — a longer label ships visibly truncated, so count them.'
         : '') +
       ' They are removed from your text and shown as buttons; the customer can still type instead. Don\'t use them on every reply — only when the choice genuinely helps, but a reply that ends by asking the customer to pick between a few likely answers ("want me to set one up?", "which plan?") should almost always offer those answers as buttons. An OFFER to do something (create a draft order, send an invoice, file a return, apply a discount, look into a problem) that the customer still has to say yes to MUST come with a BUTTON: chip for the yes — a tappable offer, not a sentence they have to type back to. A vague acknowledgement ("great", "ok", "sounds good", "sure") is NOT acceptance of an offer — only a tapped chip or an explicit yes counts; if they didn\'t clearly agree, don\'t act on it.' +
@@ -920,9 +920,11 @@ export function systemPrompt(
     );
     // Rich in-conversation widgets. Webchat renders all five shapes; Meta
     // channels translate cards → generic-template carousel and options →
-    // native quick replies/list, so those two are taught there too. Other
-    // kinds (form/status/receipt) have no Meta equivalent — webchat only.
-    if (chan === 'webchat' || chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp') {
+    // native quick replies/list, so those two are taught there too — and
+    // the bot platforms map them the same way (cards → generic template /
+    // ManyChat cards, options → quick replies). Other kinds have no
+    // off-webchat equivalent — webchat only.
+    if (chan === 'webchat' || chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp' || chan === 'chatfuel' || chan === 'manychat') {
       const metaOnly =
         chan === 'webchat'
           ? ''
@@ -950,6 +952,16 @@ export function systemPrompt(
             ? '\nSaved components (built by your team). Each entry\'s "use when" names the asks it covers — when the customer\'s ask matches a use-when, emitting "WIDGET_REF: <name>" IS the answer: do it right away rather than asking to clarify, apologizing for missing data, or calling a tool for the same information. When the digest lists props, args or states, add a JSON object on the same line — "WIDGET_REF: order-status {\"order_id\":\"1234\"}" supplies a bound tool its args or fills {prop} placeholders (only values you actually have — never invent them), and {"state":"<name>"} selects one of its named states. A component bound to a tool IS that tool\'s invocation — emitting the ref runs it and renders the result, so never call the bound tool directly to narrate the same data. Copy a ref name verbatim from this list — it is the complete set; inventing a name renders nothing and burns a retry:\n' +
               opts.savedWidgets.map(widgetDigest).join('\n')
             : ''),
+      );
+    }
+    // Bot-platform dialect — invisible {{…}} directives the ingest path
+    // strips out of the text and executes on the platform side. tag/untag
+    // exist only on ManyChat (Chatfuel has no primitive for them).
+    if (chan === 'chatfuel' || chan === 'manychat') {
+      parts.push(
+        `\nThis conversation arrives through a ${chan === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} bot. Invisible markup in your reply drives the platform — \`{{set field=value}}\` saves a subscriber field, ` +
+          (chan === 'manychat' ? '`{{tag name}}`/`{{untag name}}` manage tags, ' : '') +
+          `\`{{goto "Flow Name"}}\` sends them into a named ${chan === 'chatfuel' ? 'block' : 'flow'}. These are stripped before delivery; never explain them to the user.`,
       );
     }
   }
@@ -1394,7 +1406,7 @@ export function extractButtons(text: string): {
  *  on sms/email/etc. widgets never render and the chips are the only layer. */
 export function cardsCoverQuickReplies(chan: string, widgets: WidgetComponent[]): boolean {
   return (
-    ['webchat', 'messenger', 'instagram', 'whatsapp'].includes(chan) &&
+    ['webchat', 'messenger', 'instagram', 'whatsapp', 'chatfuel', 'manychat'].includes(chan) &&
     widgets.some(
       (w) =>
         w.type === 'cards' &&
@@ -5691,7 +5703,8 @@ async function replyAsHostedAgent(
     // Meta display-truncates button titles at 20 chars — only those channels
     // gate on label length.
     const chan = channelKeyFor(conv);
-    const buttonCapApplies = chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp';
+    const buttonCapApplies =
+      chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp' || chan === 'chatfuel' || chan === 'manychat';
     // An empty completion is usually a provider blip (transient 500, timeout,
     // a tool loop that never wrapped up) — one retry is cheaper than paging
     // a human over it. Only the retry's output is kept.

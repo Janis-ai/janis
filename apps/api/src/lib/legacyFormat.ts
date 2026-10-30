@@ -55,6 +55,19 @@ export function splitResponse(str: string): string[] {
 const isFb = (m: V1Message) => m.platform == null || m.platform.toLowerCase() === 'facebook';
 const titleLimit = (t: string) => (t.length > 20 ? `${t.slice(0, 16)}...` : t);
 
+/** Meta/WhatsApp/bot-platform button captions hard-cap at 20 CHARACTERS —
+ *  slice by code point so an emoji never gets cut mid-surrogate-pair into
+ *  mojibake, at a word boundary when a usable one exists ("…something"
+ *  beats "…el"). Display-only: callers keep the full label in the payload
+ *  or attribute that comes back on the tap. */
+export function qrTitle(t: string): string {
+  const chars = [...t];
+  if (chars.length <= 20) return t;
+  const win = chars.slice(0, 20).join('');
+  const cut = win.lastIndexOf(' ');
+  return (cut >= 8 ? win.slice(0, cut) : win).trimEnd();
+}
+
 /** v1 fulfillment.messages → Messenger-format message objects.
  *  chatfuel: card buttons become show_block (block_names) so taps route back
  *  into the customer's Chatfuel blocks; quick replies redirect to "Janis". */

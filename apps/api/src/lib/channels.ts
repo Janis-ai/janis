@@ -15,7 +15,11 @@ import {
 } from './gmail.js';
 import { voiceDeliver } from './voiceBridge.js';
 import { sendSms, type TwilioError } from './twilio.js';
-import { splitResponse } from './legacyFormat.js';
+import { qrTitle } from './legacyFormat.js';
+// qrTitle lives in the leaf formatter (botPlatform needs it without a
+// module cycle); re-exported so existing channels.js imports keep working.
+export { qrTitle };
+import { buildBotResponse, type BotEffect } from './botPlatform.js';
 
 type ChannelRow = typeof channels.$inferSelect;
 
@@ -185,17 +189,8 @@ export interface AttachmentRef {
  *  sees "[tapped]"-annotated history. `l` = the full label (postback titles
  *  truncate at 20 chars), `of` = which card/widget it sat on. */
 const SELECT_MARKER = 'janis:sel:';
-/** Meta/WhatsApp hard-cap button titles at 20 CHARACTERS — slice by code
- * point so an emoji never gets cut mid-surrogate-pair into mojibake, at a
- * word boundary when a usable one exists ("…something" beats "…el").
- * Display-only: payloads/ids carry the full label so taps resolve whole. */
-export function qrTitle(t: string): string {
-  const chars = [...t];
-  if (chars.length <= 20) return t;
-  const win = chars.slice(0, 20).join('');
-  const cut = win.lastIndexOf(' ');
-  return (cut >= 8 ? win.slice(0, cut) : win).trimEnd();
-}
+/** Meta/WhatsApp hard-cap button titles at 20 CHARACTERS — implementation
+ * lives in legacyFormat.ts (leaf module) and is re-exported above. */
 
 export function selectMarker(label: string, of?: string): string {
   return (
@@ -584,6 +579,9 @@ export interface SendOptions {
    * equivalent (generic-template carousel for cards, quick replies /
    * interactive list for pickers). Other types stay text-only. */
   widgets?: WidgetComponent[];
+  /** Bot-platform side effects parsed out of the reply text ({{set/tag/goto}})
+   * — ManyChat pushes map them to content.actions / a sendFlow call. */
+  effects?: BotEffect[];
 }
 
 /** Send a message (text and/or attachments) to a platform user through the channel's credentials. */
@@ -631,31 +629,71 @@ async function resolvePersona(
 
 /** ManyChat sendContent — pushes a reply to a subscriber when the channel
  *  holds an API token (operator sends; replies that missed the card's sync
- *  window). Splits at the same 640-char cap the card formatter uses. */
+ *  window). Goes through the same bot-platform builder as the card
+ *  response: text splits at 640, attachments/widgets become v2 messages,
+ *  effects become content.actions — except send_flow, which pushes through
+ *  the dedicated sendFlow endpoint (the call the legacy relay made). */
 async function sendManyChatReply(
   token: string,
   subscriberId: string,
   text: string,
+  opts?: SendOptions,
+  attachments?: AttachmentRef[],
 ): Promise<SendResult> {
-  const msgs = splitResponse(text).map((t) => ({ type: 'text', text: t }));
+  const data = buildBotResponse('manychat', {
+    text,
+    quickReplies: opts?.quickReplies,
+    widgets: opts?.widgets,
+    attachments,
+    effects: opts?.effects,
+  }) as {
+    version: string;
+    content: {
+      messages: Record<string, unknown>[];
+      actions: Record<string, unknown>[];
+      quick_replies?: Record<string, unknown>[];
+    };
+  };
+  const flows: string[] = [];
+  const actions = data.content.actions.filter((a) => {
+    if (a.action === 'send_flow') {
+      flows.push(String(a.flow_ns));
+      return false;
+    }
+    return true;
+  });
+  const hasContent =
+    data.content.messages.length > 0 || actions.length > 0 || (data.content.quick_replies?.length ?? 0) > 0;
   try {
-    const res = await fetch('https://api.manychat.com/fb/sending/sendContent', {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        subscriber_id: subscriberId,
-        data: { version: 'v2', content: { messages: msgs, actions: [] } },
-        message_tag: 'ACCOUNT_UPDATE',
-      }),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!res.ok) {
-      const detail = (await res.text().catch(() => '')).slice(0, 200);
-      return {
-        mid: null,
-        error: `ManyChat rejected the send (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
-        retryable: res.status === 429 || res.status >= 500,
-      };
+    if (hasContent) {
+      const res = await fetch('https://api.manychat.com/fb/sending/sendContent', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({
+          subscriber_id: subscriberId,
+          data: { version: 'v2', content: { ...data.content, actions } },
+          message_tag: 'ACCOUNT_UPDATE',
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) {
+        const detail = (await res.text().catch(() => '')).slice(0, 200);
+        return {
+          mid: null,
+          error: `ManyChat rejected the send (HTTP ${res.status})${detail ? `: ${detail}` : ''}`,
+          retryable: res.status === 429 || res.status >= 500,
+        };
+      }
+    }
+    // Flow redirects ride their own endpoint — a goto-only reply can be
+    // nothing but this call.
+    for (const flow_ns of flows) {
+      await fetch('https://api.manychat.com/fb/sending/sendFlow', {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ subscriber_id: subscriberId, flow_ns }),
+        signal: AbortSignal.timeout(10_000),
+      }).catch(() => {});
     }
     return { mid: null, error: null, retryable: true };
   } catch (e) {
@@ -700,7 +738,7 @@ export async function sendChannelMessage(
     if (!creds.manychat_token) return null;
     const named =
       opts?.senderName && text.trim() ? `${opts.senderName}: ${text}` : text;
-    return sendManyChatReply(creds.manychat_token, platformUserId, named);
+    return sendManyChatReply(creds.manychat_token, platformUserId, named, opts, attachments);
   }
   if (!creds.access_token) {
     return {
@@ -1671,7 +1709,9 @@ export async function deliverToChannel(
     .innerJoin(conversations, eq(channelBindings.conversationId, conversations.id))
     .where(eq(channelBindings.conversationId, conversationId))
     .limit(1);
-  if (!text.trim() && !attachments?.length) return { delivered: true };
+  // effects-only replies (a bare {{goto}} to a ManyChat flow) have no text
+  // or media but still need the push — the channel call carries them.
+  if (!text.trim() && !attachments?.length && !opts?.effects?.length) return { delivered: true };
   if (!row) {
     // No binding: external agents (webhook / SDK socket) deliver outside
     // channels, so binding-free conversations are normal for them. A hosted

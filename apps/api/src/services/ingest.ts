@@ -21,6 +21,7 @@ import { emitHookEvent } from '../lib/hooks.js';
 import { mirrorToSlack, postSlackAlert, setSlackThreadStatus } from '../lib/slack.js';
 import { agentEligibleMembers } from '../lib/members.js';
 import { deliverToChannel, type AttachmentRef } from '../lib/channels.js';
+import { effectLabel, parseDirectives, type BotEffect } from '../lib/botPlatform.js';
 import type { WidgetComponent } from '../lib/widgets.js';
 import { toAlert, toConversation, toMessage } from '../lib/serializers.js';
 import { METER_MESSAGES, billingCustomerFor, reportMeter } from '../lib/stripe.js';
@@ -82,7 +83,7 @@ export async function processEvents(
     const newAlertTypes: string[] = [];
 
     // Store a message row for events that carry conversational content
-    const message = await insertEventMessage(db, conv.id, event);
+    const message = await insertEventMessage(db, conv, event);
     if (message) {
       // Any stored reply — agent answer, failure note, handoff, operator
       // message — ends the typing indicators for this thread: the agent is
@@ -151,10 +152,12 @@ export async function processEvents(
             ?.quick_replies;
           const widgets = (message.payload as { widgets?: WidgetComponent[] } | undefined)
             ?.widgets;
+          const effects = (message.payload as { effects?: BotEffect[] } | undefined)?.effects;
           void deliverToChannel(db, conv.id, message.text, atts, {
             messageId: message.id,
             quickReplies: qrs,
             widgets,
+            effects,
           });
         }
       }
@@ -556,11 +559,36 @@ async function findOrCreateConversation(
   return { conv: created, isNew: true };
 }
 
-async function insertEventMessage(db: Db, conversationId: string, event: IngestEvent) {
+/** Conversations owned by a bot-platform channel — externalId is
+ *  `<kind>:<participant>` (cheap check, no binding join; the flavor's
+ *  prompt only teaches the directive grammar on these threads anyway). */
+const BOT_FLAVOR_EXT = /^(chatfuel|manychat):/;
+
+async function insertEventMessage(db: Db, conv: ConversationRow, event: IngestEvent) {
+  let text = eventText(event) ?? null;
+  let payload = ('payload' in event ? event.payload : undefined) ?? {};
+  // Bot-platform replies carry invisible {{set/tag/untag/goto}} directives —
+   // strip them at store time so transcripts stay clean, keep the structured
+  // effects (platform mapping at egress) plus human labels for the console.
+  if (
+    event.type === 'message_out' &&
+    text?.includes('{{') &&
+    BOT_FLAVOR_EXT.test(conv.externalId)
+  ) {
+    const parsed = parseDirectives(text);
+    if (parsed.effects.length) {
+      text = parsed.clean || null; // a directive-only reply has no text at all
+      payload = {
+        ...payload,
+        effects: parsed.effects,
+        channel_effects: parsed.effects.map(effectLabel),
+      };
+    }
+  }
   const row = {
-    conversationId,
-    text: eventText(event) ?? null,
-    payload: ('payload' in event ? event.payload : undefined) ?? {},
+    conversationId: conv.id,
+    text,
+    payload,
     direction: directionFor(event),
     flags: {
       failure: event.type === 'failure',

@@ -621,6 +621,68 @@ describe('sendChannelMessage bot platforms', () => {
     expect(res?.error).toContain('401');
     expect(res?.retryable).toBe(false);
   });
+
+  it('manychat push carries widgets, attachments and effects; goto rides sendFlow', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{"status":"success"}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await sendChannelMessage(
+      ch('manychat', { manychat_token: 'mc.tok' }),
+      'SUB1',
+      'Pick a plan',
+      [{ name: 'p.png', url: 'https://img.example.com/p.png', type: 'image/png', size: 1 }],
+      {
+        quickReplies: ['Pro', 'Free'],
+        widgets: [
+          {
+            type: 'cards',
+            items: [
+              {
+                title: 'Pro plan',
+                price: '$29/mo',
+                link: 'https://example.com/pro',
+                select_label: 'I want the Pro plan',
+                select_button: 'Choose Pro',
+              },
+            ],
+          },
+        ],
+        effects: [
+          { kind: 'set', name: 'plan', value: 'pro' },
+          { kind: 'tag', name: 'prospect' },
+          { kind: 'goto', name: 'Onboarding' },
+        ],
+      },
+    );
+    expect(res?.error).toBeNull();
+    // sendContent first, then the flow push on its own endpoint
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://api.manychat.com/fb/sending/sendContent');
+    expect(fetchMock.mock.calls[1][0]).toBe('https://api.manychat.com/fb/sending/sendFlow');
+    const content = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string).data
+      .content;
+    expect(content.messages[0]).toEqual({ type: 'text', text: 'Pick a plan' });
+    expect(content.messages[1]).toEqual({ type: 'image', url: 'https://img.example.com/p.png' });
+    expect(content.messages[2].type).toBe('cards');
+    const el = content.messages[2].elements[0];
+    expect(el.title).toBe('Pro plan');
+    expect(el.subtitle).toBe('$29/mo');
+    expect(el.buttons).toEqual([
+      { type: 'url', caption: 'View', url: 'https://example.com/pro' },
+      { type: 'flow', caption: 'Choose Pro', target: 'I want the Pro plan' },
+    ]);
+    expect(content.quick_replies).toEqual([
+      { type: 'node', caption: 'Pro', target: 'Pro' },
+      { type: 'node', caption: 'Free', target: 'Free' },
+    ]);
+    // send_flow is peeled off — sendFlow carries it instead
+    expect(content.actions).toEqual([
+      { action: 'set_field_value', field_name: 'plan', value: 'pro' },
+      { action: 'add_tag', tag_name: 'prospect' },
+    ]);
+    expect(
+      JSON.parse((fetchMock.mock.calls[1][1] as RequestInit).body as string),
+    ).toEqual({ subscriber_id: 'SUB1', flow_ns: 'Onboarding' });
+  });
 });
 
 describe('sendChannelMessage quick replies', () => {

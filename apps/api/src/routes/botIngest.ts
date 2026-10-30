@@ -6,8 +6,10 @@ import { agents, channelBindings, channels, conversations, messages } from '../d
 import { handleChannelMessage } from '../services/channelIngress.js';
 import { normalizeChatfuel, normalizeManychat } from './legacy.js';
 import { dbRateLimit } from '../lib/rateLimit.js';
-import { splitResponse } from '../lib/legacyFormat.js';
-import { qrTitle, type ChannelCredentials } from '../lib/channels.js';
+import { buildBotResponse, type BotEffect } from '../lib/botPlatform.js';
+import { formatForChannel, type ChannelCredentials } from '../lib/channels.js';
+import type { AttachmentRef } from '../lib/channels.js';
+import type { WidgetComponent } from '../lib/widgets.js';
 
 /**
  * First-class bot-platform ingest — POST /bot/:key/:flavor.
@@ -32,45 +34,19 @@ const emptyFor = (flavor: Flavor) =>
     ? { version: 'v2', content: { messages: [], actions: [] } }
     : { messages: [] };
 
-/** Suggested replies → the platform's quick-reply shape. A Chatfuel tap
- *  sets `user input` and redirects to the Janis block (the documented name
- *  for the block holding the JSON API card) so the card re-fires with the
- *  label as the user's message; a ManyChat node target is named after the
- *  label so a same-named flow/node picks the tap up. Non-string replies
- *  (email/phone collectors) have no bot-platform primitive — dropped. */
-const qrFor = (flavor: Flavor, qrs: QuickReply[]) =>
-  qrs
-    .map((q) => (typeof q === 'string' ? q.trim() : ''))
-    .filter(Boolean)
-    .slice(0, 11)
-    .map((label) =>
-      flavor === 'chatfuel'
-        ? { title: qrTitle(label), block_names: ['Janis'], set_attributes: { 'user input': label } }
-        : { type: 'node', caption: qrTitle(label), target: label },
-    );
-
-/** Reply text → the platform's response shape. Long answers split at the
- *  640-char message cap (the legacy formatter's limit — Chatfuel drops
- *  oversize message objects silently). Quick replies ride the last text
- *  message, the only spot Chatfuel renders them. */
+/** Reply text + quick replies → the platform's response shape. Kept as the
+ *  public name tests and older callers know — the mapping itself lives in
+ *  lib/botPlatform (widgets, attachments and {{…}} effects included). */
 export function shapeReply(flavor: Flavor, text: string, qrs: QuickReply[] = []) {
-  const chunks = splitResponse(text).filter(Boolean);
-  const quickReplies = qrFor(flavor, qrs);
-  if (flavor === 'manychat') {
-    const content: Record<string, unknown> = {
-      messages: chunks.map((t) => ({ type: 'text', text: t })),
-      actions: [],
-    };
-    if (quickReplies.length) content.quick_replies = quickReplies;
-    return { version: 'v2', content };
-  }
-  const msgs = chunks.map((t) => ({ text: t }) as Record<string, unknown>);
-  if (quickReplies.length && msgs.length) msgs[msgs.length - 1].quick_replies = quickReplies;
-  return { messages: msgs };
+  return buildBotResponse(flavor, { text, quickReplies: qrs });
 }
 
 /** The platform call is synchronous and the platforms wait ~15s — poll for
- *  the hosted pipeline's reply rather than holding the pipeline open. */
+ *  the hosted pipeline's reply rather than holding the pipeline open. The
+ *  outbound row carries the reply's rich parts on its payload: widgets and
+ *  attachments render into platform cards/media, and channel_effects are
+ *  the human labels for the {{…}} directives ingest stripped out — the
+ *  structured effects alongside them become set_attributes/actions. */
 async function waitForOutbound(db: Db, conversationId: string, since: Date) {
   const ms = Number(process.env.BOT_INGEST_WAIT_MS ?? 14_000);
   const deadline = Date.now() + ms;
@@ -87,10 +63,26 @@ async function waitForOutbound(db: Db, conversationId: string, since: Date) {
       )
       .orderBy(desc(messages.createdAt))
       .limit(1);
-    if (hit?.text) {
-      const quickReplies =
-        (hit.payload as { quick_replies?: QuickReply[] } | undefined)?.quick_replies ?? [];
-      return { text: hit.text, quickReplies };
+    const p = hit?.payload as
+      | {
+          quick_replies?: QuickReply[];
+          widgets?: WidgetComponent[];
+          attachments?: AttachmentRef[];
+          effects?: BotEffect[];
+          channel_effects?: string[];
+        }
+      | undefined;
+    // A directive- or widget-only reply stores no text — rich payload still
+    // counts as an answer (a bare {{goto}} IS the whole reply).
+    if (hit && (hit.text || p?.widgets?.length || p?.attachments?.length || p?.effects?.length)) {
+      return {
+        text: hit.text ?? '',
+        quickReplies: p?.quick_replies ?? [],
+        widgets: p?.widgets,
+        attachments: p?.attachments,
+        effects: p?.effects,
+        channelEffects: p?.channel_effects,
+      };
     }
     await new Promise((r) => setTimeout(r, 300));
   }
@@ -114,6 +106,19 @@ async function pushOwnsDelivery(db: Db, conversationId: string) {
   if (bound.kind === 'manychat')
     return Boolean((bound.credentials as ChannelCredentials).manychat_token);
   return true;
+}
+
+/** Stored reply → platform JSON. The stored text is canonical markdown —
+ *  bot platforms render plain text, so translate it the same way the push
+ *  path does before shaping the response. */
+function botResponse(flavor: Flavor, reply: NonNullable<Awaited<ReturnType<typeof waitForOutbound>>>) {
+  return buildBotResponse(flavor, {
+    text: formatForChannel(reply.text, flavor),
+    quickReplies: reply.quickReplies,
+    widgets: reply.widgets,
+    attachments: reply.attachments,
+    effects: reply.effects,
+  });
 }
 
 export function botIngestRoutes(db: Db) {
@@ -212,7 +217,7 @@ export function botIngestRoutes(db: Db) {
         if (!conv || conv.state === 'human' || (await pushOwnsDelivery(db, conv.id)))
           return c.json(emptyFor(flavor));
         const reply = await waitForOutbound(db, conv.id, new Date(Date.now() - 90_000));
-        return c.json(reply ? shapeReply(flavor, reply.text, reply.quickReplies) : emptyFor(flavor));
+        return c.json(reply ? botResponse(flavor, reply) : emptyFor(flavor));
       }
     }
 
@@ -237,7 +242,7 @@ export function botIngestRoutes(db: Db) {
       return c.json(emptyFor(flavor));
 
     const reply = await waitForOutbound(db, conv.id, since);
-    return c.json(reply ? shapeReply(flavor, reply.text, reply.quickReplies) : emptyFor(flavor));
+    return c.json(reply ? botResponse(flavor, reply) : emptyFor(flavor));
   });
 
   return app;
