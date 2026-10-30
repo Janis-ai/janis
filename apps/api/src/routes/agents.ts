@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { AgentConfig, catalogModel, friendlyName, vendorForBaseUrl } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentApiKeys, agentConnections, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, campaignSends, campaigns, channelBindings, channels, contactIdentities, conversations, evalSuggestions, helpArticles, helpSearchLog, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentApiKeys, agentConnections, agentInstructionRevisions, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, campaignSends, campaigns, channelBindings, channels, contactIdentities, conversations, evalSuggestions, helpArticles, helpSearchLog, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import { WidgetComponent, WidgetState, WidgetToolBinding } from '../lib/widgets.js';
 import { toolsFor } from '../lib/toolExec.js';
 import {
@@ -533,6 +533,14 @@ export function agentRoutes(db: Db) {
         return c.json({ error: `"${body.name}" is already an agent's name` }, 409);
       }
     }
+    // Guidance versioning needs the prior config for the diff.
+    const [prevCfg] = configToSave !== undefined
+      ? await db
+          .select({ config: agents.config })
+          .from(agents)
+          .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
+          .limit(1)
+      : [undefined];
     const [row] = await db
       .update(agents)
       .set({
@@ -548,6 +556,27 @@ export function agentRoutes(db: Db) {
       .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
       .returning();
     if (!row) return c.json({ error: 'not found' }, 404);
+    // Snapshot the guidance surface (instructions/greeting/quick replies)
+    // whenever it actually changes — append-only edit history.
+    if (prevCfg !== undefined) {
+      type G = { system_prompt?: string; greeting?: string; quick_replies?: unknown[] };
+      const before = (prevCfg.config ?? {}) as G;
+      const after = (row.config ?? {}) as G;
+      if (
+        (before.system_prompt ?? '') !== (after.system_prompt ?? '') ||
+        (before.greeting ?? '') !== (after.greeting ?? '') ||
+        JSON.stringify(before.quick_replies ?? []) !== JSON.stringify(after.quick_replies ?? [])
+      ) {
+        await db.insert(agentInstructionRevisions).values({
+          agentId: row.id,
+          workspaceId: row.workspaceId,
+          systemPrompt: after.system_prompt ?? '',
+          greeting: after.greeting ?? '',
+          quickReplies: after.quick_replies ?? [],
+          createdBy: c.get('user').id,
+        });
+      }
+    }
     if (llmVendorAlert) {
       opsAlert(
         `LLM vendor adopted — workspace ${c.get('workspaceId')} pinned an agent to ${llmVendorAlert}; check that vendor account's balance/rate tier`,
@@ -568,6 +597,75 @@ export function agentRoutes(db: Db) {
         }
       }
     }
+    return c.json({ agent: toAgent(row) });
+  });
+
+  // Guidance edit history — every save that changed instructions/greeting/
+  // quick replies, newest first. Previews only; restore reads the row itself.
+  app.get('/:id/instruction-revisions', agentMember, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const rows = await db
+      .select({
+        id: agentInstructionRevisions.id,
+        systemPrompt: agentInstructionRevisions.systemPrompt,
+        greeting: agentInstructionRevisions.greeting,
+        quickReplies: agentInstructionRevisions.quickReplies,
+        created_at: agentInstructionRevisions.createdAt,
+        editor: users.name,
+      })
+      .from(agentInstructionRevisions)
+      .leftJoin(users, eq(agentInstructionRevisions.createdBy, users.id))
+      .where(eq(agentInstructionRevisions.agentId, agent.id))
+      .orderBy(desc(agentInstructionRevisions.createdAt))
+      .limit(100);
+    return c.json({
+      revisions: rows.map((r) => ({
+        id: r.id,
+        prompt_preview: r.systemPrompt.slice(0, 200),
+        greeting: r.greeting,
+        quick_replies: r.quickReplies,
+        created_at: r.created_at.toISOString(),
+        editor: r.editor,
+      })),
+    });
+  });
+
+  // Restore a prior guidance version — the restore itself snapshots, so the
+  // history stays append-only rather than being rewritten.
+  app.post('/:id/instruction-revisions/:revId/restore', agentAdmin, async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const [rev] = await db
+      .select()
+      .from(agentInstructionRevisions)
+      .where(
+        and(
+          eq(agentInstructionRevisions.id, c.req.param('revId')),
+          eq(agentInstructionRevisions.agentId, agent.id),
+        ),
+      )
+      .limit(1);
+    if (!rev) return c.json({ error: 'not found' }, 404);
+    const newConfig = {
+      ...(agent.config ?? {}),
+      system_prompt: rev.systemPrompt,
+      greeting: rev.greeting,
+      quick_replies: rev.quickReplies,
+    };
+    const [row] = await db
+      .update(agents)
+      .set({ config: newConfig })
+      .where(eq(agents.id, agent.id))
+      .returning();
+    await db.insert(agentInstructionRevisions).values({
+      agentId: row.id,
+      workspaceId: row.workspaceId,
+      systemPrompt: rev.systemPrompt,
+      greeting: rev.greeting,
+      quickReplies: rev.quickReplies,
+      createdBy: c.get('user').id,
+    });
     return c.json({ agent: toAgent(row) });
   });
 

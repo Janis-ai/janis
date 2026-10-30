@@ -1050,6 +1050,29 @@ export const helpArticleRevisions = pgTable(
   (t) => [index('help_article_revisions_article').on(t.articleId, t.createdAt)],
 );
 
+/** Append-only edit history for an agent's guidance surface — system_prompt,
+ *  greeting, and quick_replies snapshot on every content-changing config
+ *  save. Restores write back through the same path so a rollback is itself a
+ *  revision. */
+export const agentInstructionRevisions = pgTable(
+  'agent_instruction_revisions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    agentId: uuid('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    systemPrompt: text('system_prompt').notNull().default(''),
+    greeting: text('greeting').notNull().default(''),
+    quickReplies: jsonb('quick_replies').notNull().default('[]'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index('agent_instruction_revisions_agent').on(t.agentId, t.createdAt)],
+);
+
 /** Every customer-facing help-center search — results=0 rows are the content
  *  roadmap: what customers asked for and couldn't find. */
 export const helpSearchLog = pgTable(

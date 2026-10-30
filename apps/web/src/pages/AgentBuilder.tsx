@@ -1960,7 +1960,7 @@ export default function AgentBuilder() {
                 </div>
               ) : (
                 <>
-                  <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+                  <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} agentId={agentId ?? ''} />
                   {(builder?.instruction_edits?.length ?? 0) > 0 && (
                     <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
                       Janis improved the instructions after testing —{' '}

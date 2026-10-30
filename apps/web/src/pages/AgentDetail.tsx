@@ -500,7 +500,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
       {section === 'behavior' && (
         <>
           {sub === 'instructions' && janisBrain(agent) && (
-            <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} />
+            <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} agentId={agent.id} />
           )}
           {/* 'greeting' is the external-webhook agents' own sub — the merged
               page is hosted-only, but Janis still delivers their greeting. */}
@@ -1015,19 +1015,107 @@ export function GreetingSection({
   );
 }
 
+/** Append-only edit history for the agent's guidance surface — every save
+ *  that changed instructions/greeting/quick-replies. Restore puts a prior
+ *  version back as a new save; the row's server write is immediate. */
+function InstructionHistory({
+  agentId,
+  isAdmin,
+  onRestored,
+}: {
+  agentId: string;
+  isAdmin: boolean;
+  onRestored: (a: Agent) => void;
+}) {
+  const qc = useQueryClient();
+  const { data } = useQuery({
+    queryKey: ['instruction-revisions', agentId],
+    queryFn: () =>
+      api<{
+        revisions: {
+          id: string;
+          prompt_preview: string;
+          greeting: string;
+          quick_replies: unknown;
+          created_at: string;
+          editor: string | null;
+        }[];
+      }>(`/api/agents/${agentId}/instruction-revisions`),
+    enabled: !!agentId,
+  });
+  const restore = useMutation({
+    mutationFn: (revId: string) =>
+      api<{ agent: Agent }>(
+        `/api/agents/${agentId}/instruction-revisions/${revId}/restore`,
+        { method: 'POST' },
+      ),
+    onSuccess: (d) => {
+      void qc.invalidateQueries({ queryKey: ['instruction-revisions', agentId] });
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      onRestored(d.agent);
+    },
+  });
+  const revs = data?.revisions ?? [];
+  if (revs.length <= 1) return null;
+  return (
+    <details>
+      <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>
+        Version history — {revs.length} saved versions
+      </summary>
+      <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
+        {revs.map((r, i) => (
+          <div key={r.id} className="row" style={{ alignItems: 'flex-start' }}>
+            <span className="grow">
+              <span className="muted">
+                {timeAgo(r.created_at)} ago
+                {r.editor ? ` · ${r.editor}` : ''}
+                {i === 0 ? ' · current' : ''}
+              </span>
+              <div className="muted" style={{ marginTop: 2 }}>
+                {r.prompt_preview}
+                {r.prompt_preview.length >= 200 ? '…' : ''}
+              </div>
+            </span>
+            {i > 0 && isAdmin && (
+              <button className="btn sm" disabled={restore.isPending} onClick={() => restore.mutate(r.id)}>
+                {restore.isPending ? 'Restoring…' : 'Restore'}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 /** Instructions — the system prompt plus the tone override, one card. */
 export function InstructionsSection({
   cfg,
   setCfg,
   isAdmin,
+  agentId,
 }: {
   cfg: AgentConfig;
   setCfg: (c: AgentConfig) => void;
   isAdmin: boolean;
+  agentId: string;
 }) {
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, flex: 1 }}>
       <strong>Instructions</strong>
+      <InstructionHistory
+        agentId={agentId}
+        isAdmin={isAdmin}
+        onRestored={(a) => {
+          const rc = (a.config ?? {}) as AgentConfig;
+          setCfg({
+            ...cfg,
+            system_prompt: rc.system_prompt,
+            greeting: rc.greeting,
+            quick_replies: rc.quick_replies,
+          });
+        }}
+      />
       <ReadOnly off={!isAdmin}>
       <label>
         Who the agent is, what it covers, and the rules it follows — persona,
