@@ -269,15 +269,16 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     from: drill?.from || undefined,
     to: drill?.to || undefined,
   };
-  const { data, hasNextPage, fetchNextPage, isFetchingNextPage } = useConversations({
-    attention: tab === 'attention' || undefined,
-    ...filterParams,
-  });
+  const { data, hasNextPage, fetchNextPage, isFetchingNextPage, isPending: convsPending } =
+    useConversations({
+      attention: tab === 'attention' || undefined,
+      ...filterParams,
+    });
   const convList = data?.pages.flatMap((p) => p.conversations);
   const knownTags = [...new Set((convList ?? []).flatMap((c) => c.tags ?? []))].sort();
   const { data: agents, isPending: agentsPending } = useAgents();
   const { data: views } = useViews();
-  const { data: hits } = useSearch(query, {
+  const { data: hits, isPending: searchPending } = useSearch(query, {
     attention: tab === 'attention' || undefined,
     ...filterParams,
   });
@@ -671,6 +672,12 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       )}
 
       {searching ? (
+        searchPending ? (
+          <div className="row" style={{ justifyContent: 'center', marginTop: 24 }}>
+            <span className="spin" />
+            <span className="muted">Searching…</span>
+          </div>
+        ) : (
         <>
           {hits && hits.conversations.length === 0 && <Empty>No matches.</Empty>}
           {hits?.conversations.map((c, i) => (
@@ -696,6 +703,12 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             </div>
           )}
         </>
+        )
+      ) : convsPending ? (
+        <div className="row" style={{ justifyContent: 'center', marginTop: 24 }}>
+          <span className="spin" />
+          <span className="muted">Loading conversations…</span>
+        </div>
       ) : (
         <>
           {data && convList!.length === 0 && (
