@@ -268,8 +268,12 @@ is a day on launch)*
 8. DONE 2026-10-19 — Stripe yearly Prices live+test ($290/$990/$2990 on
    the existing products), `STRIPE_*_YEARLY` + `TRIAL_DAYS=0` live
    (trials removed — free tier is the eval path; 01010-4q2), Billing
-   page monthly/annual toggle ships in the same deploy. Verify a real
-   annual checkout before advertising it.
+   page monthly/annual toggle ships in the same deploy.
+   VERIFIED 2026-10-29: all three live yearly price ids confirm
+   active+livemode+interval=year+$290/$990/$2990 on the right products;
+   checkout maps interval=year → env.stripeYearlyPrices[plan] →
+   metadata.interval='year'. Remaining last mile is one real card
+   click-through by Mike (real charge — refund after).
 9. DONE 2026-10-19/20 — `JANIS_SEARCH_BASE_URL` points at self-hosted
    SearXNG on Cloud Run (`janis-searxng` service, docker/searxng/;
    Bing+DDG+Mojeek+Wikipedia engines — Google/Startpage CAPTCHA on
@@ -298,9 +302,11 @@ is a day on launch)*
     verification is separately IN FLIGHT — see #15.
 12. Azure — app reg + MS_* envs DONE (A6); publisher verification in
     Partner Center may still be open — confirm status.
-13. LLM pro accounts — paid/raised-tier API accounts for
-    platform-hosted inference before real traffic (rate limits,
-    spend headroom).
+13. DONE (per Mike 2026-10-29) — LLM pro accounts funded/raised-tier for
+    platform-hosted inference. Re-up mechanism = ops alert, not auto-
+    reload: first time a workspace pins an agent to a non-default vendor,
+    routes/agents.ts fires an ALERT_SLACK_WEBHOOK ping "check that vendor
+    account's balance/rate tier" (ae4db8a) — top-up is manual on the ping.
 14. Meta Page Public Metadata Access — submitted, NOT approved
     (2026-10). Nothing in the app uses unowned-page metadata today —
     all Meta calls go through client page tokens or the User Profile
@@ -327,9 +333,14 @@ drizzle-kit/workbox-build, nothing to drop directly).
 *C. Medium features (~1 session each)*
 18. DONE — Discovery cards → Ask Janis: DiscoveryCards.tsx, railBus,
     ?rail=ask&q= deeplinks, card-click tracking via /api/track.
-19. Language Model tab — provider cards (platform/OpenAI/Gemini/custom),
-    BYOK base_url-without-key guard. (Language model lives at
-    Behavior → Language model; provider-card UI still open.)
+19. SUPERSEDED — the Language Model picker grew past the card ask:
+    LlmEditor + lib/llmProviders.ts now ship a hosted(metered)/BYOK mode
+    toggle, 12 provider presets (OpenAI/Anthropic/Gemini/OpenRouter/xAI/
+    DeepSeek/Moonshot/Z.ai/NVIDIA/Groq/Mistral/custom), key hints + key
+    URLs, OpenRouter OAuth, live /models fetch with chat-model filtering,
+    and catalog-priced model options. Provider select is a dropdown, not
+    literal cards — the function the item asked for exists; restyle to
+    cards only if Mike wants it.
 20. Editor reorg — knowledge split DONE (Knowledge base section: Text /
     Files / Websites / Gaps / Help center). Branding-tab piece superseded
     by the per-channel Bubble editor (channel page: live preview,
@@ -444,6 +455,11 @@ drizzle-kit/workbox-build, nothing to drop directly).
     comparison pages, trust/security page.
 37. `/for/:slug` landing variants — copy written; ship when campaign
     data shows platform skew.
+51. Marketing website revisions (per Mike 2026-10-29) — the janis.ai
+    landing/marketing surface needs a revision pass. Scope TBD by Mike —
+    likely: product-story refresh (hosted+BYOK agents, approval cards,
+    channels grid), new screenshots, proof assets per #36, and copy
+    reflecting what actually shipped vs the original launch pitch.
 
 *G. Gated/deferred (correctly parked)*
 38. Per-agent member scope — agent_members scoping/'hidden' role exists;
