@@ -256,18 +256,29 @@ describe('meta link conflicts + takeover', () => {
       workspace_name: 'Foreign Co',
       agent_name: 'TheirBot',
       owner_email: 'them@foreign.test',
+      mine: false,
     });
 
-    // Plain link → 409 with who owns it, no dup row.
+    // Foreign binding — not mine → no takeover path at all, plain or forced.
     const blocked = await link();
     expect(blocked.status).toBe(409);
-    const bb = (await blocked.json()) as { needs_takeover?: boolean; bound_to?: { workspace_name: string } };
-    expect(bb.needs_takeover).toBe(true);
-    expect(bb.bound_to?.workspace_name).toBe('Foreign Co');
-    const stillOne = await db.select().from(channels).where(eq(channels.id, fch.id));
-    expect(stillOne).toHaveLength(1);
+    const bb = (await blocked.json()) as { needs_takeover?: boolean };
+    expect(bb.needs_takeover).toBeUndefined();
+    expect((await link({ takeover: true })).status).toBe(409);
+    expect(await db.select().from(channels).where(eq(channels.id, fch.id))).toHaveLength(1);
 
-    // Campaign-backed foreign channel can't be taken over.
+    // Join the foreign workspace — now it's mine and takeover unlocks.
+    const [me] = await db.select({ id: users.id }).from(users).where(eq(users.email, 'a@x.test'));
+    await db.insert(memberships).values({ userId: me.id, workspaceId: fws.id, role: 'admin', acceptedAt: new Date() });
+
+    // Plain link → 409 with who owns it + the takeover flag.
+    const blocked2 = await link();
+    expect(blocked2.status).toBe(409);
+    const bb2 = (await blocked2.json()) as { needs_takeover?: boolean; bound_to?: { workspace_name: string } };
+    expect(bb2.needs_takeover).toBe(true);
+    expect(bb2.bound_to?.workspace_name).toBe('Foreign Co');
+
+    // Campaign-backed channel can't be taken over even though it's mine.
     await db
       .insert(campaigns)
       .values({ workspaceId: fws.id, channelId: fch.id, name: 'Camp', text: 'hi', status: 'draft' });
@@ -286,7 +297,7 @@ describe('meta link conflicts + takeover', () => {
     expect(mine).toHaveLength(1);
     expect(mine[0].workspaceId).not.toBe(fws.id);
 
-    // Bound to my own workspace now — even takeover won't move it again.
+    // Bound to this agent now — a re-link is a self-dup no-op.
     expect((await link({ takeover: true })).status).toBe(409);
   });
 });

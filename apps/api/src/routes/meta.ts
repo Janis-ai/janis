@@ -103,6 +103,8 @@ interface BoundInfo {
   workspace_name: string;
   agent_name: string;
   owner_email: string | null;
+  /** The requesting user belongs to the bound workspace — takeover allowed. */
+  mine: boolean;
 }
 
 /** First admin of a workspace = the account that owns the binding. */
@@ -299,11 +301,20 @@ export function metaApiRoutes(db: Db) {
           ),
         );
       const owners = await ownerEmails(db, [...new Set(rows.map((r) => r.wsId))]);
+      const mineWs = new Set(
+        (
+          await db
+            .select({ wsId: memberships.workspaceId })
+            .from(memberships)
+            .where(eq(memberships.userId, c.get('user').id))
+        ).map((m) => m.wsId),
+      );
       for (const r of rows) {
         const v = {
           workspace_name: r.wsName,
           agent_name: r.agentName,
           owner_email: owners.get(r.wsId) ?? null,
+          mine: mineWs.has(r.wsId),
         };
         if (r.pageId) boundBy.set(r.pageId, v);
         if (r.phoneId) boundBy.set(r.phoneId, v);
@@ -361,6 +372,8 @@ export function metaApiRoutes(db: Db) {
         .select({
           id: channels.id,
           wsId: channels.workspaceId,
+          agentId: channels.agentId,
+          kind: channels.kind,
           agentName: agents.name,
           wsName: workspaces.name,
         })
@@ -371,18 +384,42 @@ export function metaApiRoutes(db: Db) {
           sql`(${channels.credentials}->>'page_id' = ${extId} or ${channels.credentials}->>'phone_number_id' = ${extId})`,
         );
       if (!rows.length) return null;
-      const mine = rows.find((r) => r.wsId === c.get('workspaceId'));
-      if (mine) {
-        return { status: 409, body: { error: `already connected to ${mine.agentName} in this workspace` } };
+      // An asset can always be re-homed when the binding lives in a
+      // workspace the user belongs to (incl. this one). Foreign bindings
+      // hard-deny — nobody self-serves somebody else's Page.
+      const myWs = new Set(
+        (
+          await db
+            .select({ wsId: memberships.workspaceId })
+            .from(memberships)
+            .where(eq(memberships.userId, c.get('user').id))
+        ).map((m) => m.wsId),
+      );
+      const dup = rows.find(
+        (r) => r.wsId === c.get('workspaceId') && r.agentId === agent.id && r.kind === body.kind,
+      );
+      if (dup) {
+        return { status: 409, body: { error: `already connected to ${dup.agentName} on this agent` } };
       }
       const b = rows[0];
-      if (!body.takeover) {
+      if (!myWs.has(b.wsId)) {
         const owners = await ownerEmails(db, rows.map((r) => r.wsId));
         const email = owners.get(b.wsId) ?? null;
         return {
           status: 409,
           body: {
             error: `already connected to ${b.agentName} on ${b.wsName}${email ? ` (${email})` : ''}`,
+          },
+        };
+      }
+      if (!body.takeover) {
+        const sameWs = b.wsId === c.get('workspaceId');
+        const owners = await ownerEmails(db, rows.map((r) => r.wsId));
+        const email = owners.get(b.wsId) ?? null;
+        return {
+          status: 409,
+          body: {
+            error: `already connected to ${b.agentName}${sameWs ? ' in this workspace' : ` on ${b.wsName}${email ? ` (${email})` : ''}`}`,
             bound_to: { workspace_name: b.wsName, agent_name: b.agentName, owner_email: email },
             needs_takeover: true,
           },
