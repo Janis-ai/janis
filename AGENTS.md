@@ -328,6 +328,18 @@ is a day on launch)*
     per-agent file set, Sheets/Docs read+append+create, Slides, Office
     MIME→Google convert, per-row unshare.
 
+15b. META ENTITY MIGRATION (learned 2026-10-30) — the Janis Meta app's
+    business verification + Tech Provider status anchor to Stagename
+    Inc. (Josh Barkin's old co — never owned Janis), and the FB page
+    sits under "Josh Barkin's Business" portfolio. Works today, fragile
+    on any re-verification (WABA display name, messaging tiers, audit).
+    Fix: create/verify a portfolio under Janis's real legal entity
+    (the one on the Stripe account), re-do Tech Provider access
+    verification there, then move the app (App Settings → Basic →
+    Business portfolio) + page + any WABA. App Review approvals
+    (instagram_manage_messages) live on the app — they survive the
+    move. Do NOT unbind Stagename until the new verification is green.
+
 *B. Quick wins — ALL DONE or moot* (10 plan-meter + /billing/status ✓,
 11 Agents View/Manage ✓, 12 per-event notify prefs grid ✓, 13 DB_POOL_MAX
 ✓, 14 JOB_CONCURRENCY ✓, 15 migrate-as-pre-deploy-step ✓, 16 .env.example
