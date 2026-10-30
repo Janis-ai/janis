@@ -829,17 +829,12 @@
       if (!d) return;
       if (d.state !== 'new') return poll();
       // Fresh conversation — wipe the rendered thread and re-poll so the
-      // greeting lands on the empty transcript.
-      state.seen = {};
-      state.lastTs = null;
-      state.oldestTs = null;
-      state.hasMore = false;
-      state.greeted = false;
+      // greeting lands on the empty transcript. resetTranscript also drops
+      // stale node refs (greetEl/typingEl/qrsEl): the fresh conv's stored
+      // greeting row would otherwise "adopt" into a detached greetEl and
+      // render nothing at all.
+      resetTranscript();
       state.convState = 'agent';
-      state.lastAuthor = null;
-      msgs.innerHTML = '';
-      var ended = msgs.querySelector('.janis-ended');
-      if (ended) ended.remove();
       return poll();
     }).catch(function () {});
   };
@@ -2410,9 +2405,14 @@
         if (d.has_more !== undefined) state.hasMore = d.has_more;
         if (!state.greeted) {
           // first poll resolved — only kick off the greeting once we know the
-          // transcript is actually empty, so history doesn't get a greeting header
+          // transcript is actually empty, so history doesn't get a greeting header.
+          // A transcript whose only row is the stored greeting (a "new chat"
+          // fork, or reopening a fresh thread) still counts as empty — the
+          // synthetic greeting renders with its widgets and the stored row
+          // then adopts into it via the m.greeting dedupe.
           state.greeted = true;
-          if (!d.messages.length && !state.outbox.length) {
+          var onlyGreeting = !d.messages.some(function (m) { return !m.greeting; });
+          if (onlyGreeting && !state.outbox.length) {
             if (state.config && state.config.greeting) {
               state.greetEl = addMsg({
                 direction: 'out',

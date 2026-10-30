@@ -429,7 +429,7 @@ export default function Landing() {
     // ?v= busts the CF-worker's 1h cache on www + the browser's — bump it
     // whenever widget.js ships a behavior change or visitors keep running
     // yesterday's copy long after a deploy.
-    s.src = '/widget.js?v=2';
+    s.src = '/widget.js?v=3';
     s.setAttribute('data-janis-token', TOKEN);
     s.async = true;
     s.onload = () => {
