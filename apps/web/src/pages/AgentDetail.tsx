@@ -1136,6 +1136,14 @@ export function InstructionsSection({
     pending?: boolean;
     err?: string;
     dismissed?: number;
+    dismissedFindings?: {
+      kind?: 'conflict' | 'redundant';
+      a: string;
+      b: string;
+      when: string;
+      why?: string;
+      fix: string;
+    }[];
     conflicts?: {
       kind?: 'conflict' | 'redundant';
       a: string;
@@ -1199,6 +1207,7 @@ export function InstructionsSection({
       const r = await api<{
         conflicts: { a: string; b: string; when: string; fix: string }[];
         dismissed?: number;
+        dismissedFindings?: { a: string; b: string; when: string; why?: string; fix: string }[];
       }>(`/api/agents/${agentId}/prompt-check`, {
         method: 'POST',
         body: JSON.stringify({
@@ -1206,7 +1215,11 @@ export function InstructionsSection({
           tone: draft?.tone ?? cfg.tone ?? '',
         }),
       });
-      setCheck({ conflicts: r.conflicts, dismissed: r.dismissed ?? 0 });
+      setCheck({
+        conflicts: r.conflicts,
+        dismissed: r.dismissed ?? 0,
+        dismissedFindings: r.dismissedFindings ?? [],
+      });
     } catch (e) {
       setCheck({ err: (e as Error).message });
     }
@@ -1365,6 +1378,35 @@ export function InstructionsSection({
               as likely false positives.
             </div>
           )}
+          {(check.dismissedFindings ?? []).map((d, i) => (
+            <div
+              key={`d${i}`}
+              className="card"
+              style={{ padding: 8, fontSize: 12, opacity: 0.55, borderStyle: 'dashed' }}
+            >
+              <div>
+                <span className="muted">“{d.a}”</span>
+              </div>
+              {d.b && (
+                <>
+                  <div className="muted" style={{ marginTop: 2 }}>
+                    vs
+                  </div>
+                  <div>
+                    <span className="muted">“{d.b}”</span>
+                  </div>
+                </>
+              )}
+              <div style={{ marginTop: 4 }}>
+                <span className="badge neutral">dismissed</span> {d.when}
+              </div>
+              {d.why && (
+                <div className="muted" style={{ marginTop: 4 }}>
+                  {d.why}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
       {rewrite?.err && (

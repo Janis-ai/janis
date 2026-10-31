@@ -908,7 +908,7 @@ export async function checkPromptConflicts(
   db: Db,
   agent: AgentRow,
   draft?: { instructions?: string; tone?: string },
-): Promise<{ conflicts: PromptConflict[]; dismissed: number } | null> {
+): Promise<{ conflicts: PromptConflict[]; dismissed: number; dismissedFindings: PromptConflict[] } | null> {
   let llm: LlmSettings;
   try {
     llm = await llmFor(db, agent);
@@ -1020,7 +1020,7 @@ export async function checkPromptConflicts(
       ...(applyOk ? { apply: edits } : {}),
     });
   }
-  if (!out.length) return { conflicts: [], dismissed: 0 };
+  if (!out.length) return { conflicts: [], dismissed: 0, dismissedFindings: [] };
   // Verify pass — the generator is deliberately high-recall and reads
   // co-applicable directives on different axes (escalate vs sign in) as
   // collisions. A second call plays skeptic per claim. Fail-open: a
@@ -1052,14 +1052,15 @@ export async function checkPromptConflicts(
   } catch {
     verdicts = null;
   }
-  if (!Array.isArray(verdicts)) return { conflicts: out, dismissed: 0 };
+  if (!Array.isArray(verdicts)) return { conflicts: out, dismissed: 0, dismissedFindings: [] };
   const noise = new Set<number>();
   for (const v of verdicts) {
     const e = v as { i?: unknown; verdict?: unknown };
     if (Number.isInteger(e.i) && e.verdict === 'noise') noise.add(e.i as number);
   }
   const kept = out.filter((_, i) => !noise.has(i));
-  return { conflicts: kept, dismissed: out.length - kept.length };
+  const dropped = out.filter((_, i) => noise.has(i));
+  return { conflicts: kept, dismissed: dropped.length, dismissedFindings: dropped };
 }
 
 const REWRITE_SYSTEM =

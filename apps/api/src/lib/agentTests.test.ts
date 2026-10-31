@@ -447,6 +447,25 @@ describe('checkPromptConflicts', () => {
     });
     expect(result).toEqual({
       dismissed: 1,
+      dismissedFindings: [
+        // i=1 — the verifier's noise call, surfaced for review
+        {
+          kind: 'redundant',
+          a: 'flag for a human',
+          b: '',
+          when: 'repeats the rule above',
+          why: 'the second rule adds nothing',
+          severity: 'low',
+          fix: 'delete it',
+          apply: [
+            {
+              field: 'instructions',
+              find: 'Flag for a human whenever the customer asks for one.',
+              replace: '',
+            },
+          ],
+        },
+      ],
       conflicts: [
         {
           kind: 'conflict',
@@ -483,7 +502,7 @@ describe('checkPromptConflicts', () => {
     const agent = await makeAgent();
     fetchMock.mockResolvedValueOnce(llmReply({ content: '[]' }));
     const result = await checkPromptConflicts(db, agent);
-    expect(result).toEqual({ conflicts: [], dismissed: 0 });
+    expect(result).toEqual({ conflicts: [], dismissed: 0, dismissedFindings: [] });
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(body.messages.find((m: { role: string }) => m.role === 'user').content).toContain(
       'Built-in persona',
