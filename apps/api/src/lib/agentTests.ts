@@ -781,7 +781,12 @@ const CONFLICT_CHECK_SYSTEM =
   'sentences ("why"), rate "severity" high|medium|low, and suggest a ' +
   'one-line resolution that keeps the operator\'s likely intent ("fix"). ' +
   'Rules that merely cover different situations are NOT conflicts — only ' +
-  'report pairs a model could plausibly apply to the same message. Two ' +
+  'report pairs a model could plausibly apply to the same message. Watch ' +
+  'especially for blanket "Always/X … instead of Y" directives: when Y ' +
+  "is something another rule requires (e.g. 'list your accessible data " +
+  "instead of offering a handoff' vs 'flag for a human when asked'), " +
+  'that IS the highest-value conflict — unconditional wording in one ' +
+  'rule silently overriding scoped rules elsewhere. Two ' +
   'more exclusions: "when" must be a situation where BOTH directives ' +
   "actually fire — if one rule's own conditions exclude that situation " +
   "it's coverage, not a collision; and a pair whose text already states " +
