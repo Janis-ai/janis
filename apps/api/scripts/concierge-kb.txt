@@ -2,7 +2,7 @@ Janis is AI and humans working together for customer service: the agent answers 
 
 ---
 
-How it works: connect a channel — website chat widget, Facebook Messenger, Instagram DM, WhatsApp, email (inbound address, Gmail, or Outlook/Microsoft 365), SMS, or a live phone number — attach an agent, and Janis routes every message: the agent answers when confident and flags for a human when not.
+How it works: connect a channel — website chat widget, Facebook Messenger, Instagram DM, WhatsApp, email (inbound address, Gmail, or Outlook/Microsoft 365), SMS, a live phone number, or an existing Chatfuel/ManyChat bot — attach an agent, and Janis routes every message: the agent answers when confident and flags for a human when not.
 
 ---
 
@@ -101,11 +101,11 @@ The unified inbox is at https://www.janis.ai/conversations — all channels, sta
 
 ---
 
-Conversation states: "Agent" means the AI is replying, "Needs human" is an escalation waiting for an operator, "Human" means an operator owns it, "Snoozed" hides it until a timer or a customer message wakes it, "Archived" is closed. Signal filters surface "Handoff offered", "Errors" and "Overdue"; flags cover Unread and Starred.
+Conversation states: "Agent" means the AI is replying, "Needs human" is an escalation waiting for an operator, "Human" means an operator owns it, "Snoozed" hides it until a timer or a customer message wakes it, "Archived" is closed — though a fresh inbound from the customer revives an archived thread back to live. Signal filters surface "Handoff offered", "Errors" and "Overdue"; flags cover Unread and Starred.
 
 ---
 
-Triage built in: unread and starred filters, tags, teammate assignments, saved replies, attachments, full-text transcript search, snoozing, bulk actions on selected rows, saved views, and archiving. You can assign a thread for a signed-in teammate with assign_conversation ("put that waiting one on me", "give it to Ann") — it posts an approval card and the inbox updates live on approve.
+Triage built in: unread and starred filters, tags, teammate assignments, saved replies, attachments, full-text transcript search (archived and snoozed threads included by default), snoozing, bulk actions on selected rows, saved views, archiving — and admins can delete a conversation outright from its page for test threads and erasure requests. You can assign a thread for a signed-in teammate with assign_conversation ("put that waiting one on me", "give it to Ann") — it posts an approval card and the inbox updates live on approve.
 
 ---
 
@@ -265,6 +265,14 @@ The Behavior section holds the agent's greeting, system prompt, quick replies (I
 
 ---
 
+The Instructions card can audit itself: "Check for conflicts" reads the instructions, tone and injected context the way the model does and flags rules that contradict or duplicate each other — each finding carries an "Apply fix" edit or a "no one-click fix" note, and "Suggest rewrite" proposes a consolidated rewrite (with a dropped/added rules report before use). Both land as drafts for normal review.
+
+---
+
+Version history keeps a snapshot on every save: instructions, greeting and quick replies on the Instructions card, and each help-center article — open the history to compare and restore an earlier version (restoring is itself a new version, nothing is lost).
+
+---
+
 External agents set their webhook URL under the agent's Settings → General — they receive signed webhooks and reply through the ingest API; hosted agents need no URL.
 
 ---
@@ -289,6 +297,10 @@ When a run flips a test red, Janis classifies the cause, drafts a fix — a know
 
 ---
 
+Test run history shows every suite run with flip badges and expandable before/after replies — one view serves regression hunting and A/B "try a variant" model compares.
+
+---
+
 New agents are created in a guided builder — Create, Teach it, Guide it, Abilities, Try it, Deploy — where the Try it step runs the same scenario cards grouped by coverage category (safety, knowledge, actions, out of scope, tone, general) so a launch can't look tested on easy questions alone.
 
 ---
@@ -309,7 +321,15 @@ Agents can collect contact info natively: when a customer's email or phone is ne
 
 ---
 
-The Actions section installs tools the agent can call mid-conversation — one-click templates for Shopify, HubSpot, Zendesk (API key or OAuth), Salesforce, Stripe, Cal.com, Calendly (token or OAuth), Brave Search and iTunes Search, or define your own HTTP endpoint with parameters. Calendly connects one click via the Calendly (OAuth) card — no token hunting — or with a personal access token on the plain Calendly card; the agent can then list event types as bookable cards, check real slot availability, look up a customer's scheduled events, and propose cancellations for approval.
+The Actions section installs tools the agent can call mid-conversation — one-click templates for Shopify, HubSpot, Zendesk (API key or OAuth), Salesforce, Stripe, Cal.com, Calendly (token or OAuth), Google Sheets, Docs, Slides and Drive (one Google OAuth connect powers all four), Brave Search and iTunes Search, or define your own HTTP endpoint with parameters. Calendly connects one click via the Calendly (OAuth) card — no token hunting — or with a personal access token on the plain Calendly card; the agent can then list event types as bookable cards, check real slot availability, look up a customer's scheduled events, and propose cancellations for approval.
+
+---
+
+Google tools: the four Google cards in Actions (Sheets, Docs, Slides, Drive) all ride one Google OAuth connect — Sheets lists, reads, appends and updates rows; Docs reads, creates and appends; Slides reads and creates decks; Drive lists files, reads them and converts Office files to Google format. The agent can only touch files the operator picks in the card's Google Picker (or files it creates itself, which join the picked set) — connect Google, then pick the files it may use.
+
+---
+
+Pasting a private Google Doc, Sheet, Slides or Drive link into Knowledge → Sources fetches it through the agent's Google connection instead of the anonymous crawl — so private files work as knowledge sources once Google is connected and the file is shared with it.
 
 ---
 
@@ -341,11 +361,31 @@ Connecting Stripe (agent → Actions → Stripe → Connect): create a restricte
 
 ---
 
-The customer-facing channels a visitor can talk to an agent on: Bubble (Janis's website chat widget — the current name for what used to be called web chat), email (inbound address, Gmail, or Outlook/Microsoft 365), Facebook Messenger, Instagram DM, WhatsApp, SMS (via Twilio — yours or a Janis-hosted number), and a live voice phone number — plus the SDK/HTTP API for custom integrations. Slack is NOT a customer-facing channel: it mirrors alerts to the team and lets teammates reply — never list it as a way for customers to reach an agent.
+The customer-facing channels a visitor can talk to an agent on: Bubble (Janis's website chat widget — the current name for what used to be called web chat), email (inbound address, Gmail, or Outlook/Microsoft 365), Facebook Messenger, Instagram DM, WhatsApp, SMS (via Twilio — yours or a Janis-hosted number), a live voice phone number, and Chatfuel or ManyChat bots (the bot stays the front door, Janis answers through it) — plus the SDK/HTTP API for custom integrations. Slack is NOT a customer-facing channel: it mirrors alerts to the team and lets teammates reply — never list it as a way for customers to reach an agent.
 
 ---
 
-Channels are managed per agent in its Channels section (https://www.janis.ai/agents — pick the agent, then Channels) — "Add channel" opens a catalog of the kinds above, and each connected channel gets its own page with kind-specific setup (Messenger/Instagram via Meta OAuth, WhatsApp via embedded signup, Bubble widget snippet, email forwarding, Gmail and Outlook OAuth, SMS and voice numbers via Twilio). I can add one with create_channel — it posts an approval card.
+Channels are managed per agent in its Channels section (https://www.janis.ai/agents — pick the agent, then Channels) — "Add channel" opens a catalog of the kinds above, and each connected channel gets its own page with kind-specific setup (Messenger/Instagram via Meta OAuth, WhatsApp via embedded signup, Bubble widget snippet, email forwarding, Gmail and Outlook OAuth, SMS and voice numbers via Twilio, Chatfuel/ManyChat ingest URL). I can add one with create_channel — it posts an approval card.
+
+---
+
+Chatfuel and ManyChat channels let a visitor keep their existing bot as the front door while Janis becomes its brain: connect the channel, paste its ingest URL (https://app.janis.ai/bot/{key}/chatfuel or …/manychat — one per-agent key serves both) into a JSON API card (Chatfuel) or External Request action (ManyChat), and each platform user gets a normal conversation in the shared inbox. Setup steps: https://www.janis.ai/docs?guide=operator#chatfuel and #manychat.
+
+---
+
+A bot channel's ingest endpoint waits about 15 seconds for the agent's answer — slower turns reply empty while the inbound still lands in the inbox — and while a human owns the conversation the endpoint replies empty too, so the platform bot goes silent during takeover until a teammate hands it back or auto-resume fires.
+
+---
+
+Bot channels share threads with native Meta channels: if the Facebook Page is also subscribed to Janis's Meta webhook, a message seen on both paths lands once in the same conversation (Messenger, Instagram, Chatfuel and ManyChat key on the same PSID) — and the channel page's "See every message" option can subscribe the Page as a secondary receiver so even messages the bot never forwards reach the inbox.
+
+---
+
+On bot channels the agent can drive the platform with directives in its reply — {{set field=value}} stores subscriber attributes, {{tag}}/{{untag}} manage ManyChat tags, {{goto "block"}} jumps flows — and a saved ManyChat API token on the channel switches delivery to push sends so responses aren't limited to the synchronous card window.
+
+---
+
+Connecting Meta once (Facebook login) lets the operator pick which assets the agent serves — a Facebook Page for Messenger, an Instagram account for DMs, a WhatsApp number — from an asset picker on the channel page, and surfaces already bound elsewhere show who owns them.
 
 ---
 
@@ -354,6 +394,10 @@ The Bubble channel is a single script tag; visitors get a chat bubble on your si
 ---
 
 The Bubble's editor lives on the channel's own page — a live working preview beside sectioned controls: header title and subtitle, accent color, position, logo, greeting, quick-reply chips, proactive teaser, reply sound, theme, and 'Powered by Janis' removal on paid plans.
+
+---
+
+The widget's ⋯ menu always offers "Start a new chat" (ending is a consequence, not a prerequisite; starting fresh over a live thread confirms first since the old one leaves view), "End chat" appears only while a thread is live, the greeting can show tappable suggested-article cards from the help center (top-viewed published articles — the channel's "suggested articles" toggle), and an optional "Text us" footer can surface the agent's SMS number.
 
 ---
 
@@ -377,11 +421,19 @@ Email channels get an inbound address at inbound.janis.ai — forward or MX mail
 
 ---
 
-SMS and voice channels run on Twilio — bring your own credentials or let Janis host the number for you; voice calls are transcribed, answered by the agent live, and land in the inbox as conversations.
+SMS and voice channels run on Twilio — bring your own credentials or let Janis host the number for you; voice calls are transcribed, answered by the agent live (neural voices, and callers can barge in mid-reply), and land in the inbox as conversations. Hosted numbers bill monthly as usage; BYO Twilio bills on the customer's own account.
+
+---
+
+SMS channels enforce carrier opt-in rules automatically: a first-time texter gets a confirm prompt and the agent only engages after they reply YES (START also consents); HELP returns a deterministic info reply, and STOP/opt-out silences the thread until they re-subscribe — existing threads that predate the gate pass straight through.
 
 ---
 
 Contacts at https://www.janis.ai/contacts build one profile per customer across channels — identities merge on matching email or phone, and you can merge duplicates manually.
+
+---
+
+Contact profiles fill themselves in: Janis distills conversation transcripts into CRM-style contact fields (name, company, what they asked about, account hints) automatically as messages land — the agent and operators see a richer customer card without anyone doing data entry.
 
 ---
 
@@ -458,6 +510,14 @@ Janis integrates with Stripe for billing; privacy and subprocessor details (Meta
 ---
 
 The /docs page documents the full ingest API, webhook event types, signature verification, and the SDK for self-hosted agents; a public status page lives at /status.
+
+---
+
+Each agent can mint multiple named API keys (Settings → API keys) — create, label, list last-used and revoke them individually, including the original single legacy key — so one key per integration or teammate is easy to rotate.
+
+---
+
+External systems can drive an agent's knowledge over the agent-API-key endpoints: GET /v1/knowledge lists its sources and POST /v1/knowledge/{file-id}/refresh re-crawls one source off-schedule — handy for a Shopify/Zapier flow that refreshes the agent the moment a doc changes.
 
 ---
 
