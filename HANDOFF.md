@@ -111,6 +111,17 @@ origin isn't a registered JS origin on the OAuth client; prod origins
 work. Removing the last google-* tool GCs the connection row
 (gcUnusedConnections) — re-copy when resetting test state.
 
+**"Check for conflicts" — rule-contradiction audit (Oct 30):** the concierge
+deflected a "speak to a human" request to sign-in because two authored rules
+collided ("flag for a human when asked" vs "manual intervention → sign in
+via Copilot") — invisible until a regression test failed. POST
+/agents/:id/prompt-check reads the rule surface the way the model does
+(instructions + tone — accepts in-flight text — plus always-injected
+knowledge notes, procedure triggers, and the platform persona/context
+lines) and returns colliding pairs {a, b, when, fix}. The Instructions
+card has a Check-for-conflicts button rendering the pairs + suggestion.
+checkPromptConflicts lives in lib/agentTests.ts.
+
 **Test sims understand human handoffs (Oct 30):** rescue-saved tests replayed
 without the conversation's escalation state — the synthetic conv carried
 profile/channel/summary but not `state`, so the prompt never got the "a
