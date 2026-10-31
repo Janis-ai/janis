@@ -255,6 +255,21 @@ is a day on launch)*
       returns. www redirect URIs registered in provider consoles by
       Mike. Emitted links (emails, Slack text, tool urls,
       Twilio-signed webhook URLs) stay on canonical WEB/API_ORIGIN.
+   DONE 2026-10-31 — WEB_ORIGIN actually flipped to www: deploy-gcp.sh
+      used to stomp explicit API_ORIGIN/WEB_ORIGIN with PUBLIC_ORIGIN,
+      so .env.production's WEB_ORIGIN=www.janis.ai never shipped and
+      concierge/tool/notification links kept emitting app.janis.ai.
+      PUBLIC_ORIGIN is now a setdefault fallback only → live env is
+      API_ORIGIN=app.janis.ai (provider-registered callbacks) +
+      WEB_ORIGIN=www.janis.ai (emitted links). Verified live on
+      janis-api-01244-fz4. OAuth console spot-checks (probed each
+      provider's authorize endpoint with the www redirect_uri):
+      Google (all 3 callbacks), Slack (sign-in + install), WorkOS and
+      Calendly accept www; Cloudflare OAuth app is MISSING
+      www.janis.ai/channels/email-domain/cf-callback (add it, keep
+      app); Meta + Azure can't be probed logged-out — verify
+      www.janis.ai/api/meta/callback and /outlook/callback are
+      registered in the Meta app + Entra app reg.
 2. Verify + export the 17k legacy list (Mongo export) — campaign prep is
    fiction without it. (2026-10-20: archived in-place on the wordhopapi
    cluster via scripts/archive-legacy-collections.mjs —
