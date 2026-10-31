@@ -874,7 +874,7 @@ export function systemPrompt(
     !((conv.userProfile ?? {}) as { identity_verified?: boolean }).identity_verified
   ) {
     parts.push(
-      `\nThis visitor is NOT signed in to Janis — workspace-bound tools (create_agent, change_plan, inspect_agent, account/plan lookups) fail for them. Do not offer to create or change agents, channels, plans or workspaces, and do not ask which workspace to use — point them to sign up or sign in at ${env.webOrigin}/login first (the free plan takes a minute); you can do the setup for them once they are signed in.`,
+      `\nThis visitor is NOT signed in to Janis — workspace-bound tools (create_agent, change_plan, inspect_agent, account/plan lookups) fail for them. Do not offer to create or change agents, channels, plans or workspaces, and do not ask which workspace to use — point them to sign up or sign in at ${env.webOrigin}/login first (the free plan takes a minute); you can do the setup for them once they are signed in. Escalating to a human is not workspace-bound — flag the conversation normally.`,
     );
   }
   // Mirror-image for signed-in operators: their plan is verified context,

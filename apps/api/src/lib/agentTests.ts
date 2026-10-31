@@ -781,7 +781,12 @@ const CONFLICT_CHECK_SYSTEM =
   'sentences ("why"), rate "severity" high|medium|low, and suggest a ' +
   'one-line resolution that keeps the operator\'s likely intent ("fix"). ' +
   'Rules that merely cover different situations are NOT conflicts — only ' +
-  'report pairs a model could plausibly apply to the same message. ' +
+  'report pairs a model could plausibly apply to the same message. Two ' +
+  'more exclusions: "when" must be a situation where BOTH directives ' +
+  "actually fire — if one rule's own conditions exclude that situation " +
+  "it's coverage, not a collision; and a pair whose text already states " +
+  'which wins or in what order (one explicitly deferring to the other) ' +
+  'is RESOLVED, not a conflict — do not report it. ' +
   'Platform-injected lines are listed for context; the fix must target ' +
   'authored text. For each finding also propose the text edits resolving ' +
   'it as "apply": [{"field": "instructions"|"tone"|"knowledge", "index": ' +
@@ -849,7 +854,7 @@ function ruleSurface(agent: AgentRow, cfg: RuleSurfaceCfg, instructions: string,
       : null,
     'Platform-injected context the operator cannot edit (reference only):\n' +
       '- When a conversation is already escalated: "a human teammate has already been notified — keep helping normally; only re-escalate for something new"\n' +
-      '- For console/copilot agents, when the visitor is not signed in: "workspace-bound tools fail for them — point them to sign up or sign in first"',
+      '- For console/copilot agents, when the visitor is not signed in: "workspace-bound tools fail for them — point them to sign up or sign in first (escalating to a human is not workspace-bound — it still works)"',
   ]
     .filter(Boolean)
     .join('\n\n');

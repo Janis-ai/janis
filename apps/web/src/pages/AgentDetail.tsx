@@ -412,12 +412,12 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
   const rules = rulesData?.rules.filter((r) => r.agent_id === agent.id) ?? [];
   const channels = channelsData?.channels.filter((c) => c.agent_id === agent.id) ?? [];
 
-  const saveAll = () =>
+  const saveAll = (cfgOverride?: AgentConfig) =>
     update.mutate({
       ...(name.trim() && name.trim() !== agent.name ? { name: name.trim() } : {}),
       ...(agent.hosted ? {} : { webhook_url: webhookUrl || null }),
       auto_resume_minutes: autoResume ? Number(autoResume) : null,
-      config: cfg,
+      config: cfgOverride ?? cfg,
     });
 
   // Sections whose edits live in the shared draft — the bottom Save button
@@ -688,7 +688,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
             </button>
           )}
           {hasDrafts && (
-            <button className="btn primary" disabled={update.isPending} onClick={saveAll}>
+            <button className="btn primary" disabled={update.isPending} onClick={() => saveAll()}>
               {update.isPending ? 'Saving…' : savedFlash ? 'Saved ✓' : 'Save'}
             </button>
           )}
@@ -1122,8 +1122,10 @@ export function InstructionsSection({
   isAdmin: boolean;
   agentId: string;
   /** In-card Save — the same shared-draft write the page's bottom Save
-   *  runs; rendered here because the behavior form is long. */
-  onSave?: () => void;
+   *  runs; rendered here because the behavior form is long. Accepts a
+   *  config override so callers can persist an edit they just computed
+   *  without waiting for the state round-trip. */
+  onSave?: (cfgOverride?: AgentConfig) => void;
   saving?: boolean;
   saved?: boolean;
 }) {
@@ -1155,9 +1157,11 @@ export function InstructionsSection({
     null,
   );
   // Cards the operator applied a suggested patch to — the draft cfg
-  // changes like a typed edit; saving stays on the normal Save flow.
+  // changes like a typed edit; Apply fix also auto-saves and re-runs the
+  // audit so the next finding shows up ready to fix.
   const [applied, setApplied] = useState<Set<number>>(new Set());
-  const applyFix = (
+  const [applying, setApplying] = useState(false);
+  const applyFix = async (
     i: number,
     edits: { field: string; index?: number; find: string; replace: string }[],
   ) => {
@@ -1172,9 +1176,17 @@ export function InstructionsSection({
         );
     }
     setCfg(next);
-    setApplied((prev) => new Set(prev).add(i));
+    setApplying(true);
+    try {
+      onSave?.(next);
+      // The applied text can still collide with other rules — re-run so
+      // the operator just keeps clicking through findings until clean.
+      await runCheck({ instructions: next.system_prompt ?? '', tone: next.tone ?? '' });
+    } finally {
+      setApplying(false);
+    }
   };
-  const runCheck = async () => {
+  const runCheck = async (draft?: { instructions: string; tone: string }) => {
     setCheck({ pending: true });
     // Results are index-keyed — a fresh list must not inherit the last
     // run's Applied marks.
@@ -1184,7 +1196,10 @@ export function InstructionsSection({
         `/api/agents/${agentId}/prompt-check`,
         {
           method: 'POST',
-          body: JSON.stringify({ instructions: cfg.system_prompt ?? '', tone: cfg.tone ?? '' }),
+          body: JSON.stringify({
+            instructions: draft?.instructions ?? cfg.system_prompt ?? '',
+            tone: draft?.tone ?? cfg.tone ?? '',
+          }),
         },
       );
       setCheck({ conflicts: r.conflicts });
@@ -1230,7 +1245,7 @@ export function InstructionsSection({
           </button>
         )}
         {isAdmin && onSave && (
-          <button className="btn primary sm" disabled={saving} onClick={onSave}>
+          <button className="btn primary sm" disabled={saving} onClick={() => onSave()}>
             {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
           </button>
         )}
@@ -1310,15 +1325,16 @@ export function InstructionsSection({
                   <button
                     className="btn sm"
                     style={{ marginTop: 6 }}
-                    title="Rewrite the quoted text — lands as edits you review and Save"
-                    onClick={() => applyFix(i, c.apply!)}
+                    disabled={applying}
+                    title="Apply the suggested edit, save it, and re-check for the next conflict"
+                    onClick={() => void applyFix(i, c.apply!)}
                   >
-                    Apply fix
+                    {applying ? 'Applying…' : 'Apply fix'}
                   </button>
                 )}
                 {applied.has(i) && (
                   <div className="muted" style={{ fontSize: 11, marginTop: 6, color: 'var(--accent)' }}>
-                    Applied — review the updated text, then Save
+                    Applied + saved — checking for the next conflict…
                   </div>
                 )}
                 {!c.apply && !applied.has(i) && (
@@ -1372,7 +1388,7 @@ export function InstructionsSection({
       </label>
       <textarea
         rows={8}
-        style={{ flex: 1, resize: 'none' }}
+        style={{ flex: 1, minHeight: 200, resize: 'vertical' }}
         placeholder="You are the support agent for Acme Co. You help with orders, returns…"
         value={cfg.system_prompt ?? ''}
         onChange={(e) => setCfg({ ...cfg, system_prompt: e.target.value })}
