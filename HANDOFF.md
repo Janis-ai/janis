@@ -111,6 +111,18 @@ origin isn't a registered JS origin on the OAuth client; prod origins
 work. Removing the last google-* tool GCs the connection row
 (gcUnusedConnections) — re-copy when resetting test state.
 
+**Instruction-card Save + error/display fixes (Oct 31):** the shared-draft
+Save also lives on the Instructions card header (form got long), and saves
+now invalidate instruction-revisions so Version history refreshes without
+a reload. Two display fixes: ApiError stringified structured error bodies
+to "[object Object]" (now falls back to body.message/HTTP status — that
+was the red text in the diagnose card), and the conflict Apply state
+resets on each Check-for-conflicts run (index-keyed marks bled onto new
+results). Deploy gotcha worth remembering: gcloud's default project is
+jottogame — `gcloud run revisions list` without --project shows another
+service's lineage and makes a good deploy look absent; and the app is a
+PWA — a stale service worker serves the old bundle until a hard refresh.
+
 **Conflict fixes are apply-able; version history is visible (Oct 31):**
 each prompt-check conflict can carry {field, find, replace} verified
 server-side against the real text — an Apply fix button lands it as a
