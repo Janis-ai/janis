@@ -690,6 +690,15 @@ export default function AgentBuilder() {
     },
     onError: (e) => setTestNotice(e.message),
   });
+  const redraftExp = useMutation({
+    mutationFn: (id: string) =>
+      api(`/api/agents/${agent?.id}/tests/${id}/expectation-redraft`, { method: 'POST' }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['agent-tests', agent?.id] });
+      void qc.invalidateQueries({ queryKey: ['build-status', agent?.id] });
+    },
+    onError: (e) => setTestNotice(e.message),
+  });
   // Scenario drafting — the builder's creation-time suggestions predate
   // the knowledge base, so this regenerates from the agent's current
   // instructions + sources. Drafts come back for review; accepted ones
@@ -2314,6 +2323,8 @@ export default function AgentBuilder() {
                           saveExp.mutate({ id: s.id, text })
                         }
                         expectationSaving={saveExp.isPending}
+                        onRedraftExpectation={() => redraftExp.mutate(s.id)}
+                        redraftPending={redraftExp.isPending}
                         verdict={{
                           pending: markTest.isPending,
                           onPass: () => markTest.mutate({ id: s.id, result: 'pass' }),

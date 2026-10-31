@@ -48,7 +48,7 @@ import {
   triggerOf,
   type MatchTurn,
 } from '../lib/promptMatch.js';
-import { checkpointIndices, draftExpectation, generateScenarioDrafts, judgeExpectation, replayContextFrom, runAgentTest, transcriptTurns } from '../lib/agentTests.js';
+import { checkpointIndices, draftExpectation, generateScenarioDrafts, judgeExpectation, replayContextFrom, runAgentTest, stripInternalTurns, transcriptTurns, type TestTurn } from '../lib/agentTests.js';
 import { deleteAgentsCascade } from '../lib/agentCleanup.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { configVersion } from '../lib/configVersion.js';
@@ -2923,8 +2923,34 @@ export function agentRoutes(db: Db) {
             JSON.stringify({ r: last.rank, t: last.ts, id: last.row.id }),
           ).toString('base64url')
         : null;
+    // Legacy saves carry internal audit rows ('Assigned to…', 'SLA breach…')
+    // as turns — one batched mid lookup strips them from what the UI shows
+    // as exchange context. Replays strip the same way inside runAgentTest.
+    const allMids = [
+      ...new Set(
+        rows.flatMap(({ row }) =>
+          ((row.turns ?? []) as { mid?: string }[])
+            .map((t) => t.mid)
+            .filter((m): m is string => !!m),
+        ),
+      ),
+    ];
+    const internalMids = new Set<string>();
+    if (allMids.length) {
+      const mrows = await db
+        .select({ id: messages.id, direction: messages.direction, payload: messages.payload })
+        .from(messages)
+        .where(inArray(messages.id, allMids));
+      for (const r of mrows)
+        if (r.direction === 'out' && (r.payload as { internal?: boolean } | null)?.internal)
+          internalMids.add(r.id);
+    }
+    const cleanTurns = (t: typeof agentTests.$inferSelect) =>
+      internalMids.size
+        ? ((t.turns ?? []) as { mid?: string }[]).filter((x) => !x.mid || !internalMids.has(x.mid))
+        : t.turns;
     return c.json({
-      tests: rows.map(({ row }) => toTest(row, version)),
+      tests: rows.map(({ row }) => toTest({ ...row, turns: cleanTurns(row) as never }, version)),
       config_version: version,
       next_cursor: nextCursor,
       counts: counts[0] ?? { all: 0, failing: 0, passing: 0, unrun: 0 },
@@ -2943,7 +2969,15 @@ export function agentRoutes(db: Db) {
       .where(and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, agent.id)))
       .limit(1);
     if (!t) return c.json({ error: 'not found' }, 404);
-    return c.json({ test: toTest(t, version) });
+    return c.json({
+      test: toTest(
+        {
+          ...t,
+          turns: (await stripInternalTurns(db, (t.turns ?? []) as TestTurn[])) as never,
+        },
+        version,
+      ),
+    });
   });
 
   const TEST_CATEGORIES = ['safety', 'knowledge', 'actions', 'out_of_scope', 'tone', 'general'] as const;
@@ -3392,6 +3426,79 @@ export function agentRoutes(db: Db) {
       return c.json({ test: toTest(row, configVersion((agent.config ?? {}) as AgentConfig)) });
     },
   );
+
+  // Re-draft an AI-written expectation — drafts written before the drafter
+  // learned the sim's limits ask for things a replay can't produce (a real
+  // human acting, ETAs, out-of-band status). The rewrite lands flagged as a
+  // draft again, and the stored reply is re-judged against the new bar so
+  // the verdict updates without spending a fresh run.
+  app.post('/:id/tests/:testId/expectation-redraft', agentAdmin, async (c) => {
+    const [agent] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.id, c.req.param('id')))
+      .limit(1);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const [test] = await db
+      .select()
+      .from(agentTests)
+      .where(and(eq(agentTests.id, c.req.param('testId')), eq(agentTests.agentId, agent.id)))
+      .limit(1);
+    if (!test) return c.json({ error: 'not found' }, 404);
+    const turns = await stripInternalTurns(db, (test.turns ?? []) as TestTurn[]);
+    const draft = await draftExpectation(db, agent, turns, test.originalReply ?? null);
+    if (!draft) return c.json({ error: 'draft failed — check the agent has a working LLM' }, 502);
+
+    let rejudged: { passed: boolean; reason: string } | undefined;
+    const lastRun = test.lastRun as { reply?: string | null } | null;
+    if (lastRun?.reply) {
+      try {
+        const llm = await llmFor(db, agent);
+        const verdict = await judgeExpectation(llm, {
+          transcript: turns.map((t) => `${t.role}: ${t.text}`).join('\n'),
+          reply: lastRun.reply,
+          expectation: draft,
+        });
+        if (verdict) {
+          rejudged = { passed: verdict.pass, reason: verdict.reason };
+          if (verdict.promptTokens || verdict.completionTokens) {
+            await recordLlmUsage(db, {
+              workspaceId: agent.workspaceId,
+              agentId: agent.id,
+              conversationId: test.sourceConversationId,
+              model: verdict.model,
+              capModel: llm.model,
+              promptTokens: verdict.promptTokens,
+              completionTokens: verdict.completionTokens,
+              byok: llm.byok,
+            });
+          }
+        }
+      } catch {
+        /* a judge/LLM outage must not lose the redraft — verdict stays */
+      }
+    }
+    const [row] = await db
+      .update(agentTests)
+      .set({
+        expectation: draft,
+        // still machine-written — the draft badge stays until a human edits
+        expectationDraft: true,
+        ...(rejudged
+          ? {
+              lastRun: {
+                ...((test.lastRun as Record<string, unknown> | null) ?? {}),
+                passed: rejudged.passed,
+                reason: rejudged.reason,
+                at: new Date().toISOString(),
+              } as never,
+            }
+          : {}),
+      })
+      .where(eq(agentTests.id, test.id))
+      .returning();
+    return c.json({ test: toTest(row, configVersion((agent.config ?? {}) as AgentConfig)) });
+  });
 
   // Draft fresh scenario candidates from the agent's CURRENT state — the
   // builder's creation-time scenarios predate the knowledge base and any

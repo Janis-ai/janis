@@ -15,6 +15,9 @@ export interface ScenarioRun {
   reason?: string;
   reply?: string | null;
   control?: 'handoff' | 'offer' | 'cancel';
+  /** Simulated human teammate's reply — runs can't produce a real human,
+   *  so after an escalation the sim plays the teammate stepping in. */
+  humanReply?: string;
   tools?: { name: string; gated?: boolean; outcome: string }[];
   model?: string;
   context?: { prompt: 'custom' | 'default'; kb: string[]; knowledge: string[] };
@@ -120,6 +123,8 @@ export function ScenarioRow({
   replyOverride,
   onSaveExpectation,
   expectationSaving,
+  onRedraftExpectation,
+  redraftPending,
   verdict,
   onFix,
   onTryInChat,
@@ -137,6 +142,11 @@ export function ScenarioRow({
    *  no new run, so no new random reply sneaks in to move the verdict. */
   onSaveExpectation?: (text: string) => void;
   expectationSaving?: boolean;
+  /** Re-drafts an AI-written expectation (and re-judges the stored reply)
+   *  — offered on AI-draft rows so a bad bar can be rewritten, not just
+   *  hand-edited. */
+  onRedraftExpectation?: () => void;
+  redraftPending?: boolean;
   /** Human-verdict controls (builder pre-launch judging). Shown when the
    *  row is unreviewed and a real reply exists to judge. */
   verdict?: { pending: boolean; onPass: () => void; onFail: () => void };
@@ -460,6 +470,16 @@ export function ScenarioRow({
                 Edit
               </button>
             )}
+            {test.expectation_draft && onRedraftExpectation && (
+              <button
+                className="btn ghost sm"
+                title="Ask AI to rewrite this expectation — then re-check the stored reply against it"
+                disabled={redraftPending}
+                onClick={onRedraftExpectation}
+              >
+                {redraftPending ? 'Re-drafting…' : 'Re-draft'}
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -467,6 +487,11 @@ export function ScenarioRow({
       {/* What the agent said — clamped, expandable only when it overflows. */}
       {reply && !editing && (
         <ReplyBlock label="Agent replied" text={reply} />
+      )}
+      {/* The simulated teammate a run conjures when the scenario needs a
+          human — a sim can't produce a real one, so this stands in. */}
+      {run?.humanReply && !editing && (
+        <ReplyBlock label="Simulated teammate" text={run.humanReply} />
       )}
       {/* No fresh reply but an original transcript exists — show it under
           its own label so it never reads as a run result. */}

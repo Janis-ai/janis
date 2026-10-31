@@ -4795,6 +4795,14 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
     onSuccess: invalidate,
     onError: (e) => setErr(e.message),
   });
+  // AI-drafted bar reads wrong (asks for a human's action, an ETA, etc.) —
+  // re-draft rewrites it and re-checks the stored reply under the new bar.
+  const redraftExp = useMutation({
+    mutationFn: (id: string) =>
+      api(`/api/agents/${agentId}/tests/${id}/expectation-redraft`, { method: 'POST' }),
+    onSuccess: invalidate,
+    onError: (e) => setErr(e.message),
+  });
   const create = useMutation({
     mutationFn: () =>
       api(`/api/agents/${agentId}/tests`, {
@@ -5485,6 +5493,10 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               isAdmin ? (text) => saveExp.mutate({ id: t.id, text }) : undefined
             }
             expectationSaving={saveExp.isPending}
+            onRedraftExpectation={
+              isAdmin ? () => redraftExp.mutate(t.id) : undefined
+            }
+            redraftPending={redraftExp.isPending}
             onFix={(reply, prompt) =>
               setCorrectTarget({
                 agentText: reply,

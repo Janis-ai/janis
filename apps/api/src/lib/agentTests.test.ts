@@ -11,7 +11,14 @@ import {
   messages,
   workspaces,
 } from '../db/schema.js';
-import { replayContextFor, runAgentTest, type ReplayContext } from './agentTests.js';
+import {
+  escalationOf,
+  replayContextFor,
+  runAgentTest,
+  transcriptTurns,
+  type ReplayContext,
+  type TestTurn,
+} from './agentTests.js';
 
 let db: Db;
 let wsId: string;
@@ -242,5 +249,172 @@ describe('runAgentTest hydration', () => {
     const round1 = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     const sys = round1.messages.find((m: { role: string }) => m.role === 'system');
     expect(sys.content).toContain('live@x.com');
+  });
+});
+
+describe('transcriptTurns', () => {
+  it('drops internal audit lines — assignment/status/SLA notes never become turns', async () => {
+    const agent = await makeAgent();
+    const conv = await makeConv(agent.id);
+    const t0 = Date.now();
+    await db.insert(messages).values([
+      { conversationId: conv.id, direction: 'in', text: 'help me', createdAt: new Date(t0) },
+      {
+        conversationId: conv.id,
+        direction: 'out',
+        text: 'Assigned to Mike (handoff_request rule)',
+        payload: { internal: true },
+        createdAt: new Date(t0 + 1),
+      },
+      {
+        conversationId: conv.id,
+        direction: 'out',
+        text: 'SLA breach — unclaimed for 2m (SLA 1m)',
+        payload: { internal: true },
+        createdAt: new Date(t0 + 2),
+      },
+      {
+        conversationId: conv.id,
+        direction: 'out',
+        text: 'Handoff requested: agent signalled handoff',
+        flags: { help_requested: true },
+        createdAt: new Date(t0 + 3),
+      },
+      { conversationId: conv.id, direction: 'human', text: 'hi, Mike here', createdAt: new Date(t0 + 4) },
+      { conversationId: conv.id, direction: 'in', text: 'still there?', createdAt: new Date(t0 + 5) },
+    ]);
+    const turns = await transcriptTurns(db, conv.id);
+    expect(turns.map((t) => `${t.role}:${t.text}`)).toEqual([
+      'customer:help me',
+      'agent:(passed to a human teammate)',
+      'agent:(human operator) hi, Mike here',
+      'customer:still there?',
+    ]);
+  });
+});
+
+describe('escalationOf', () => {
+  it('reads needs_human + humanSpoke + pendingOffer from marker turns', () => {
+    const esc = escalationOf([
+      { role: 'customer', text: 'refund please' },
+      { role: 'agent', text: '(passed to a human teammate)' },
+      { role: 'agent', text: '(human operator) hi, Mike here' },
+      { role: 'customer', text: 'still there?' },
+    ]);
+    expect(esc).toEqual({
+      needsHuman: true,
+      pendingOffer: false,
+      offerMade: false,
+      humanSpoke: true,
+    });
+  });
+
+  it('marks a pending offer only when the trigger answers it', () => {
+    const pending = escalationOf([
+      { role: 'customer', text: 'this is broken' },
+      { role: 'agent', text: '(a human teammate was offered)' },
+      { role: 'customer', text: 'yes please' },
+    ]);
+    expect(pending).toMatchObject({ pendingOffer: true, offerMade: true, needsHuman: false });
+    // an offer followed by more exchange already resolved — not pending
+    const resolved = escalationOf([
+      { role: 'agent', text: '(a human teammate was offered)' },
+      { role: 'customer', text: 'no thanks' },
+      { role: 'agent', text: 'ok, back to it' },
+      { role: 'customer', text: 'where is my order' },
+    ]);
+    expect(resolved).toMatchObject({ pendingOffer: false, offerMade: true });
+  });
+});
+
+describe('runAgentTest escalation context', () => {
+  const escalatedTurns: TestTurn[] = [
+    { role: 'customer', text: 'i want a refund' },
+    { role: 'agent', text: '(passed to a human teammate)' },
+    { role: 'agent', text: '(human operator) looking into it' },
+    { role: 'customer', text: 'still there? need an update' },
+  ];
+
+  it('prompts a re-ping in an escalated thread with the already-notified line + human-operator note', async () => {
+    const agent = await makeAgent();
+    const [test] = await db
+      .insert(agentTests)
+      .values({
+        workspaceId: wsId,
+        agentId: agent.id,
+        name: 're-ping',
+        turns: escalatedTurns as never,
+        expectation: 'acknowledges the wait without inventing an ETA',
+      })
+      .returning();
+
+    fetchMock
+      .mockResolvedValueOnce(
+        llmReply({ content: 'A teammate has been notified and will join shortly.' }),
+      )
+      .mockResolvedValueOnce(llmReply({ content: 'Hi, Sarah here — picking this up now.' }))
+      .mockResolvedValueOnce(llmReply({ content: '{"pass":true,"reason":"reassures"}' }));
+
+    const r = await runAgentTest(db, agent, test);
+    const sys = JSON.parse(fetchMock.mock.calls[0][1].body as string).messages.find(
+      (m: { role: string }) => m.role === 'system',
+    );
+    expect(sys.content).toContain('already been notified');
+    expect(sys.content).toContain('human operator');
+    expect(r.humanReply).toBe('Hi, Sarah here — picking this up now.');
+    // The judge saw the simulated teammate as context, not the reply.
+    const judgeMsgs = JSON.stringify(
+      JSON.parse(fetchMock.mock.calls[2][1].body as string).messages,
+    );
+    expect(judgeMsgs).toContain('simulated human');
+    expect(r.passed).toBe(true);
+  });
+
+  it('simulates the teammate after a fresh [HANDOFF] reply', async () => {
+    const agent = await makeAgent();
+    const [test] = await db
+      .insert(agentTests)
+      .values({
+        workspaceId: wsId,
+        agentId: agent.id,
+        name: 'explicit ask',
+        turns: [{ role: 'customer', text: 'get me a human' }] as never,
+        expectation: 'hands off to a human',
+      })
+      .returning();
+
+    fetchMock
+      .mockResolvedValueOnce(
+        llmReply({ content: 'Of course — getting a human now. [HANDOFF]' }),
+      )
+      .mockResolvedValueOnce(llmReply({ content: 'Hi, Mike here — I can take it from here.' }))
+      .mockResolvedValueOnce(llmReply({ content: '{"pass":true,"reason":"escalated"}' }));
+
+    const r = await runAgentTest(db, agent, test);
+    expect(r.control).toBe('handoff');
+    expect(r.humanReply).toBe('Hi, Mike here — I can take it from here.');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not simulate a teammate when nothing escalated', async () => {
+    const agent = await makeAgent();
+    const [test] = await db
+      .insert(agentTests)
+      .values({
+        workspaceId: wsId,
+        agentId: agent.id,
+        name: 'plain',
+        turns: [{ role: 'customer', text: 'what are your hours?' }] as never,
+        expectation: 'answers the hours question',
+      })
+      .returning();
+
+    fetchMock
+      .mockResolvedValueOnce(llmReply({ content: 'We are open 9 to 5.' }))
+      .mockResolvedValueOnce(llmReply({ content: '{"pass":true,"reason":"answers"}' }));
+
+    const r = await runAgentTest(db, agent, test);
+    expect(r.humanReply).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

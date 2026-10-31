@@ -292,6 +292,7 @@ export function conversationContext(
   forSuggestion = false,
   pendingOffer = false,
   offerMade = false,
+  humanSpoke = false,
 ): string {
   const p = (conv.userProfile ?? {}) as UserProfile;
   const channel = p.channel ?? conv.externalId.split(':')[0] ?? 'external';
@@ -361,6 +362,11 @@ export function conversationContext(
   lines.push(
     '- Earlier messages marked "(passed to a human teammate)" were already escalated — always answer the newest message normally.',
   );
+  if (humanSpoke && !forSuggestion) {
+    lines.push(
+      '- Earlier turns marked "(human operator) …" were written by a human teammate who stepped in — not by you. Treat what the human told the customer as already said: build on it, don\'t repeat or contradict it, and don\'t offer a human who is already involved.',
+    );
+  }
   if (conv.state === 'needs_human' && !forSuggestion) {
     lines.push(
       '- A human teammate has already been notified and will join when available. Keep helping the customer normally in the meantime — only request a handoff again if the customer asks for something new that you genuinely cannot handle. If the customer says they do NOT want or no longer need a human, acknowledge briefly and end your reply with [CANCEL_HANDOFF] — that cancels the escalation and returns the conversation fully to you.',
@@ -731,6 +737,9 @@ export function systemPrompt(
     /** Signed-in visitor's plan key — computed at the call site for the
      *  operator concierge so billing-aware answers cite their tier. */
     plan?: string;
+    /** The transcript contains "(human operator)" turns — the prompt tells
+     *  the model those words are a teammate's, not its own. */
+    humanSpoke?: boolean;
   } = {},
 ): string {
   const cfg = (agent.config ?? {}) as {
@@ -850,7 +859,7 @@ export function systemPrompt(
       `\nCustomers are typically in ${cfg.builder.region.trim()} — prefer schedules, units, terminology, and guidance appropriate to that region, and say so when a recommendation varies by location.`,
     );
   }
-  if (conv) parts.push(conversationContext(conv, agent.name, opts.forSuggestion, opts.pendingOffer, opts.offerMade));
+  if (conv) parts.push(conversationContext(conv, agent.name, opts.forSuggestion, opts.pendingOffer, opts.offerMade, opts.humanSpoke));
   // The concierge sells the product to anonymous visitors AND does real
   // account work for signed-in operators — every workspace-bound tool
   // (create_agent, change_plan, inspect_agent) gates on verified identity
@@ -5636,6 +5645,15 @@ async function replyAsHostedAgent(
       systemPrompt(agent, docs, conv, {
         pendingOffer: openEsc.some((a) => a.type === 'handoff_offer'),
         offerMade: offeredBefore,
+        // "(human operator) …" turns mean a teammate already wrote to the
+        // customer — the prompt spells that out so the reply builds on the
+        // human's words instead of re-offering or parroting them.
+        humanSpoke: history.some(
+          (m) =>
+            m.role === 'assistant' &&
+            typeof m.content === 'string' &&
+            m.content.startsWith('(human operator)'),
+        ),
         plan: signedPlan,
         savedWidgets: promptWidgets.map(([name, def]) => ({
           name,

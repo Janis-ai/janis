@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agentTests,
@@ -49,6 +49,10 @@ export interface ReplayContext {
   agent_summary: string | null;
   /** verifiedIdentityFor at save — identity-gated tools then behave as live. */
   identity: { emails: string[]; ids: string[]; operator: boolean };
+  /** conv.state at save — 'needs_human' switches the prompt's escalation
+   *  context line ("a human was already notified — keep helping"). Older
+   *  snapshots lack it; runAgentTest derives it from the transcript then. */
+  state?: string | null;
   /** The triggering reply's calls — inspector key → stored result/outcome. */
   calls: { key: string; result: string; outcome: InspectorToolCall['outcome'] }[];
 }
@@ -75,6 +79,7 @@ export function replayContextFrom(
     external_id: conv.externalId ?? null,
     agent_summary: conv.agentSummary ?? null,
     identity: { emails: [...identity.emails], ids: [...identity.ids], operator: identity.operator },
+    state: conv.state ?? null,
     calls,
   };
 }
@@ -120,6 +125,10 @@ export interface TestRunResult {
   reply: string | null;
   /** Control tag the reply carried, if any (handoff / offer / cancel). */
   control?: 'handoff' | 'offer' | 'cancel' | 'end';
+  /** Simulated human teammate's reply — runs can't produce a real human,
+   *  so after an escalation (or inside an already-escalated thread) the
+   *  sim plays the teammate who would have stepped in. */
+  humanReply?: string;
   tools: InspectorToolCall[];
   model?: string;
   /** What grounded the reply — mirrors the conversation inspector payload. */
@@ -140,6 +149,12 @@ export async function transcriptTurns(db: Db, convId: string): Promise<TestTurn[
   const turns: TestTurn[] = [];
   for (const m of rows) {
     if (!m.text) continue;
+    // Internal audit lines ('Assigned to X (rule)', 'Status: agent → needs
+    // human', 'SLA breach — …') are bookkeeping for operators, not turns —
+    // transcriptFor drops them the same way; fed to a replayed prompt or a
+    // judge they read as agent output and corrupt both.
+    if (m.direction === 'out' && (m.payload as { internal?: boolean } | undefined)?.internal)
+      continue;
     const f = m.flags as {
       failure?: boolean;
       help_requested?: boolean;
@@ -222,6 +237,71 @@ export function checkpointIndices(turns: TestTurn[]): number[] {
   return points;
 }
 
+/** The escalation state a transcript implies — what live computes from
+ *  conv.state + the alerts table, recovered from the marker turns so a
+ *  replayed test prompts the agent with the same "a human is in the loop"
+ *  context production had. Human-spoke is tracked separately: an operator
+ *  message in history means a real human already addressed the customer,
+ *  which the reply should treat as said (don't repeat, don't re-offer). */
+export function escalationOf(turns: TestTurn[]): {
+  needsHuman: boolean;
+  pendingOffer: boolean;
+  offerMade: boolean;
+  humanSpoke: boolean;
+} {
+  let needsHuman = false;
+  let offerMade = false;
+  let humanSpoke = false;
+  for (const t of turns) {
+    if (t.text.startsWith(OFFER_MARKER)) offerMade = true;
+    else if (
+      t.text.startsWith('(passed to a human teammate)') ||
+      t.text.startsWith('(the customer was told a human teammate is joining)')
+    )
+      needsHuman = true;
+    else if (t.text.startsWith('(human operator)')) {
+      needsHuman = true;
+      humanSpoke = true;
+    }
+  }
+  // The customer's newest message answers a pending offer only when the
+  // offer marker sits right before it — an older offer already resolved.
+  let pendingOffer = false;
+  const last = turns[turns.length - 1];
+  if (last?.role === 'customer' && turns[turns.length - 2]?.text.startsWith(OFFER_MARKER))
+    pendingOffer = true;
+  return { needsHuman, pendingOffer, offerMade, humanSpoke };
+}
+
+/** Shapes systemNote emits for internal audit lines — matched only for
+ *  turns whose mid no longer resolves (the flag check is authoritative
+ *  when the source row exists). */
+const INTERNAL_TURN =
+  /^(Assigned to .+\(.+\)|.+ tried to assign .+ — already owned by .+|Tagged ".+" \(.+\)|Status: \w+ → .+|SLA breach\b)/;
+
+/** Drop turns whose source message was an internal audit row — tests saved
+ *  before transcriptTurns filtered them carry 'Assigned to…'/'SLA breach'
+ *  lines as agent turns. One batched lookup cleans them at run and read
+ *  time without rewriting stored data. Turns without a mid (hand-built,
+ *  inline saves) pass through untouched. */
+export async function stripInternalTurns(db: Db, turns: TestTurn[]): Promise<TestTurn[]> {
+  const mids = turns.map((t) => t.mid).filter((m): m is string => !!m);
+  if (!mids.length) return turns;
+  const rows = await db
+    .select({ id: messages.id, direction: messages.direction, payload: messages.payload })
+    .from(messages)
+    .where(inArray(messages.id, mids));
+  const byId = new Map(rows.map((r) => [r.id, r] as const));
+  return turns.filter((t) => {
+    if (!t.mid) return true;
+    const row = byId.get(t.mid);
+    if (!row) return !INTERNAL_TURN.test(t.text);
+    return !(
+      row.direction === 'out' && (row.payload as { internal?: boolean } | null)?.internal === true
+    );
+  });
+}
+
 const JUDGE_SYSTEM =
   'You are grading a hosted customer-support AI agent in a regression test. ' +
   'The operator saved a real conversation and stated what a good reply should do. ' +
@@ -229,6 +309,12 @@ const JUDGE_SYSTEM =
   'to match. The transcript shows prior context for realism: parenthesized ' +
   'markers like "(passed to a human teammate)" describe what happened EARLIER ' +
   'in the conversation, not the reply being graded — grade only the reply. ' +
+  'This is a simulation: tools do not really execute and no real human acts. ' +
+  'Turns prefixed "(human operator)" were written by a human teammate, not by ' +
+  'the agent. A control tag like [HANDOFF] IS the agent\'s way of summoning a ' +
+  'human — emitting it completes that action; don\'t fail a reply because a ' +
+  'literal human didn\'t appear, and don\'t require real-world outcomes a ' +
+  'simulation can\'t produce (specific wait times, external status). ' +
   'Reply with ONLY a JSON object {"pass": true|false, "reason": "one sentence"}.';
 
 export interface JudgeVerdict {
@@ -278,6 +364,38 @@ export async function judgeExpectation(
   }
 }
 
+const SIM_OPERATOR_SYSTEM =
+  'You are the human teammate who has just stepped into a customer support ' +
+  'conversation the AI agent escalated (or that is already waiting on you). ' +
+  'Write the short first message you would send the customer — natural, ' +
+  'first person, one or two sentences, no preamble or sign-off.';
+
+/** Play the human the sim can't produce: after a reply escalates (or inside
+ *  an already-escalated thread) draft what the teammate stepping in would
+ *  say. The text lands on the run result and in the judged context, so a
+ *  scenario whose resolution needs a human response stays satisfiable. */
+async function simulateOperatorReply(
+  llm: LlmSettings,
+  transcript: string,
+  reply: string,
+): Promise<{ text: string; promptTokens: number; completionTokens: number; model: string } | null> {
+  const res = await complete({ ...llm, temperature: 0.5, maxTokens: 120 }, SIM_OPERATOR_SYSTEM, [
+    {
+      role: 'user',
+      content:
+        `Conversation so far:\n${transcript}\nagent: ${reply}\n\n` +
+        `Write the human teammate's first reply now.`,
+    },
+  ]).catch(() => null);
+  if (!res?.text?.trim()) return null;
+  return {
+    text: res.text.trim().slice(0, 600),
+    promptTokens: res.promptTokens,
+    completionTokens: res.completionTokens,
+    model: res.model,
+  };
+}
+
 /** Replay a saved test against the agent's CURRENT config — nothing executes
  *  (testRun stubs every tool call; gated calls are only proposed), nothing is
  *  delivered, and the only writes are usage metering + last_run on the test. */
@@ -313,7 +431,11 @@ export async function runAgentTest(
   // test runs must see the same effective flag production does.
   agent = await withWorkspaceDefaults(db, agent);
   const at = new Date().toISOString();
-  const turns = (test.turns ?? []) as TestTurn[];
+  // Stored turns from older saves may carry internal audit rows — strip
+  // them by source-message lookup so history, the judge, and escalation
+  // derivation all see the real transcript.
+  const turns = await stripInternalTurns(db, (test.turns ?? []) as TestTurn[]);
+  const esc = escalationOf(turns);
   const base: Omit<TestRunResult, 'passed' | 'reason'> & { passed: null; reason: string } = {
     at,
     passed: null,
@@ -342,6 +464,10 @@ export async function runAgentTest(
       userProfile: replay.profile ?? {},
       externalId: replay.external_id ?? '',
       agentSummary: replay.agent_summary ?? null,
+      // The saved state's escalation flag drives the prompt's "a human was
+      // already notified" line; snapshots that predate the field fall back
+      // to what the transcript's markers imply.
+      state: replay.state ?? (esc.needsHuman ? 'needs_human' : 'active'),
     } as ConvRow;
   } else if (test.sourceConversationId) {
     const [conv] = await db
@@ -350,6 +476,17 @@ export async function runAgentTest(
       .where(eq(conversations.id, test.sourceConversationId))
       .limit(1);
     convForPrompt = conv;
+  }
+  // Bare-turns tests can still carry rescue markers — without a conv row
+  // the escalation context would never reach the prompt, so synthesize
+  // the minimal row that carries it.
+  if (!convForPrompt && (esc.needsHuman || esc.pendingOffer || esc.offerMade || esc.humanSpoke)) {
+    convForPrompt = {
+      userProfile: {},
+      externalId: '',
+      agentSummary: null,
+      state: esc.needsHuman ? 'needs_human' : 'active',
+    } as ConvRow;
   }
   // Retrieve against the test's customer turns — evals should see the same
   // knowledge slice a live conversation would.
@@ -396,7 +533,11 @@ export async function runAgentTest(
         }
       : {}),
   };
-  const prompt = systemPrompt(agent, docs, convForPrompt);
+  const prompt = systemPrompt(agent, docs, convForPrompt, {
+    pendingOffer: esc.pendingOffer,
+    offerMade: esc.offerMade,
+    humanSpoke: esc.humanSpoke,
+  });
   const cfg = (agent.config ?? {}) as { builtin_tools?: string[] };
   const gen = await generateReply(
     llm,
@@ -438,12 +579,38 @@ export async function runAgentTest(
 
   const reply = extractButtons(extractLearns(gen.text).text).text;
   const tag = controlTag(gen.text);
+  const transcript = turns
+    .map((t) => `${t.role === 'customer' ? 'customer' : 'agent'}: ${t.text}`)
+    .join('\n');
+
+  // Play the human a sim can't summon — a fresh [HANDOFF] starts one, and
+  // in an already-escalated thread the pending teammate finally arrives.
+  // The reply lands on the run result and in the judged context, so
+  // scenarios that span a human intervention stay testable end to end.
+  let humanReply: string | undefined;
+  if (tag?.kind === 'handoff' || convForPrompt?.state === 'needs_human') {
+    const sim = await simulateOperatorReply(llm, transcript, reply);
+    if (sim) {
+      humanReply = sim.text;
+      await recordLlmUsage(db, {
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        conversationId: test.sourceConversationId,
+        model: sim.model,
+        capModel: llm.model,
+        promptTokens: sim.promptTokens,
+        completionTokens: sim.completionTokens,
+        byok: llm.byok,
+      });
+    }
+  }
 
   if (!test.expectation.trim()) {
     return {
       ...base,
       reply,
       control: tag?.kind,
+      humanReply,
       tools: gen.toolCalls,
       model: gen.model,
       context,
@@ -451,7 +618,6 @@ export async function runAgentTest(
     };
   }
 
-  const transcript = turns.map((t) => `${t.role === 'customer' ? 'customer' : 'agent'}: ${t.text}`).join('\n');
   const verdict = await judgeExpectation(llm, {
     transcript,
     reply,
@@ -459,7 +625,14 @@ export async function runAgentTest(
     toolNote: gen.toolCalls.length
       ? `\nTool calls made: ${gen.toolCalls.map((t) => `${t.name} (${t.outcome})`).join(', ')}`
       : undefined,
-    controlNote: tag ? `\nThe reply ended with a control tag: [${tag.kind.toUpperCase()}]` : undefined,
+    controlNote: tag
+      ? `\nThe reply ended with a control tag: [${tag.kind.toUpperCase()}]` +
+        (humanReply
+          ? ` — a simulated human teammate then stepped in and replied: "${humanReply}"`
+          : '')
+      : humanReply
+        ? `\nThis conversation is already escalated to a human teammate — a simulated human then replied: "${humanReply}"`
+        : undefined,
   });
   if (verdict && (verdict.promptTokens || verdict.completionTokens)) {
     await recordLlmUsage(db, {
@@ -474,7 +647,7 @@ export async function runAgentTest(
     });
   }
   if (!verdict) {
-    return { ...base, reply, control: tag?.kind, tools: gen.toolCalls, model: gen.model, context, reason: 'judge verdict unreadable' };
+    return { ...base, reply, control: tag?.kind, humanReply, tools: gen.toolCalls, model: gen.model, context, reason: 'judge verdict unreadable' };
   }
   return {
     at,
@@ -482,6 +655,7 @@ export async function runAgentTest(
     reason: verdict.reason,
     reply,
     control: tag?.kind,
+    humanReply,
     tools: gen.toolCalls,
     model: gen.model,
     context,
@@ -530,7 +704,16 @@ export async function draftExpectation(
             'or two short sentences describing what a correct agent reply should ' +
             'do — concrete and checkable by a judge reading only the reply text ' +
             'and proposed tool calls. Example: "Acknowledges the failed payment ' +
-            'and offers a retry link; does not promise a refund." No preamble.',
+            'and offers a retry link; does not promise a refund." ' +
+            'The test replays in a simulation: tools don\'t really execute, no ' +
+            'real human joins, no time passes. NEVER require a real human\'s ' +
+            'action, a specific wait time, or out-of-band status — a handoff ' +
+            'control tag is the agent\'s way of summoning a human and counts as ' +
+            'the action itself. When markers like "(passed to a human teammate)" ' +
+            'or "(human operator) …" show a human already in the loop, the bar ' +
+            'should be about the agent\'s handling: acknowledge the escalation, ' +
+            'keep helping, don\'t re-offer a human who is already coming, and ' +
+            'don\'t invent ETAs. No preamble.',
         },
         {
           role: 'user',
