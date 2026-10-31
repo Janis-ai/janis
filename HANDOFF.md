@@ -94,6 +94,14 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Loose lists keep their numbering (Oct 31):** agent replies rendered every
+numbered step as "1." — `splitBlocks` flushed the list at each blank line,
+so a model-style loose list (`1. …\n\n1. …`) became N one-item `<ol>`s that
+each restarted at 1. A blank line inside a list now pauses it: a same-kind
+marker continues the list (flagged `loose` → `md-loose` CSS for item
+spacing), a different marker kind or a paragraph ends it. Applies to all
+`splitBlocks` surfaces: inbox transcript, Ask Janis rail, Shopify app.
+
 **Link guard learned help-article slugs (Oct 31):** the concierge cited a
 published help article (`/help/<agent>/<slug>`) verbatim from its knowledge
 context and the link guard stripped it as a non-route — `consoleSlots` only
