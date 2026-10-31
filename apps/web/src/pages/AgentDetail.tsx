@@ -3276,12 +3276,15 @@ function IntegrationCards({
         method: 'POST',
         body: JSON.stringify({ template: t.id, fields }),
       }),
-    onSuccess: (r) => {
+    onSuccess: (r, t) => {
       syncTools(r.agent.config?.tools);
       invalidate();
       setOpenId(null);
       setFields({});
       setErr('');
+      // Google cards: the tools are useless until a file is shared — drop
+      // the operator straight into the same picker "Pick files…" opens.
+      if (GFILE_MIME[t.id]) void openGooglePicker(t.id);
     },
     onError: (e) => setErr(e.message),
   });
