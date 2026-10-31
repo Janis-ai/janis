@@ -1056,12 +1056,20 @@ function InstructionHistory({
     },
   });
   const revs = data?.revisions ?? [];
-  if (revs.length <= 1) return null;
+  // Always render once loaded — hiding under two revisions made the whole
+  // feature invisible; the empty/one-row copy explains coverage instead.
+  if (!data) return null;
   return (
     <details>
       <summary className="muted" style={{ cursor: 'pointer', fontSize: 12 }}>
-        Version history — {revs.length} saved versions
+        Version history — {revs.length || 'no'} saved version{revs.length === 1 ? '' : 's'}
       </summary>
+      {revs.length <= 1 && (
+        <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+          Every save to instructions, tone, greeting or quick replies adds a
+          version you can restore — saves before this shipped weren't snapshotted.
+        </div>
+      )}
       <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 8, fontSize: 12 }}>
         {revs.map((r, i) => (
           <div key={r.id} className="row" style={{ alignItems: 'flex-start' }}>
@@ -1106,8 +1114,36 @@ export function InstructionsSection({
   const [check, setCheck] = useState<{
     pending?: boolean;
     err?: string;
-    conflicts?: { a: string; b: string; when: string; fix: string }[] | null;
+    conflicts?: {
+      a: string;
+      b: string;
+      when: string;
+      fix: string;
+      apply?: {
+        field: 'instructions' | 'tone' | 'knowledge';
+        index?: number;
+        find: string;
+        replace: string;
+      };
+    }[] | null;
   } | null>(null);
+  // Cards the operator applied a suggested patch to — the draft cfg
+  // changes like a typed edit; saving stays on the normal Save flow.
+  const [applied, setApplied] = useState<Set<number>>(new Set());
+  const applyFix = (i: number, a: { field: string; index?: number; find: string; replace: string }) => {
+    if (a.field === 'instructions')
+      setCfg({ ...cfg, system_prompt: (cfg.system_prompt ?? '').replace(a.find, a.replace) });
+    else if (a.field === 'tone')
+      setCfg({ ...cfg, tone: (cfg.tone ?? '').replace(a.find, a.replace) });
+    else if (a.field === 'knowledge' && a.index !== undefined)
+      setCfg({
+        ...cfg,
+        knowledge: (cfg.knowledge ?? []).map((k, j) =>
+          j === a.index ? k.replace(a.find, a.replace) : k,
+        ),
+      });
+    setApplied(new Set(applied).add(i));
+  };
   const runCheck = async () => {
     setCheck({ pending: true });
     try {
@@ -1149,6 +1185,7 @@ export function InstructionsSection({
             system_prompt: rc.system_prompt,
             greeting: rc.greeting,
             quick_replies: rc.quick_replies,
+            tone: rc.tone,
           });
         }}
       />
@@ -1185,6 +1222,25 @@ export function InstructionsSection({
                 {c.fix && (
                   <div className="muted" style={{ marginTop: 4 }}>
                     Suggested: {c.fix}
+                  </div>
+                )}
+                {c.apply && !applied.has(i) && (
+                  <button
+                    className="btn sm"
+                    style={{ marginTop: 6 }}
+                    title={`Rewrite the ${
+                      c.apply.field === 'knowledge'
+                        ? `knowledge note #${(c.apply.index ?? 0) + 1}`
+                        : c.apply.field
+                    } text — lands as an edit you review and Save`}
+                    onClick={() => applyFix(i, c.apply!)}
+                  >
+                    Apply fix
+                  </button>
+                )}
+                {applied.has(i) && (
+                  <div className="muted" style={{ fontSize: 11, marginTop: 6, color: 'var(--accent)' }}>
+                    Applied — review the updated text, then Save
                   </div>
                 )}
               </div>

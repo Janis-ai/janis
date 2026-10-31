@@ -1067,6 +1067,8 @@ export const agentInstructionRevisions = pgTable(
     systemPrompt: text('system_prompt').notNull().default(''),
     greeting: text('greeting').notNull().default(''),
     quickReplies: jsonb('quick_replies').notNull().default('[]'),
+    // null = predates tone tracking — restore then keeps the current tone.
+    tone: text('tone'),
     createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },

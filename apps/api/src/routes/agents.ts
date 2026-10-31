@@ -560,12 +560,18 @@ export function agentRoutes(db: Db) {
     // Snapshot the guidance surface (instructions/greeting/quick replies)
     // whenever it actually changes — append-only edit history.
     if (prevCfg !== undefined) {
-      type G = { system_prompt?: string; greeting?: string; quick_replies?: unknown[] };
+      type G = {
+        system_prompt?: string;
+        greeting?: string;
+        quick_replies?: unknown[];
+        tone?: string;
+      };
       const before = (prevCfg.config ?? {}) as G;
       const after = (row.config ?? {}) as G;
       if (
         (before.system_prompt ?? '') !== (after.system_prompt ?? '') ||
         (before.greeting ?? '') !== (after.greeting ?? '') ||
+        (before.tone ?? '') !== (after.tone ?? '') ||
         JSON.stringify(before.quick_replies ?? []) !== JSON.stringify(after.quick_replies ?? [])
       ) {
         await db.insert(agentInstructionRevisions).values({
@@ -574,6 +580,7 @@ export function agentRoutes(db: Db) {
           systemPrompt: after.system_prompt ?? '',
           greeting: after.greeting ?? '',
           quickReplies: after.quick_replies ?? [],
+          tone: after.tone ?? null,
           createdBy: c.get('user').id,
         });
       }
@@ -653,6 +660,8 @@ export function agentRoutes(db: Db) {
       system_prompt: rev.systemPrompt,
       greeting: rev.greeting,
       quick_replies: rev.quickReplies,
+      // Rows from before tone tracking keep the current tone on restore.
+      ...(rev.tone != null ? { tone: rev.tone } : {}),
     };
     const [row] = await db
       .update(agents)
@@ -665,6 +674,7 @@ export function agentRoutes(db: Db) {
       systemPrompt: rev.systemPrompt,
       greeting: rev.greeting,
       quickReplies: rev.quickReplies,
+      tone: rev.tone,
       createdBy: c.get('user').id,
     });
     return c.json({ agent: toAgent(row) });

@@ -743,6 +743,18 @@ export interface PromptConflict {
   when: string;
   /** One-line resolution keeping the operator's likely intent. */
   fix: string;
+  /** A concrete text edit resolving the pair — verified to locate
+   *  verbatim in the named field before it's offered. Absent when no
+   *  single find/replace resolves it (procedure, platform text). */
+  apply?: {
+    field: 'instructions' | 'tone' | 'knowledge';
+    /** Knowledge note index — only when field === 'knowledge'. */
+    index?: number;
+    /** The directive's text, verbatim from that field. */
+    find: string;
+    /** The rewrite that resolves the collision. */
+    replace: string;
+  };
 }
 
 const CONFLICT_CHECK_SYSTEM =
@@ -755,9 +767,31 @@ const CONFLICT_CHECK_SYSTEM =
   'resolution that keeps the operator\'s likely intent ("fix"). Rules that ' +
   'merely cover different situations are NOT conflicts — only report pairs ' +
   'a model could plausibly apply to the same message. Platform-injected ' +
-  'lines are listed for context; the fix must target authored text. Reply ' +
-  'with ONLY a JSON array, no prose: [{"a":"…","b":"…","when":"…","fix":"…"}] ' +
-  '— an empty array when nothing collides.';
+  'lines are listed for context; the fix must target authored text. ' +
+  'For each conflict also propose the minimal text edit resolving it as ' +
+  '"apply": {"field": "instructions"|"tone"|"knowledge", "index": <the ' +
+  'bracketed knowledge note number, only when field is "knowledge">, ' +
+  '"find": "the directive copied VERBATIM from that field — an exact ' +
+  'substring, no paraphrase", "replace": "the rewritten text"}. Prefer ' +
+  'narrowing the over-broad rule over deleting it; omit "apply" when no ' +
+  'single text edit resolves the pair. Reply with ONLY a JSON array, no ' +
+  'prose: [{"a":"…","b":"…","when":"…","fix":"…","apply":{…}}] — an empty ' +
+  'array when nothing collides.';
+
+/** Locate a find-string in field text — verbatim first, then a
+ *  whitespace-normalized retry that maps back to the real substring so
+ *  the client can apply it verbatim. */
+function locateInField(source: string, find: string): string | null {
+  if (source.includes(find)) return find;
+  const words = find
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (!words.length) return null;
+  const m = new RegExp(words.join('\\s+')).exec(source);
+  return m ? m[0] : null;
+}
 
 /** Read the agent's rule surface the way the model does — instructions,
  *  tone, always-injected knowledge notes, procedure triggers, plus the
@@ -797,7 +831,7 @@ export async function checkPromptConflicts(
     Array.isArray(cfg.knowledge) && cfg.knowledge.length
       ? `Knowledge notes (injected into EVERY reply — models treat them as rules too):\n${cfg.knowledge
           .slice(0, 30)
-          .map((k) => `- ${k.slice(0, 400)}`)
+          .map((k, i) => `- [${i}] ${k.slice(0, 400)}`)
           .join('\n')}`
       : null,
     Array.isArray(cfg.procedures) && cfg.procedures.length
@@ -843,15 +877,57 @@ export async function checkPromptConflicts(
     return null;
   }
   if (!Array.isArray(parsed)) return null;
+  // Sources the apply patch can target — instructions/tone reflect the
+  // in-flight draft the editor sent; knowledge comes from saved config.
+  const fieldText = (f: string, index?: number): string | null =>
+    f === 'instructions'
+      ? instructions
+      : f === 'tone'
+        ? tone
+        : f === 'knowledge' && typeof index === 'number'
+          ? (cfg.knowledge?.[index] ?? null)
+          : null;
   const out: PromptConflict[] = [];
   for (const item of parsed.slice(0, 10)) {
-    const c = item as { a?: unknown; b?: unknown; when?: unknown; fix?: unknown };
+    const c = item as {
+      a?: unknown;
+      b?: unknown;
+      when?: unknown;
+      fix?: unknown;
+      apply?: { field?: unknown; index?: unknown; find?: unknown; replace?: unknown };
+    };
     if (typeof c.a !== 'string' || typeof c.b !== 'string') continue;
+    let apply: PromptConflict['apply'];
+    const ap = c.apply;
+    if (
+      ap &&
+      (ap.field === 'instructions' || ap.field === 'tone' || ap.field === 'knowledge') &&
+      typeof ap.find === 'string' &&
+      ap.find.trim() &&
+      typeof ap.replace === 'string' &&
+      ap.replace.trim()
+    ) {
+      const index =
+        ap.field === 'knowledge' && Number.isInteger(ap.index) ? (ap.index as number) : undefined;
+      const source = fieldText(ap.field, index);
+      // Only offer the patch when the find text actually locates —
+      // verbatim first, whitespace-normalized after.
+      const located = source === null ? null : locateInField(source, ap.find);
+      if (located) {
+        apply = {
+          field: ap.field,
+          ...(index !== undefined ? { index } : {}),
+          find: located.slice(0, 2000),
+          replace: ap.replace.slice(0, 2000),
+        };
+      }
+    }
     out.push({
       a: c.a.slice(0, 300),
       b: c.b.slice(0, 300),
       when: typeof c.when === 'string' ? c.when.slice(0, 300) : '',
       fix: typeof c.fix === 'string' ? c.fix.slice(0, 300) : '',
+      ...(apply ? { apply } : {}),
     });
   }
   return out;

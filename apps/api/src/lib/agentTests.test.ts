@@ -433,7 +433,7 @@ describe('checkPromptConflicts', () => {
     fetchMock.mockResolvedValueOnce(
       llmReply({
         content:
-          '[{"a":"flag for a human when the customer asks","b":"manual intervention → sign in via Copilot","when":"a visitor asks for a person","fix":"scope the sign-in rule to account actions like refunds"}]',
+          '[{"a":"flag for a human when the customer asks","b":"manual intervention → sign in via Copilot","when":"a visitor asks for a person","fix":"scope the sign-in rule to account actions like refunds","apply":{"field":"knowledge","index":0,"find":"Manual intervention requests → send the user to sign in via the Copilot.","replace":"Refund and account-action requests → send the user to sign in via the Copilot."}},{"a":"x","b":"y","when":"w","fix":"f","apply":{"field":"instructions","find":"not actually in the text","replace":"z"}}]',
       }),
     );
     const conflicts = await checkPromptConflicts(db, agent, {
@@ -445,7 +445,16 @@ describe('checkPromptConflicts', () => {
         b: 'manual intervention → sign in via Copilot',
         when: 'a visitor asks for a person',
         fix: 'scope the sign-in rule to account actions like refunds',
+        // verbatim find located in knowledge[0] → apply survives
+        apply: {
+          field: 'knowledge',
+          index: 0,
+          find: 'Manual intervention requests → send the user to sign in via the Copilot.',
+          replace: 'Refund and account-action requests → send the user to sign in via the Copilot.',
+        },
       },
+      // find text that doesn't locate → apply dropped, conflict still listed
+      { a: 'x', b: 'y', when: 'w', fix: 'f' },
     ]);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     const userMsg = body.messages.find((m: { role: string }) => m.role === 'user').content;
