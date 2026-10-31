@@ -25,10 +25,18 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown> & {
-      error?: string;
+      error?: unknown;
     };
-    noteApiFailure(path, res.status, body.error);
-    throw new ApiError(res.status, body.error ?? `HTTP ${res.status}`, body);
+    // body.error is usually a string but some paths return a structured
+    // object (e.g. validation issues) — pass it through verbatim and the
+    // UI shows "[object Object]" where a message belongs.
+    const errText =
+      typeof body.error === 'string'
+        ? body.error
+        : ((body.error as { message?: string } | undefined)?.message ??
+          `HTTP ${res.status}`);
+    noteApiFailure(path, res.status, typeof body.error === 'string' ? body.error : errText);
+    throw new ApiError(res.status, errText, body);
   }
   return (await res.json()) as T;
 }
