@@ -342,6 +342,12 @@ export async function processEvents(
     // below. 'human' is untouched: a human who took over owns the close.
     if (event.type === 'resolve' && (state === 'active' || state === 'needs_human'))
       state = 'archived';
+    // A customer reply revives an archived thread — archived means "out of
+    // the inbox", not "gone": new inbound resurfaces it as active. Skipped
+    // while a CSAT prompt is pending — the reply may be a 1–5 rating, not a
+    // re-open; the capture path unarchives only non-rating replies.
+    if (event.type === 'message_in' && state === 'archived' && !conv.csatPending)
+      state = 'active';
 
     // A customer reply past a handoff offer closes the "awaiting customer"
     // window, so the offer alert is stale. Whether they accepted or moved
@@ -407,6 +413,9 @@ export async function processEvents(
         ...(event.type === 'resolve' && state === 'archived' && !conv.archivedAt
           ? { archivedAt: new Date() }
           : {}),
+        // Leaving archived by any path (inbound revival, escalation) clears
+        // the resolved timestamp — the thread is open again.
+        ...(state !== 'archived' && conv.archivedAt ? { archivedAt: null } : {}),
         // Merge, not replace — later events only overwrite the fields they
         // actually carry, so a profile fetched earlier (or an email the
         // customer shared) survives sparse updates

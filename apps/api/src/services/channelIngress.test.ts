@@ -230,15 +230,29 @@ describe('orphaned conversation reattach', () => {
 });
 
 describe('archived conversations', () => {
-  it('still dispatches to the agent — archive is inbox organization, not a mute', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+  const archivedBoundConv = async (
+    platformUserId: string,
+    extra: Partial<typeof conversations.$inferInsert> = {},
+  ) => {
     const [conv] = await db
       .insert(conversations)
-      .values({ agentId: agent.id, externalId: 'messenger:PSID-ARCH', state: 'archived' })
+      .values({
+        agentId: agent.id,
+        externalId: `messenger:${platformUserId}`,
+        state: 'archived',
+        archivedAt: new Date(),
+        ...extra,
+      })
       .returning();
     await db
       .insert(channelBindings)
-      .values({ channelId: channel.id, conversationId: conv.id, platformUserId: 'PSID-ARCH' });
+      .values({ channelId: channel.id, conversationId: conv.id, platformUserId });
+    return conv;
+  };
+
+  it('a customer reply revives the thread — dispatches to the agent AND unarchives', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const conv = await archivedBoundConv('PSID-ARCH');
     await handleChannelMessage(db, channel, {
       objectId: 'PG1',
       senderId: 'PSID-ARCH',
@@ -250,9 +264,41 @@ describe('archived conversations', () => {
       (d) => (d.payload as { janis_conversation_id?: string }).janis_conversation_id === conv.id,
     );
     expect(deliveries).toHaveLength(1);
-    // stays archived — the visitor was answered, the thread just stays hidden
+    // back in the inbox — archived is inbox organization, not "gone"
+    const [fresh] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(fresh.state).toBe('active');
+    expect(fresh.archivedAt).toBeNull();
+    expect(fresh.isUnread).toBe(true);
+  });
+
+  it('a CSAT rating reply keeps the thread archived', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const conv = await archivedBoundConv('PSID-CSAT', { csatPending: true });
+    await handleChannelMessage(db, channel, {
+      objectId: 'PG1',
+      senderId: 'PSID-CSAT',
+      text: '5',
+      messageId: 'mid.csat',
+    });
     const [fresh] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
     expect(fresh.state).toBe('archived');
+    expect(fresh.csatScore).toBe(5);
+    expect(fresh.csatPending).toBe(false);
+  });
+
+  it('a non-rating reply on a CSAT-pending thread still unarchives', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const conv = await archivedBoundConv('PSID-CSAT2', { csatPending: true });
+    await handleChannelMessage(db, channel, {
+      objectId: 'PG1',
+      senderId: 'PSID-CSAT2',
+      text: 'actually I have another question',
+      messageId: 'mid.csat2',
+    });
+    const [fresh] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(fresh.state).toBe('active');
+    expect(fresh.archivedAt).toBeNull();
+    expect(fresh.csatPending).toBe(false);
   });
 });
 

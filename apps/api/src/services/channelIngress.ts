@@ -37,6 +37,7 @@ import { deliverWebhook } from '../lib/webhooks.js';
 import { emitHookEvent } from '../lib/hooks.js';
 import { isUniqueViolation } from '../lib/errorReporting.js';
 import { processEvents } from './ingest.js';
+import { applyConvEffects } from '../lib/conversationOps.js';
 
 type ChannelRow = typeof channels.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -859,11 +860,24 @@ export async function handleChannelMessage(
   if (conv.csatPending) {
     if (await captureCsat(db, conv, msg.text ?? '')) return;
     conv = { ...conv, csatPending: false };
+    // Not a rating — a real customer message. Ingest skipped the auto-
+    // unarchive while the CSAT prompt was pending, so revive it here.
+    if (conv.state === 'archived') {
+      const [after] = await db
+        .update(conversations)
+        .set({ state: 'active', archivedAt: null })
+        .where(eq(conversations.id, conv.id))
+        .returning();
+      if (after) {
+        await applyConvEffects(db, agent.workspaceId, conv, after, { state: 'active' }, null);
+        conv = after;
+      }
+    }
   }
 
   // Forward to the agent unless a human owns it — needs_human is just a
-  // flag, and archived is inbox organization, not a mute: archived threads
-  // still get answered, they just stay out of the inbox until escalation.
+  // flag, and archived is inbox organization, not a mute: the inbound that
+  // landed above already revived the thread to active.
   const state = result?.conversation_state ?? conv.state;
   if (state !== 'human' && (agent.webhookUrl || agent.hosted)) {
     void sendChannelTyping(channel, msg.senderId);

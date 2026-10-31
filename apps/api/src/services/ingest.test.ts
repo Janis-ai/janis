@@ -125,6 +125,44 @@ describe('processEvents', () => {
     expect(conv.state).toBe('needs_human');
   });
 
+  it('a customer reply on an archived conversation revives it to active', async () => {
+    await processEvents(db, agent, [{ type: 'message_in', conversation_id: 'c-rev', text: 'hi' }]);
+    await db
+      .update(conversations)
+      .set({ state: 'archived', archivedAt: new Date() })
+      .where(eq(conversations.externalId, 'c-rev'));
+
+    const results = await processEvents(db, agent, [
+      { type: 'message_in', conversation_id: 'c-rev', text: 'one more thing' },
+    ]);
+    expect(results[0].conversation_state).toBe('active');
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c-rev'));
+    expect(conv.state).toBe('active');
+    expect(conv.archivedAt).toBeNull();
+    expect(conv.isUnread).toBe(true);
+  });
+
+  it('a reply while a CSAT prompt is pending stays archived at ingest', async () => {
+    await processEvents(db, agent, [{ type: 'message_in', conversation_id: 'c-csat', text: 'hi' }]);
+    await db
+      .update(conversations)
+      .set({ state: 'archived', archivedAt: new Date(), csatPending: true })
+      .where(eq(conversations.externalId, 'c-csat'));
+
+    await processEvents(db, agent, [
+      { type: 'message_in', conversation_id: 'c-csat', text: '5' },
+    ]);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c-csat'));
+    // rating or not is decided by captureCsat later — ingest stays out of it
+    expect(conv.state).toBe('archived');
+  });
+
   it('handoff_cancelled drops needs_human back to active and resolves open alerts', async () => {
     await processEvents(db, agent, [
       { type: 'handoff_request', conversation_id: 'cc1', reason: 'stuck' },
