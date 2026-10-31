@@ -48,7 +48,7 @@ import {
   triggerOf,
   type MatchTurn,
 } from '../lib/promptMatch.js';
-import { checkpointIndices, draftExpectation, generateScenarioDrafts, judgeExpectation, replayContextFrom, runAgentTest, stripInternalTurns, transcriptTurns, type TestTurn } from '../lib/agentTests.js';
+import { checkpointIndices, checkPromptConflicts, draftExpectation, generateScenarioDrafts, judgeExpectation, replayContextFrom, runAgentTest, stripInternalTurns, transcriptTurns, type TestTurn } from '../lib/agentTests.js';
 import { deleteAgentsCascade } from '../lib/agentCleanup.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { configVersion } from '../lib/configVersion.js';
@@ -3499,6 +3499,30 @@ export function agentRoutes(db: Db) {
       .returning();
     return c.json({ test: toTest(row, configVersion((agent.config ?? {}) as AgentConfig)) });
   });
+
+  // Audit the rule surface for contradictions — the concierge miss that
+  // motivated this: "flag for a human when asked" sat next to "manual
+  // intervention → sign in via Copilot" for weeks, and only a failing test
+  // noticed. Optional {instructions, tone} lets the editor check in-flight
+  // text against the saved knowledge/procedures instead of what's deployed.
+  app.post(
+    '/:id/prompt-check',
+    agentAdmin,
+    zValidator(
+      'json',
+      z.object({
+        instructions: z.string().max(20_000).optional(),
+        tone: z.string().max(2000).optional(),
+      }),
+    ),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const conflicts = await checkPromptConflicts(db, agent, c.req.valid('json'));
+      if (conflicts === null) return c.json({ error: 'check failed — check the agent has a working LLM' }, 502);
+      return c.json({ conflicts });
+    },
+  );
 
   // Draft fresh scenario candidates from the agent's CURRENT state — the
   // builder's creation-time scenarios predate the knowledge base and any

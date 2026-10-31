@@ -12,6 +12,7 @@ import {
   workspaces,
 } from '../db/schema.js';
 import {
+  checkPromptConflicts,
   escalationOf,
   replayContextFor,
   runAgentTest,
@@ -416,5 +417,51 @@ describe('runAgentTest escalation context', () => {
     const r = await runAgentTest(db, agent, test);
     expect(r.humanReply).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('checkPromptConflicts', () => {
+  it('sends instructions + knowledge + procedures and parses the conflict list', async () => {
+    const agent = await makeAgent({
+      ...llmCfg,
+      system_prompt: 'Flag for a human whenever the customer asks for one.',
+      knowledge: ['Manual intervention requests → send the user to sign in via the Copilot.'],
+      procedures: [
+        { name: 'refunds', when: 'refund asked', steps: ['verify order', 'call refund_order'] },
+      ],
+    });
+    fetchMock.mockResolvedValueOnce(
+      llmReply({
+        content:
+          '[{"a":"flag for a human when the customer asks","b":"manual intervention → sign in via Copilot","when":"a visitor asks for a person","fix":"scope the sign-in rule to account actions like refunds"}]',
+      }),
+    );
+    const conflicts = await checkPromptConflicts(db, agent, {
+      instructions: 'Flag for a human whenever the customer asks for one.',
+    });
+    expect(conflicts).toEqual([
+      {
+        a: 'flag for a human when the customer asks',
+        b: 'manual intervention → sign in via Copilot',
+        when: 'a visitor asks for a person',
+        fix: 'scope the sign-in rule to account actions like refunds',
+      },
+    ]);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    const userMsg = body.messages.find((m: { role: string }) => m.role === 'user').content;
+    expect(userMsg).toContain('sign in via the Copilot'); // knowledge note audited too
+    expect(userMsg).toContain('refunds'); // procedures audited
+    expect(userMsg).not.toContain('Built-in persona'); // authored prompt wins
+  });
+
+  it('uses the built-in persona when the agent has no authored instructions', async () => {
+    const agent = await makeAgent();
+    fetchMock.mockResolvedValueOnce(llmReply({ content: '[]' }));
+    const conflicts = await checkPromptConflicts(db, agent);
+    expect(conflicts).toEqual([]);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    expect(body.messages.find((m: { role: string }) => m.role === 'user').content).toContain(
+      'Built-in persona',
+    );
   });
 });

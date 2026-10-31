@@ -1100,9 +1100,45 @@ export function InstructionsSection({
   isAdmin: boolean;
   agentId: string;
 }) {
+  // "Check for conflicts" — audits instructions + tone (this text, in-flight)
+  // against saved knowledge notes, procedures and the platform persona for
+  // directive pairs that fight in the same situation.
+  const [check, setCheck] = useState<{
+    pending?: boolean;
+    err?: string;
+    conflicts?: { a: string; b: string; when: string; fix: string }[] | null;
+  } | null>(null);
+  const runCheck = async () => {
+    setCheck({ pending: true });
+    try {
+      const r = await api<{ conflicts: { a: string; b: string; when: string; fix: string }[] }>(
+        `/api/agents/${agentId}/prompt-check`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ instructions: cfg.system_prompt ?? '', tone: cfg.tone ?? '' }),
+        },
+      );
+      setCheck({ conflicts: r.conflicts });
+    } catch (e) {
+      setCheck({ err: (e as Error).message });
+    }
+  };
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, flex: 1 }}>
-      <strong>Instructions</strong>
+      <div className="row" style={{ alignItems: 'center' }}>
+        <strong>Instructions</strong>
+        <span className="grow" />
+        {isAdmin && agentId && (
+          <button
+            className="btn ghost sm"
+            disabled={check?.pending}
+            title="Audit the instructions, tone, knowledge notes and procedures for rules that contradict each other"
+            onClick={() => void runCheck()}
+          >
+            {check?.pending ? 'Checking…' : 'Check for conflicts'}
+          </button>
+        )}
+      </div>
       <InstructionHistory
         agentId={agentId}
         isAdmin={isAdmin}
@@ -1116,6 +1152,46 @@ export function InstructionsSection({
           });
         }}
       />
+      {check?.err && (
+        <div className="muted" style={{ fontSize: 12, color: 'var(--danger)' }}>
+          Conflict check failed — {check.err}
+        </div>
+      )}
+      {check?.conflicts && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {check.conflicts.length === 0 ? (
+            <div className="muted" style={{ fontSize: 12 }}>
+              No contradicting rules found across instructions, tone, knowledge
+              notes and procedures.
+            </div>
+          ) : (
+            check.conflicts.map((c, i) => (
+              <div key={i} className="card" style={{ padding: 8, fontSize: 12, borderColor: 'var(--warn)' }}>
+                <div>
+                  <span className="muted">“{c.a}”</span>
+                </div>
+                <div className="muted" style={{ marginTop: 2 }}>
+                  vs
+                </div>
+                <div>
+                  <span className="muted">“{c.b}”</span>
+                </div>
+                {c.when && (
+                  <div style={{ marginTop: 4 }}>
+                    <span className="badge warn">collides when</span>{' '}
+                    {c.when}
+                  </div>
+                )}
+                {c.fix && (
+                  <div className="muted" style={{ marginTop: 4 }}>
+                    Suggested: {c.fix}
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
       <ReadOnly off={!isAdmin}>
       <label>
         Who the agent is, what it covers, and the rules it follows — persona,

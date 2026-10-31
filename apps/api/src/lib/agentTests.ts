@@ -13,6 +13,7 @@ import {
   blessedUrlsFor,
   complete,
   controlTag,
+  defaultPersona,
   extractButtons,
   extractLearns,
   generateReply,
@@ -732,6 +733,128 @@ export async function draftExpectation(
   } | null;
   const text = body?.choices?.[0]?.message?.content?.trim();
   return text ? text.slice(0, 1000) : null;
+}
+
+export interface PromptConflict {
+  /** The two directives that collide, quoted short. */
+  a: string;
+  b: string;
+  /** The situation where they fight. */
+  when: string;
+  /** One-line resolution keeping the operator's likely intent. */
+  fix: string;
+}
+
+const CONFLICT_CHECK_SYSTEM =
+  "You audit a customer-support AI agent's instruction layers for " +
+  'contradictions — directive pairs that push the model to different ' +
+  'behavior in the same situation. Example: "flag for a human when the ' +
+  'customer asks" vs "requests for manual intervention → send them to sign ' +
+  'in". For each real collision quote each directive briefly ("a", "b"), ' +
+  'name the situation where they collide ("when"), and suggest a one-line ' +
+  'resolution that keeps the operator\'s likely intent ("fix"). Rules that ' +
+  'merely cover different situations are NOT conflicts — only report pairs ' +
+  'a model could plausibly apply to the same message. Platform-injected ' +
+  'lines are listed for context; the fix must target authored text. Reply ' +
+  'with ONLY a JSON array, no prose: [{"a":"…","b":"…","when":"…","fix":"…"}] ' +
+  '— an empty array when nothing collides.';
+
+/** Read the agent's rule surface the way the model does — instructions,
+ *  tone, always-injected knowledge notes, procedure triggers, plus the
+ *  platform persona/context lines that fill gaps — and report directive
+ *  pairs that fight in the same situation. The run earlier this lives to
+ *  catch: two authored rules that disagree only ever surface as a bad
+ *  reply. Returns null when the agent has no LLM or the call fails. */
+export async function checkPromptConflicts(
+  db: Db,
+  agent: AgentRow,
+  draft?: { instructions?: string; tone?: string },
+): Promise<PromptConflict[] | null> {
+  let llm: LlmSettings;
+  try {
+    llm = await llmFor(db, agent);
+  } catch {
+    return null;
+  }
+  if (!llm.apiKey) return null;
+
+  const cfg = (agent.config ?? {}) as {
+    system_prompt?: string;
+    tone?: string;
+    knowledge?: string[];
+    procedures?: { name: string; when?: string; steps: (string | { text: string; tool?: string })[] }[];
+    handoff_enabled?: boolean;
+  };
+  const instructions =
+    draft?.instructions !== undefined ? draft.instructions : (cfg.system_prompt ?? '');
+  const tone = draft?.tone !== undefined ? draft.tone : (cfg.tone ?? '');
+
+  const parts = [
+    instructions.trim()
+      ? `Authored instructions:\n${instructions.slice(0, 8000)}`
+      : `Built-in persona (platform default — the operator can't edit this):\n${defaultPersona(agent.name, { handoff: cfg.handoff_enabled !== false }).slice(0, 4000)}`,
+    tone.trim() ? `Tone rules:\n${tone.slice(0, 1000)}` : null,
+    Array.isArray(cfg.knowledge) && cfg.knowledge.length
+      ? `Knowledge notes (injected into EVERY reply — models treat them as rules too):\n${cfg.knowledge
+          .slice(0, 30)
+          .map((k) => `- ${k.slice(0, 400)}`)
+          .join('\n')}`
+      : null,
+    Array.isArray(cfg.procedures) && cfg.procedures.length
+      ? `Procedures (runbooks — trigger plus required steps):\n${cfg.procedures
+          .slice(0, 10)
+          .map(
+            (p) =>
+              `- ${p.name}${p.when ? ` (use when: ${p.when})` : ''}: ${p.steps
+                .map((s) => (typeof s === 'string' ? s : s.text))
+                .join(' → ')
+                .slice(0, 300)}`,
+          )
+          .join('\n')}`
+      : null,
+    'Platform-injected context the operator cannot edit (reference only):\n' +
+      '- When a conversation is already escalated: "a human teammate has already been notified — keep helping normally; only re-escalate for something new"\n' +
+      '- For console/copilot agents, when the visitor is not signed in: "workspace-bound tools fail for them — point them to sign up or sign in first"',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
+  const res = await complete({ ...llm, temperature: 0, maxTokens: 1400 }, CONFLICT_CHECK_SYSTEM, [
+    { role: 'user', content: `Agent: ${agent.name}\n\n${parts}` },
+  ]).catch(() => null);
+  if (!res) return null;
+  if (res.promptTokens || res.completionTokens) {
+    await recordLlmUsage(db, {
+      workspaceId: agent.workspaceId,
+      agentId: agent.id,
+      model: res.model,
+      capModel: llm.model,
+      promptTokens: res.promptTokens,
+      completionTokens: res.completionTokens,
+      byok: llm.byok,
+    }).catch(() => {});
+  }
+  const m = /\[[\s\S]*\]/.exec(res.text ?? '');
+  if (!m) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(m[0]);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(parsed)) return null;
+  const out: PromptConflict[] = [];
+  for (const item of parsed.slice(0, 10)) {
+    const c = item as { a?: unknown; b?: unknown; when?: unknown; fix?: unknown };
+    if (typeof c.a !== 'string' || typeof c.b !== 'string') continue;
+    out.push({
+      a: c.a.slice(0, 300),
+      b: c.b.slice(0, 300),
+      when: typeof c.when === 'string' ? c.when.slice(0, 300) : '',
+      fix: typeof c.fix === 'string' ? c.fix.slice(0, 300) : '',
+    });
+  }
+  return out;
 }
 
 const SCENARIO_CATEGORIES = [
