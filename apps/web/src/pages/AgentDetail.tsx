@@ -1165,6 +1165,9 @@ export function InstructionsSection({
   };
   const runCheck = async () => {
     setCheck({ pending: true });
+    // Results are index-keyed — a fresh list must not inherit the last
+    // run's Applied marks.
+    setApplied(new Set());
     try {
       const r = await api<{ conflicts: { a: string; b: string; when: string; fix: string }[] }>(
         `/api/agents/${agentId}/prompt-check`,
