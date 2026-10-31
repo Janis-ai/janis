@@ -513,7 +513,7 @@ The /docs page documents the full ingest API, webhook event types, signature ver
 
 ---
 
-Each agent can mint multiple named API keys (Settings → API keys) — create, label, list last-used and revoke them individually, including the original single legacy key — so one key per integration or teammate is easy to rotate.
+Each agent can mint multiple named API keys on its own page (the agent's Settings → General → API keys card) — create, label, list last-used and revoke them individually, including the original single legacy key — so one key per integration or teammate is easy to rotate. Keys authenticate the /v1 API and the Janis app in Zapier, sent as X-API-KEY or Authorization: Bearer.
 
 ---
 
