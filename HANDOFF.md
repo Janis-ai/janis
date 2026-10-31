@@ -94,6 +94,23 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Concierge KB + help-center refresh (Oct 31):** concierge-kb.txt grew
+129→144 entries covering everything shipped since the last pass —
+Chatfuel/ManyChat bot channels (ingest URL, ~15s sync window, human
+takeover silences the bot, PSID thread-sharing with Meta surfaces,
+{{directives}}, secondary receiver), the four Google tool cards +
+private-Google-URL knowledge sources, Check-for-conflicts + Suggest
+rewrite, instruction/article version history, run-history diff, SMS
+double opt-in, contact consolidation, named API keys, the /v1/knowledge
+endpoints, widget new-chat/suggested-articles/Text-us, neural voice.
+Prod synced via sync-concierge-kb.ts (persona unchanged). The concierge's
+public help center (14 stale Sept-29 articles) got 9 body rewrites —
+what-is-janis and connecting-channels wrongly listed Slack as a customer
+channel — plus two NEW articles: bot-platforms and google-tools.
+Old bodies snapshotted into help_article_revisions first (stamped at the
+article's updated_at) so history shows both sides; done via the gitignored
+scripts/tmp/update-help-articles.ts.
+
 **Google card Add drops straight into the Drive picker (Oct 30):** adding
 Sheets/Docs/Slides/Drive on an already-connected account installed the
 tools but left the card fileless — the tools can't act until a file is
