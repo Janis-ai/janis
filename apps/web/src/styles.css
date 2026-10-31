@@ -1612,6 +1612,19 @@ details summary:hover { color: var(--text); }
   .snooze-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
   .snooze-wrap .snz-ic { display: block; color: var(--muted); }
   .snooze-wrap.on .snz-ic { color: var(--accent); }
+  /* Any open sheet owns the scroll — backdrops aren't scrollable, so
+     touch-move chains through to .main and the two scrollers fight.
+     Lock the page while a backdrop exists, and keep the sheet's own
+     scroll contained so edge swipes don't bleed through. */
+  .layout:has(.menu-backdrop, .nav-scrim, .conv-side-scrim, .test-dock-dim, .modal-backdrop) .main {
+    overflow: hidden;
+  }
+  .menu-pop {
+    max-height: min(70vh, 480px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .conv-side, .dock, .sidebar, .modal { overscroll-behavior: contain; }
   /* Contacts search earns its own row instead of squeezing beside the tabs. */
   .contacts-search { flex-basis: 100%; }
   /* Connected-channel rows: a wide basis keeps the name on line 1 with its
