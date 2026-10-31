@@ -423,6 +423,13 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
       auto_resume_minutes: autoResume ? Number(autoResume) : null,
       config: cfgOverride ?? cfg,
     });
+  // Nothing persisted yet = nothing to save — mirrors saveAll's body.
+  const dirtyCfg = JSON.stringify(cfg) !== JSON.stringify(agent.config ?? {});
+  const dirty =
+    dirtyCfg ||
+    (name.trim() !== '' && name.trim() !== agent.name) ||
+    (!agent.hosted && (webhookUrl || null) !== (agent.webhook_url ?? null)) ||
+    (autoResume ? Number(autoResume) : null) !== (agent.auto_resume_minutes ?? null);
 
   // Sections whose edits live in the shared draft — the bottom Save button
   // renders there. Knowledge self-saves per row now (the unified source
@@ -514,6 +521,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
               agentId={agent.id}
               onSave={saveAll}
               saveNonce={saveNonce}
+              hasChanges={dirtyCfg}
               saving={update.isPending}
               saved={savedFlash}
             />
@@ -693,7 +701,11 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
             </button>
           )}
           {hasDrafts && (
-            <button className="btn primary" disabled={update.isPending} onClick={() => saveAll()}>
+            <button
+              className="btn primary"
+              disabled={update.isPending || !dirty}
+              onClick={() => saveAll()}
+            >
               {update.isPending ? 'Saving…' : savedFlash ? 'Saved ✓' : 'Save'}
             </button>
           )}
@@ -1120,6 +1132,7 @@ export function InstructionsSection({
   agentId,
   onSave,
   saveNonce,
+  hasChanges,
   saving,
   saved,
 }: {
@@ -1134,6 +1147,8 @@ export function InstructionsSection({
   onSave?: (cfgOverride?: AgentConfig) => void;
   /** Bumped by the page on every successful save — re-runs the audit. */
   saveNonce?: number;
+  /** False when the draft matches what's persisted — disables Save. */
+  hasChanges?: boolean;
   saving?: boolean;
   saved?: boolean;
 }) {
@@ -1284,7 +1299,7 @@ export function InstructionsSection({
           </button>
         )}
         {isAdmin && onSave && (
-          <button className="btn primary sm" disabled={saving} onClick={() => onSave()}>
+          <button className="btn primary sm" disabled={saving || !hasChanges} onClick={() => onSave()}>
             {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
           </button>
         )}
