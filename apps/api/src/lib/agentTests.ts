@@ -884,10 +884,13 @@ const CONFLICT_VERIFY_SYSTEM =
   'the text already states which wins or the order they run in — a ' +
   'stated order is RESOLVED, not a conflict; and whether a reply could ' +
   'satisfy both directives without being incoherent — only then is it ' +
-  'a real conflict. Verdict "conflict" only when a model executing both ' +
-  'directives could produce a contradictory or impossible reply; ' +
-  '"noise" when they compose, when one does not fire, or when ' +
-  'precedence is already written. Reply ONLY with a JSON array: ' +
+  'a real conflict. Verdict "noise" ONLY when you are confident the ' +
+  'pair is safe: the directives compose, one does not fire, or ' +
+  'precedence is explicitly written — including when one says "X ' +
+  'instead of Y", which IS a conflict, not composition. When in ' +
+  'doubt keep the finding (verdict "conflict") — a human reviews it ' +
+  'either way, and a missed real contradiction is worse than a ' +
+  'reviewed false alarm. Reply ONLY with a JSON array: ' +
   '[{"i":0,"verdict":"conflict"|"noise"}] — one entry per claim.';
 
 /** Read the agent's rule surface the way the model does — instructions,
@@ -1116,7 +1119,15 @@ export async function rewritePrompt(
   if (!instructions.trim()) return null;
   const tone = draft?.tone !== undefined ? draft.tone : (cfg.tone ?? '');
   const surface = ruleSurface(agent, cfg, instructions, tone, true);
-  const findings = (draft?.conflicts ?? [])
+  // Findings steer which pairs to merge — when the client didn't run
+  // the conflict check first (or it surfaced nothing), audit here so
+  // "rewrite" always means "resolve what's colliding", never just
+  // "reformat while preserving the bad lines".
+  const knownConflicts =
+    draft?.conflicts ??
+    (await checkPromptConflicts(db, agent, { instructions, tone }))?.conflicts ??
+    [];
+  const findings = knownConflicts
     .slice(0, 10)
     .map((c) => ({ kind: c.kind, a: c.a, b: c.b, when: c.when, fix: c.fix }));
 
