@@ -1015,10 +1015,24 @@ export async function checkPromptConflicts(
     }
     const clip = (s: string, n: number) =>
       s.length <= n ? s : s.slice(0, s.lastIndexOf(' ', n)) + '…';
+    // The model quotes directives "briefly" — but verdicts and fixes are
+    // judged on those quotes, and the omitted tail is often the clause
+    // that resolves the pair. Expand each quote back to the full
+    // containing line in whichever field it came from.
+    const expand = (quote: string): string => {
+      for (const source of [instructions, tone, ...(cfg.knowledge ?? [])]) {
+        const found = locateInField(source ?? '', quote);
+        if (found) {
+          const line = (source ?? '').split('\n').find((l) => l.includes(found));
+          if (line && line.trim().length > found.length) return clip(line.trim(), 600);
+        }
+      }
+      return clip(quote, 400);
+    };
     out.push({
       kind: c.kind === 'redundant' ? 'redundant' : 'conflict',
-      a: clip(c.a, 400),
-      b: clip(c.b, 400),
+      a: expand(c.a),
+      b: expand(c.b),
       when: typeof c.when === 'string' ? clip(c.when, 400) : '',
       why: typeof c.why === 'string' ? clip(c.why, 600) : '',
       ...(c.severity === 'high' || c.severity === 'medium' || c.severity === 'low'
