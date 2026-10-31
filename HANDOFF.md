@@ -94,6 +94,27 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Test sims understand human handoffs (Oct 30):** rescue-saved tests replayed
+without the conversation's escalation state — the synthetic conv carried
+profile/channel/summary but not `state`, so the prompt never got the "a
+human was already notified — keep helping" line, and a customer re-pinging
+after handoff met an agent that re-offered a human who was already coming.
+Drafted expectations also asked for what a sim can't produce (a real ETA,
+a human acting). Now: ReplayContext snapshots conv.state, runs derive
+needs_human/pending-offer/operator-spoke from transcript markers (older
+saves, bare-turns tests), transcriptTurns drops internal audit rows
+("Assigned to…", "Status:", "SLA breach") like transcriptFor does — stored
+turns are cleaned by mid lookup (or known note shapes when the source row
+is gone) at run AND read time. An escalating run (fresh [HANDOFF] or an
+already-escalated transcript) conjures a simulated teammate reply —
+last_run.humanReply, rendered as "Simulated teammate" on the row and
+shown to the judge — so scenarios spanning a human stay testable. Drafter
++ judge prompts learned sim limits; POST
+/agents/:id/tests/:testId/expectation-redraft + a Re-draft button on
+AI-draft rows rewrite a bad bar and re-judge the stored reply. Live
+prompts also gained the "(human operator) turns are a teammate's words,
+not yours" line (humanSpoke opt).
+
 **Widget round 3 — blank transcript after Start a new chat:** menuNew's
 manual reset wiped the DOM but left `state.greetEl` pointing at a
 detached node; the fork's stored greeting row adopted into it via the
