@@ -799,9 +799,13 @@ const CONFLICT_CHECK_SYSTEM =
   '"knowledge">, "find": "the directive copied VERBATIM from that field ' +
   '— an exact substring, no paraphrase", "replace": "the rewritten text ' +
   '— an empty string deletes the found text"}]. All edits apply together ' +
-  '— when the fix touches more than one directive include every edit; ' +
-  'prefer narrowing an over-broad rule over deleting it; omit "apply" ' +
-  'entirely when no set of edits resolves the pair. Reply with ONLY a ' +
+  '— when the fix touches more than one directive include every edit. ' +
+  'Prefer narrowing the unconditional or later-added rule over ' +
+  'weakening the deliberate scoped one — a fix that deletes the ' +
+  'stronger behavior to satisfy the weaker rule resolves the text but ' +
+  'degrades the intent. Write fixes as standalone bullets, not ' +
+  'exception clauses appended onto a different rule\'s sentence. Omit ' +
+  '"apply" entirely when no set of edits resolves the pair. Reply with ONLY a ' +
   'JSON array, no prose: [{"kind":"conflict","a":"…","b":"…","when":"…",' +
   '"why":"…","severity":"high","fix":"…","apply":[{…}]}] — an empty ' +
   'array when the surface is clean.';
