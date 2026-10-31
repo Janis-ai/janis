@@ -289,9 +289,13 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
       refresh();
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 2000);
+      // Every save re-audits the rule surface — the Instructions card
+      // watches this nonce and re-runs the conflict check.
+      setSaveNonce((n) => n + 1);
     },
     onError: (e) => setError(e.message),
   });
+  const [saveNonce, setSaveNonce] = useState(0);
 
   const testWebhook = useMutation({
     mutationFn: () => api(`/api/agents/${agent.id}/webhook-test`, { method: 'POST' }),
@@ -509,6 +513,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
               isAdmin={isAdmin}
               agentId={agent.id}
               onSave={saveAll}
+              saveNonce={saveNonce}
               saving={update.isPending}
               saved={savedFlash}
             />
@@ -1114,6 +1119,7 @@ export function InstructionsSection({
   isAdmin,
   agentId,
   onSave,
+  saveNonce,
   saving,
   saved,
 }: {
@@ -1126,6 +1132,8 @@ export function InstructionsSection({
    *  config override so callers can persist an edit they just computed
    *  without waiting for the state round-trip. */
   onSave?: (cfgOverride?: AgentConfig) => void;
+  /** Bumped by the page on every successful save — re-runs the audit. */
+  saveNonce?: number;
   saving?: boolean;
   saved?: boolean;
 }) {
@@ -1190,14 +1198,20 @@ export function InstructionsSection({
     setCfg(next);
     setApplying(true);
     try {
+      // Auto-persists; the save nonce then re-runs the audit so the
+      // next finding shows up ready to click through.
       onSave?.(next);
-      // The applied text can still collide with other rules — re-run so
-      // the operator just keeps clicking through findings until clean.
-      await runCheck({ instructions: next.system_prompt ?? '', tone: next.tone ?? '' });
     } finally {
       setApplying(false);
     }
   };
+  // Every successful save bumps this — re-audit the (now saved) text.
+  const nonceRef = useRef(saveNonce);
+  useEffect(() => {
+    if (saveNonce && saveNonce !== nonceRef.current) void runCheck();
+    nonceRef.current = saveNonce ?? 0;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [saveNonce]);
   const runCheck = async (draft?: { instructions: string; tone: string }) => {
     setCheck({ pending: true });
     // Results are index-keyed — a fresh list must not inherit the last
@@ -1451,8 +1465,10 @@ export function InstructionsSection({
             <button
               className="btn primary sm"
               onClick={() => {
-                setCfg({ ...cfg, system_prompt: rewrite.text });
+                const next = { ...cfg, system_prompt: rewrite.text };
+                setCfg(next);
                 setRewrite(null);
+                onSave?.(next);
               }}
             >
               Use this rewrite
