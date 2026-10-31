@@ -1,5 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
-import { and, desc, eq, isNotNull, isNull, like, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNotNull, isNull, like, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import { env } from '../env.js';
 import {
@@ -12,10 +12,12 @@ import {
   knowledgeFiles,
   messages,
   shopifyShops,
+  usageEvents,
   users,
   workspaces,
 } from '../db/schema.js';
 import { PLANS, messagesInRange, type Plan } from './plans.js';
+import { billingConfig } from './billing.js';
 import { encryptSecret } from './secrets.js';
 import { adminToken, clearMirroredSecrets, mirrorSecrets } from './shopifyToken.js';
 import { audit } from './audit.js';
@@ -1221,7 +1223,7 @@ export async function startBillingSubscription(
   // messages. cappedAmount is the merchant-approved ceiling per cycle.
   const cap = ((plan.usageCapCents ?? 0) / 100).toFixed(2);
   const usage = `appUsagePricingDetails: {cappedAmount: {amount: ${cap}, currencyCode: USD}, terms: ${JSON.stringify(
-    `Messages beyond the ${plan.name} plan's ${plan.includedMessages.toLocaleString('en-US')}/month allowance, billed at $${((plan.overagePer1kCents ?? 0) / 1000).toFixed(2)} per 100.`,
+    `Messages beyond the ${plan.name} plan's ${plan.includedMessages.toLocaleString('en-US')}/month allowance at $${((plan.overagePer1kCents ?? 0) / 1000).toFixed(2)} per 100, plus metered AI usage (model calls, hosted voice minutes/numbers, dictation) at provider cost + margin.`,
   )}}`;
   // Return to the embedded app via the admin URL — Shopify wraps it with
   // host context; a bare origin lands the merchant on a shop-less page.
@@ -1343,7 +1345,32 @@ async function billShopifyUsage(db: Db, row: ShopRow, plan: Plan): Promise<void>
     : new Date(Date.now() - 30 * 86_400_000);
   const used = await messagesInRange(db, row.workspaceId!, periodStart, new Date());
   const overage = Math.max(0, used - plan.includedMessages);
-  const billableCents = Math.round((overage * plan.overagePer1kCents!) / 1000);
+  const msgCents = Math.round((overage * plan.overagePer1kCents!) / 1000);
+  // Metered AI usage rides the same usage line item — Stripe meters it, the
+  // Shopify rail has no meters, so the sweep folds usage_events cost +
+  // margin into the same cumulative target. BYOK rows store costMicros=0 and
+  // voice_provision rows are attempt counters, not spend.
+  const [usageRow] = await db
+    .select({ total: sql<number>`coalesce(sum(${usageEvents.costMicros}), 0)` })
+    .from(usageEvents)
+    .where(
+      and(
+        eq(usageEvents.workspaceId, row.workspaceId!),
+        inArray(usageEvents.kind, [
+          'llm_tokens',
+          'voice_seconds',
+          'voice_number_month',
+          'stt_seconds',
+        ]),
+        gte(usageEvents.createdAt, periodStart),
+      ),
+    );
+  // micro-USD → cents. Rounding hits the cumulative target, never each
+  // event — sub-cent costs still accumulate across sweeps.
+  const usageCents = Math.round(
+    (Number(usageRow?.total ?? 0) * (1 + billingConfig.margin)) / 10_000,
+  );
+  const billableCents = msgCents + usageCents;
   const delta = billableCents - billedCents;
   if (delta < USAGE_MIN_POST_CENTS) {
     // Still record the discovered line item + period so later ticks compute
@@ -1355,10 +1382,18 @@ async function billShopifyUsage(db: Db, row: ShopRow, plan: Plan): Promise<void>
         .where(eq(shopifyShops.id, row.id));
     return;
   }
+  const desc = [
+    overage > 0
+      ? `${overage.toLocaleString('en-US')} messages over ${plan.includedMessages.toLocaleString('en-US')}/mo`
+      : '',
+    usageCents > 0 ? `AI usage $${(usageCents / 100).toFixed(2)}` : '',
+  ]
+    .filter(Boolean)
+    .join(' + ');
   const res = await shopifyGraphql(
     row.shop,
     token,
-    `mutation { appUsageRecordCreate(subscriptionLineItemId: ${JSON.stringify(usageLineItemId)}, description: ${JSON.stringify(`Janis messages beyond plan allowance — ${overage.toLocaleString('en-US')} over ${plan.includedMessages.toLocaleString('en-US')}`)}, price: {amount: ${(delta / 100).toFixed(2)}, currencyCode: USD}, idempotencyKey: ${JSON.stringify(`${b.subscriptionId}:${sub.periodEnd}:${billableCents}`)}) { appUsageRecord { id } userErrors { field message } } }`,
+    `mutation { appUsageRecordCreate(subscriptionLineItemId: ${JSON.stringify(usageLineItemId)}, description: ${JSON.stringify(`Janis usage — ${desc}`)}, price: {amount: ${(delta / 100).toFixed(2)}, currencyCode: USD}, idempotencyKey: ${JSON.stringify(`${b.subscriptionId}:${sub.periodEnd}:${billableCents}`)}) { appUsageRecord { id } userErrors { field message } } }`,
   );
   const rec = (res.data as {
     appUsageRecordCreate?: { appUsageRecord?: { id: string }; userErrors?: { message: string }[] };

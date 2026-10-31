@@ -21,6 +21,7 @@ import {
   messages,
   sessions,
   shopifyShops,
+  usageEvents,
   users,
   workspaces,
 } from '../db/schema.js';
@@ -1090,6 +1091,45 @@ describe('shopify usage billing', () => {
     stubShopifyApi({ onGraphql: (q) => queries.push(q), periodEnd });
     await sweepShopifyUsage(db);
     expect(queries.find((q) => q.includes('appUsageRecordCreate'))).toBeUndefined();
+  });
+
+  it('folds metered AI usage into the same usage record', async () => {
+    const row = await provisionUsageShop('usage-shop4.myshopify.com');
+    // $2.50 provider cost → $3.00 billed at +20% margin. BYOK rows store
+    // costMicros 0 and voice_provision rows are attempt counters — neither
+    // moves the total.
+    await db.insert(usageEvents).values([
+      {
+        workspaceId: row.workspaceId!,
+        kind: 'llm_tokens',
+        costMicros: 2_000_000,
+        period: '2026-10',
+      },
+      {
+        workspaceId: row.workspaceId!,
+        kind: 'voice_seconds',
+        quantity: 120,
+        costMicros: 500_000,
+        period: '2026-10',
+      },
+      { workspaceId: row.workspaceId!, kind: 'voice_provision', period: '2026-10' },
+      { workspaceId: row.workspaceId!, kind: 'llm_tokens', period: '2026-10' },
+    ]);
+    const queries: string[] = [];
+    stubShopifyApi({
+      onGraphql: (q) => queries.push(q),
+      periodEnd: new Date(Date.now() + 15 * 86_400_000).toISOString(),
+    });
+    await sweepShopifyUsage(db);
+    const rec = queries.find((q) => q.includes('appUsageRecordCreate'))!;
+    // $1.60 message overage + $3.00 AI usage = $4.60 cumulative.
+    expect(rec).toContain('4.60');
+    expect(rec).toContain('AI usage');
+    const [after] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.id, row.id));
+    expect((after.billing as { usageBilledCents?: number }).usageBilledCents).toBe(460);
   });
 
   it('skips a cancelled subscription entirely', async () => {

@@ -671,6 +671,17 @@ drizzle-kit/workbox-build, nothing to drop directly).
   moot until the first real customer checks out.
 - Hosted voice bills Twilio cost × (1 + BILLING_MARGIN); VOICE_COST_MICROS_PER_MIN
   env overrides the $0.014/min default if Twilio rates change.
+- Shopify rail bills metered AI usage (2026-10-31): billShopifyUsage folds
+  usage_events cost + margin (llm_tokens, voice_seconds,
+  voice_number_month, stt_seconds — BYOK rows are costMicros=0 and
+  voice_provision is an attempt counter) into the same cumulative
+  billableCents posted via appUsageRecordCreate; the record description
+  breaks out message overage vs "AI usage $X". Caveats: everything shares
+  the merchant-approved cappedAmount (a usage-cap rejection still latches
+  the agent off for the cycle), and subscriptions created before this
+  shipped approved terms that only described message overage — voice/LLM
+  charges on those subs are new-charges-under-old-terms until they
+  re-subscribe.
 - janis.stt_micros: DONE — widget dictation (POST /chat/:token/transcribe)
   meters per-transcription seconds × 50µ/s cost ($0.003/min) × margin to
   Stripe via recordSttUsage. Live meter mtr_61VVCEyYCM6z1OPzz41LuGzRk7fCQ8rI,
