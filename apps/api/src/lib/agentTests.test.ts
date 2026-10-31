@@ -433,7 +433,7 @@ describe('checkPromptConflicts', () => {
     fetchMock.mockResolvedValueOnce(
       llmReply({
         content:
-          '[{"a":"flag for a human when the customer asks","b":"manual intervention → sign in via Copilot","when":"a visitor asks for a person","fix":"scope the sign-in rule to account actions like refunds","apply":{"field":"knowledge","index":0,"find":"Manual intervention requests → send the user to sign in via the Copilot.","replace":"Refund and account-action requests → send the user to sign in via the Copilot."}},{"a":"x","b":"y","when":"w","fix":"f","apply":{"field":"instructions","find":"not actually in the text","replace":"z"}}]',
+          '[{"kind":"conflict","a":"flag for a human when the customer asks","b":"manual intervention → sign in via Copilot","when":"a visitor asks for a person","why":"both rules claim the same request","severity":"high","fix":"scope the sign-in rule to account actions like refunds","apply":[{"field":"knowledge","index":0,"find":"Manual intervention requests → send the user to sign in via the Copilot.","replace":"Refund and account-action requests → send the user to sign in via the Copilot."}]},{"kind":"redundant","a":"flag for a human","b":"","when":"repeats the rule above","why":"the second rule adds nothing","severity":"low","fix":"delete it","apply":[{"field":"instructions","find":"Flag for a human whenever the customer asks for one.","replace":""}]},{"a":"x","b":"y","when":"w","fix":"f","apply":[{"field":"instructions","find":"Flag for a human","replace":"z"},{"field":"instructions","find":"not actually in the text","replace":"z"}]}]',
       }),
     );
     const conflicts = await checkPromptConflicts(db, agent, {
@@ -441,20 +441,43 @@ describe('checkPromptConflicts', () => {
     });
     expect(conflicts).toEqual([
       {
+        kind: 'conflict',
         a: 'flag for a human when the customer asks',
         b: 'manual intervention → sign in via Copilot',
         when: 'a visitor asks for a person',
+        why: 'both rules claim the same request',
+        severity: 'high',
         fix: 'scope the sign-in rule to account actions like refunds',
         // verbatim find located in knowledge[0] → apply survives
-        apply: {
-          field: 'knowledge',
-          index: 0,
-          find: 'Manual intervention requests → send the user to sign in via the Copilot.',
-          replace: 'Refund and account-action requests → send the user to sign in via the Copilot.',
-        },
+        apply: [
+          {
+            field: 'knowledge',
+            index: 0,
+            find: 'Manual intervention requests → send the user to sign in via the Copilot.',
+            replace: 'Refund and account-action requests → send the user to sign in via the Copilot.',
+          },
+        ],
       },
-      // find text that doesn't locate → apply dropped, conflict still listed
-      { a: 'x', b: 'y', when: 'w', fix: 'f' },
+      {
+        kind: 'redundant',
+        a: 'flag for a human',
+        b: '',
+        when: 'repeats the rule above',
+        why: 'the second rule adds nothing',
+        severity: 'low',
+        fix: 'delete it',
+        // empty replace — a deletion — locates and is offered
+        apply: [
+          {
+            field: 'instructions',
+            find: 'Flag for a human whenever the customer asks for one.',
+            replace: '',
+          },
+        ],
+      },
+      // one edit's find doesn't locate → the whole apply set is dropped
+      // (a half-applied fix is worse than none), conflict still listed
+      { kind: 'conflict', a: 'x', b: 'y', when: 'w', why: '', fix: 'f' },
     ]);
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     const userMsg = body.messages.find((m: { role: string }) => m.role === 'user').content;

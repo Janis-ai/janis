@@ -735,48 +735,66 @@ export async function draftExpectation(
   return text ? text.slice(0, 1000) : null;
 }
 
+export interface PromptEdit {
+  field: 'instructions' | 'tone' | 'knowledge';
+  /** Knowledge note index — only when field === 'knowledge'. */
+  index?: number;
+  /** The directive's text, verbatim from that field. */
+  find: string;
+  /** The rewritten text — '' deletes the found text. */
+  replace: string;
+}
+
 export interface PromptConflict {
-  /** The two directives that collide, quoted short. */
+  /** 'conflict' = directives that collide in one situation;
+   *  'redundant' = one fully covers the other — bloat, not a collision. */
+  kind: 'conflict' | 'redundant';
+  /** The two directives involved, quoted short. */
   a: string;
   b: string;
-  /** The situation where they fight. */
+  /** The situation where they fight (conflicts), or why one is
+   *  redundant (redundancies). */
   when: string;
+  /** One or two sentences on why the pair is a problem. */
+  why: string;
+  severity?: 'high' | 'medium' | 'low';
   /** One-line resolution keeping the operator's likely intent. */
   fix: string;
-  /** A concrete text edit resolving the pair — verified to locate
-   *  verbatim in the named field before it's offered. Absent when no
-   *  single find/replace resolves it (procedure, platform text). */
-  apply?: {
-    field: 'instructions' | 'tone' | 'knowledge';
-    /** Knowledge note index — only when field === 'knowledge'. */
-    index?: number;
-    /** The directive's text, verbatim from that field. */
-    find: string;
-    /** The rewrite that resolves the collision. */
-    replace: string;
-  };
+  /** Concrete text edits resolving the pair — every find verified to
+   *  locate verbatim in its field before the set is offered (all edits
+   *  apply together or not at all). Absent when no set of find/replace
+   *  edits resolves it (procedure, platform text). */
+  apply?: PromptEdit[];
 }
 
 const CONFLICT_CHECK_SYSTEM =
-  "You audit a customer-support AI agent's instruction layers for " +
-  'contradictions — directive pairs that push the model to different ' +
+  "You audit a customer-support AI agent's instruction layers for two " +
+  'problems. "conflict": directive pairs that push the model to different ' +
   'behavior in the same situation. Example: "flag for a human when the ' +
   'customer asks" vs "requests for manual intervention → send them to sign ' +
-  'in". For each real collision quote each directive briefly ("a", "b"), ' +
-  'name the situation where they collide ("when"), and suggest a one-line ' +
-  'resolution that keeps the operator\'s likely intent ("fix"). Rules that ' +
-  'merely cover different situations are NOT conflicts — only report pairs ' +
-  'a model could plausibly apply to the same message. Platform-injected ' +
-  'lines are listed for context; the fix must target authored text. ' +
-  'For each conflict also propose the minimal text edit resolving it as ' +
-  '"apply": {"field": "instructions"|"tone"|"knowledge", "index": <the ' +
-  'bracketed knowledge note number, only when field is "knowledge">, ' +
-  '"find": "the directive copied VERBATIM from that field — an exact ' +
-  'substring, no paraphrase", "replace": "the rewritten text"}. Prefer ' +
-  'narrowing the over-broad rule over deleting it; omit "apply" when no ' +
-  'single text edit resolves the pair. Reply with ONLY a JSON array, no ' +
-  'prose: [{"a":"…","b":"…","when":"…","fix":"…","apply":{…}}] — an empty ' +
-  'array when nothing collides.';
+  'in". "redundant": a directive that fully repeats another, or an ' +
+  'unconditional blanket rule that just restates a scoped one — bloat ' +
+  'the model must wade through, not a collision. For each finding quote ' +
+  'each directive briefly ("a", "b" — b may be "" when the problem is a ' +
+  'single over-broad rule), name "when" (the situation where they ' +
+  'collide, or why one is redundant), explain the problem in one or two ' +
+  'sentences ("why"), rate "severity" high|medium|low, and suggest a ' +
+  'one-line resolution that keeps the operator\'s likely intent ("fix"). ' +
+  'Rules that merely cover different situations are NOT conflicts — only ' +
+  'report pairs a model could plausibly apply to the same message. ' +
+  'Platform-injected lines are listed for context; the fix must target ' +
+  'authored text. For each finding also propose the text edits resolving ' +
+  'it as "apply": [{"field": "instructions"|"tone"|"knowledge", "index": ' +
+  '<the bracketed knowledge note number, only when field is ' +
+  '"knowledge">, "find": "the directive copied VERBATIM from that field ' +
+  '— an exact substring, no paraphrase", "replace": "the rewritten text ' +
+  '— an empty string deletes the found text"}]. All edits apply together ' +
+  '— when the fix touches more than one directive include every edit; ' +
+  'prefer narrowing an over-broad rule over deleting it; omit "apply" ' +
+  'entirely when no set of edits resolves the pair. Reply with ONLY a ' +
+  'JSON array, no prose: [{"kind":"conflict","a":"…","b":"…","when":"…",' +
+  '"why":"…","severity":"high","fix":"…","apply":[{…}]}] — an empty ' +
+  'array when the surface is clean.';
 
 /** Locate a find-string in field text — verbatim first, then a
  *  whitespace-normalized retry that maps back to the real substring so
@@ -793,37 +811,20 @@ function locateInField(source: string, find: string): string | null {
   return m ? m[0] : null;
 }
 
-/** Read the agent's rule surface the way the model does — instructions,
- *  tone, always-injected knowledge notes, procedure triggers, plus the
- *  platform persona/context lines that fill gaps — and report directive
- *  pairs that fight in the same situation. The run earlier this lives to
- *  catch: two authored rules that disagree only ever surface as a bad
- *  reply. Returns null when the agent has no LLM or the call fails. */
-export async function checkPromptConflicts(
-  db: Db,
-  agent: AgentRow,
-  draft?: { instructions?: string; tone?: string },
-): Promise<PromptConflict[] | null> {
-  let llm: LlmSettings;
-  try {
-    llm = await llmFor(db, agent);
-  } catch {
-    return null;
-  }
-  if (!llm.apiKey) return null;
+type RuleSurfaceCfg = {
+  system_prompt?: string;
+  tone?: string;
+  knowledge?: string[];
+  procedures?: { name: string; when?: string; steps: (string | { text: string; tool?: string })[] }[];
+  handoff_enabled?: boolean;
+};
 
-  const cfg = (agent.config ?? {}) as {
-    system_prompt?: string;
-    tone?: string;
-    knowledge?: string[];
-    procedures?: { name: string; when?: string; steps: (string | { text: string; tool?: string })[] }[];
-    handoff_enabled?: boolean;
-  };
-  const instructions =
-    draft?.instructions !== undefined ? draft.instructions : (cfg.system_prompt ?? '');
-  const tone = draft?.tone !== undefined ? draft.tone : (cfg.tone ?? '');
-
-  const parts = [
+/** The agent's rule surface the way the model reads it — authored
+ *  instructions (or the platform default persona), tone, always-injected
+ *  knowledge notes, procedure triggers, plus the platform context lines
+ *  that fill gaps. Shared by the conflict audit and the rewrite. */
+function ruleSurface(agent: AgentRow, cfg: RuleSurfaceCfg, instructions: string, tone: string): string {
+  return [
     instructions.trim()
       ? `Authored instructions:\n${instructions.slice(0, 8000)}`
       : `Built-in persona (platform default — the operator can't edit this):\n${defaultPersona(agent.name, { handoff: cfg.handoff_enabled !== false }).slice(0, 4000)}`,
@@ -852,6 +853,32 @@ export async function checkPromptConflicts(
   ]
     .filter(Boolean)
     .join('\n\n');
+}
+
+/** Read the agent's rule surface the way the model does — instructions,
+ *  tone, always-injected knowledge notes, procedure triggers, plus the
+ *  platform persona/context lines that fill gaps — and report directive
+ *  pairs that fight in the same situation. The run earlier this lives to
+ *  catch: two authored rules that disagree only ever surface as a bad
+ *  reply. Returns null when the agent has no LLM or the call fails. */
+export async function checkPromptConflicts(
+  db: Db,
+  agent: AgentRow,
+  draft?: { instructions?: string; tone?: string },
+): Promise<PromptConflict[] | null> {
+  let llm: LlmSettings;
+  try {
+    llm = await llmFor(db, agent);
+  } catch {
+    return null;
+  }
+  if (!llm.apiKey) return null;
+
+  const cfg = (agent.config ?? {}) as RuleSurfaceCfg;
+  const instructions =
+    draft?.instructions !== undefined ? draft.instructions : (cfg.system_prompt ?? '');
+  const tone = draft?.tone !== undefined ? draft.tone : (cfg.tone ?? '');
+  const parts = ruleSurface(agent, cfg, instructions, tone);
 
   const res = await complete({ ...llm, temperature: 0, maxTokens: 1400 }, CONFLICT_CHECK_SYSTEM, [
     { role: 'user', content: `Agent: ${agent.name}\n\n${parts}` },
@@ -890,47 +917,124 @@ export async function checkPromptConflicts(
   const out: PromptConflict[] = [];
   for (const item of parsed.slice(0, 10)) {
     const c = item as {
+      kind?: unknown;
       a?: unknown;
       b?: unknown;
       when?: unknown;
+      why?: unknown;
+      severity?: unknown;
       fix?: unknown;
-      apply?: { field?: unknown; index?: unknown; find?: unknown; replace?: unknown };
+      apply?: unknown;
     };
     if (typeof c.a !== 'string' || typeof c.b !== 'string') continue;
-    let apply: PromptConflict['apply'];
-    const ap = c.apply;
-    if (
-      ap &&
-      (ap.field === 'instructions' || ap.field === 'tone' || ap.field === 'knowledge') &&
-      typeof ap.find === 'string' &&
-      ap.find.trim() &&
-      typeof ap.replace === 'string' &&
-      ap.replace.trim()
-    ) {
+    // Single-edit {…} or multi-edit […] — normalize to a list, then offer
+    // it only when EVERY find locates: a half-applied fix leaves the text
+    // worse than untouched. Empty replace is a deletion, so only `find`
+    // needs to be non-empty.
+    const rawEdits = Array.isArray(c.apply)
+      ? c.apply
+      : c.apply && typeof c.apply === 'object'
+        ? [c.apply]
+        : [];
+    const edits: PromptEdit[] = [];
+    let applyOk = rawEdits.length > 0;
+    for (const e of rawEdits) {
+      const ap = e as { field?: unknown; index?: unknown; find?: unknown; replace?: unknown };
+      if (
+        !(ap.field === 'instructions' || ap.field === 'tone' || ap.field === 'knowledge') ||
+        typeof ap.find !== 'string' ||
+        !ap.find.trim() ||
+        typeof ap.replace !== 'string'
+      ) {
+        applyOk = false;
+        break;
+      }
       const index =
         ap.field === 'knowledge' && Number.isInteger(ap.index) ? (ap.index as number) : undefined;
       const source = fieldText(ap.field, index);
-      // Only offer the patch when the find text actually locates —
-      // verbatim first, whitespace-normalized after.
       const located = source === null ? null : locateInField(source, ap.find);
-      if (located) {
-        apply = {
-          field: ap.field,
-          ...(index !== undefined ? { index } : {}),
-          find: located.slice(0, 2000),
-          replace: ap.replace.slice(0, 2000),
-        };
+      if (!located) {
+        applyOk = false;
+        break;
       }
+      edits.push({
+        field: ap.field,
+        ...(index !== undefined ? { index } : {}),
+        find: located.slice(0, 2000),
+        replace: ap.replace.slice(0, 2000),
+      });
     }
     out.push({
+      kind: c.kind === 'redundant' ? 'redundant' : 'conflict',
       a: c.a.slice(0, 300),
       b: c.b.slice(0, 300),
       when: typeof c.when === 'string' ? c.when.slice(0, 300) : '',
+      why: typeof c.why === 'string' ? c.why.slice(0, 600) : '',
+      ...(c.severity === 'high' || c.severity === 'medium' || c.severity === 'low'
+        ? { severity: c.severity }
+        : {}),
       fix: typeof c.fix === 'string' ? c.fix.slice(0, 300) : '',
-      ...(apply ? { apply } : {}),
+      ...(applyOk ? { apply: edits } : {}),
     });
   }
   return out;
+}
+
+const REWRITE_SYSTEM =
+  "You rewrite a customer-support AI agent's authored instructions to " +
+  'remove contradictions and redundancy. Preserve EVERY behavioral rule ' +
+  '— including odd or over-specific lines, which usually exist because ' +
+  'of a real failure — but consolidate unconditional blanket rules that ' +
+  'fight the scoped ones and merge directives that repeat each other. ' +
+  "Keep the operator's voice and bullet format; add nothing they didn't " +
+  'write — never copy platform-injected context lines into the output, ' +
+  "they already apply unauthored. Output ONLY the rewritten instructions " +
+  '— no preamble, no commentary.';
+
+/** Propose a consolidated rewrite of the authored instructions — the
+ *  manual answer to redundancy/bloat that per-pair fixes can't reach.
+ *  Lands in the editor as draft text for the operator to review and
+ *  save; never writes config. Null when the agent has no authored
+ *  instructions (the platform default isn't editable), no LLM, or the
+ *  call fails. */
+export async function rewritePrompt(
+  db: Db,
+  agent: AgentRow,
+  draft?: { instructions?: string; tone?: string },
+): Promise<string | null> {
+  let llm: LlmSettings;
+  try {
+    llm = await llmFor(db, agent);
+  } catch {
+    return null;
+  }
+  if (!llm.apiKey) return null;
+
+  const cfg = (agent.config ?? {}) as RuleSurfaceCfg;
+  const instructions =
+    draft?.instructions !== undefined ? draft.instructions : (cfg.system_prompt ?? '');
+  if (!instructions.trim()) return null;
+  const tone = draft?.tone !== undefined ? draft.tone : (cfg.tone ?? '');
+
+  const res = await complete({ ...llm, temperature: 0, maxTokens: 3000 }, REWRITE_SYSTEM, [
+    {
+      role: 'user',
+      content: `Agent: ${agent.name}\n\n${ruleSurface(agent, cfg, instructions, tone)}\n\nRewrite ONLY the authored instructions.`,
+    },
+  ]).catch(() => null);
+  if (!res?.text?.trim()) return null;
+  if (res.promptTokens || res.completionTokens) {
+    await recordLlmUsage(db, {
+      workspaceId: agent.workspaceId,
+      agentId: agent.id,
+      model: res.model,
+      capModel: llm.model,
+      promptTokens: res.promptTokens,
+      completionTokens: res.completionTokens,
+      byok: llm.byok,
+    }).catch(() => {});
+  }
+  return res.text.trim().slice(0, 12_000);
 }
 
 const SCENARIO_CATEGORIES = [

@@ -1134,34 +1134,45 @@ export function InstructionsSection({
     pending?: boolean;
     err?: string;
     conflicts?: {
+      kind?: 'conflict' | 'redundant';
       a: string;
       b: string;
       when: string;
+      why?: string;
+      severity?: 'high' | 'medium' | 'low';
       fix: string;
       apply?: {
         field: 'instructions' | 'tone' | 'knowledge';
         index?: number;
         find: string;
         replace: string;
-      };
+      }[];
     }[] | null;
   } | null>(null);
+  // "Suggest rewrite" — a consolidated-instructions proposal that lands
+  // in the draft textarea for review; saving stays on the normal flow.
+  const [rewrite, setRewrite] = useState<{ pending?: boolean; err?: string; text?: string } | null>(
+    null,
+  );
   // Cards the operator applied a suggested patch to — the draft cfg
   // changes like a typed edit; saving stays on the normal Save flow.
   const [applied, setApplied] = useState<Set<number>>(new Set());
-  const applyFix = (i: number, a: { field: string; index?: number; find: string; replace: string }) => {
-    if (a.field === 'instructions')
-      setCfg({ ...cfg, system_prompt: (cfg.system_prompt ?? '').replace(a.find, a.replace) });
-    else if (a.field === 'tone')
-      setCfg({ ...cfg, tone: (cfg.tone ?? '').replace(a.find, a.replace) });
-    else if (a.field === 'knowledge' && a.index !== undefined)
-      setCfg({
-        ...cfg,
-        knowledge: (cfg.knowledge ?? []).map((k, j) =>
+  const applyFix = (
+    i: number,
+    edits: { field: string; index?: number; find: string; replace: string }[],
+  ) => {
+    const next = { ...cfg };
+    for (const a of edits) {
+      if (a.field === 'instructions')
+        next.system_prompt = (next.system_prompt ?? '').replace(a.find, a.replace);
+      else if (a.field === 'tone') next.tone = (next.tone ?? '').replace(a.find, a.replace);
+      else if (a.field === 'knowledge' && a.index !== undefined)
+        next.knowledge = (next.knowledge ?? []).map((k, j) =>
           j === a.index ? k.replace(a.find, a.replace) : k,
-        ),
-      });
-    setApplied(new Set(applied).add(i));
+        );
+    }
+    setCfg(next);
+    setApplied((prev) => new Set(prev).add(i));
   };
   const runCheck = async () => {
     setCheck({ pending: true });
@@ -1181,6 +1192,18 @@ export function InstructionsSection({
       setCheck({ err: (e as Error).message });
     }
   };
+  const runRewrite = async () => {
+    setRewrite({ pending: true });
+    try {
+      const r = await api<{ rewrite: string }>(`/api/agents/${agentId}/prompt-rewrite`, {
+        method: 'POST',
+        body: JSON.stringify({ instructions: cfg.system_prompt ?? '', tone: cfg.tone ?? '' }),
+      });
+      setRewrite({ text: r.rewrite });
+    } catch (e) {
+      setRewrite({ err: (e as Error).message });
+    }
+  };
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12, flex: 1 }}>
       <div className="row" style={{ alignItems: 'center' }}>
@@ -1190,10 +1213,20 @@ export function InstructionsSection({
           <button
             className="btn ghost sm"
             disabled={check?.pending}
-            title="Audit the instructions, tone, knowledge notes and procedures for rules that contradict each other"
+            title="Audit the instructions, tone, knowledge notes and procedures for rules that contradict or repeat each other"
             onClick={() => void runCheck()}
           >
             {check?.pending ? 'Checking…' : 'Check for conflicts'}
+          </button>
+        )}
+        {isAdmin && agentId && (
+          <button
+            className="btn ghost sm"
+            disabled={rewrite?.pending}
+            title="Propose a consolidated rewrite of the instructions — lands in the draft below for you to review and Save"
+            onClick={() => void runRewrite()}
+          >
+            {rewrite?.pending ? 'Rewriting…' : 'Suggest rewrite'}
           </button>
         )}
         {isAdmin && onSave && (
@@ -1234,16 +1267,38 @@ export function InstructionsSection({
                 <div>
                   <span className="muted">“{c.a}”</span>
                 </div>
-                <div className="muted" style={{ marginTop: 2 }}>
-                  vs
+                {c.b && (
+                  <>
+                    <div className="muted" style={{ marginTop: 2 }}>
+                      vs
+                    </div>
+                    <div>
+                      <span className="muted">“{c.b}”</span>
+                    </div>
+                  </>
+                )}
+                <div style={{ marginTop: 4, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {c.severity && (
+                    <span
+                      className={`badge ${
+                        c.severity === 'high'
+                          ? 'negative'
+                          : c.severity === 'low'
+                            ? 'neutral'
+                            : 'warn'
+                      }`}
+                    >
+                      {c.severity}
+                    </span>
+                  )}
+                  <span className="badge warn">
+                    {c.kind === 'redundant' ? 'redundant' : 'collides when'}
+                  </span>
+                  <span>{c.when}</span>
                 </div>
-                <div>
-                  <span className="muted">“{c.b}”</span>
-                </div>
-                {c.when && (
-                  <div style={{ marginTop: 4 }}>
-                    <span className="badge warn">collides when</span>{' '}
-                    {c.when}
+                {c.why && (
+                  <div className="muted" style={{ marginTop: 4 }}>
+                    {c.why}
                   </div>
                 )}
                 {c.fix && (
@@ -1255,11 +1310,7 @@ export function InstructionsSection({
                   <button
                     className="btn sm"
                     style={{ marginTop: 6 }}
-                    title={`Rewrite the ${
-                      c.apply.field === 'knowledge'
-                        ? `knowledge note #${(c.apply.index ?? 0) + 1}`
-                        : c.apply.field
-                    } text — lands as an edit you review and Save`}
+                    title="Rewrite the quoted text — lands as edits you review and Save"
                     onClick={() => applyFix(i, c.apply!)}
                   >
                     Apply fix
@@ -1270,9 +1321,47 @@ export function InstructionsSection({
                     Applied — review the updated text, then Save
                   </div>
                 )}
+                {!c.apply && !applied.has(i) && (
+                  <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+                    No one-click fix — the suggestion needs a manual edit above
+                  </div>
+                )}
               </div>
             ))
           )}
+        </div>
+      )}
+      {rewrite?.err && (
+        <div className="muted" style={{ fontSize: 12, color: 'var(--danger)' }}>
+          Rewrite failed — {rewrite.err}
+        </div>
+      )}
+      {rewrite?.text && (
+        <div className="card" style={{ padding: 8, fontSize: 12 }}>
+          <div className="muted" style={{ marginBottom: 4 }}>
+            Suggested rewrite — it lands in the draft below for you to review; nothing saves until
+            you Save.
+          </div>
+          <textarea
+            readOnly
+            rows={10}
+            style={{ width: '100%', resize: 'vertical' }}
+            value={rewrite.text}
+          />
+          <div className="row" style={{ marginTop: 6, gap: 6 }}>
+            <button
+              className="btn primary sm"
+              onClick={() => {
+                setCfg({ ...cfg, system_prompt: rewrite.text });
+                setRewrite(null);
+              }}
+            >
+              Use this rewrite
+            </button>
+            <button className="btn ghost sm" onClick={() => setRewrite(null)}>
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
       <ReadOnly off={!isAdmin}>

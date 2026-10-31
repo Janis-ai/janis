@@ -48,7 +48,7 @@ import {
   triggerOf,
   type MatchTurn,
 } from '../lib/promptMatch.js';
-import { checkpointIndices, checkPromptConflicts, draftExpectation, generateScenarioDrafts, judgeExpectation, replayContextFrom, runAgentTest, stripInternalTurns, transcriptTurns, type TestTurn } from '../lib/agentTests.js';
+import { checkpointIndices, checkPromptConflicts, draftExpectation, generateScenarioDrafts, judgeExpectation, replayContextFrom, rewritePrompt, runAgentTest, stripInternalTurns, transcriptTurns, type TestTurn } from '../lib/agentTests.js';
 import { deleteAgentsCascade } from '../lib/agentCleanup.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { configVersion } from '../lib/configVersion.js';
@@ -3531,6 +3531,29 @@ export function agentRoutes(db: Db) {
       const conflicts = await checkPromptConflicts(db, agent, c.req.valid('json'));
       if (conflicts === null) return c.json({ error: 'check failed — check the agent has a working LLM' }, 502);
       return c.json({ conflicts });
+    },
+  );
+
+  // Consolidated-rewrite proposal — pairs fix collisions one edit at a
+  // time, this answers "the whole block is bloated". Returns replacement
+  // text only; the editor lands it in the draft for review + Save.
+  app.post(
+    '/:id/prompt-rewrite',
+    agentAdmin,
+    zValidator(
+      'json',
+      z.object({
+        instructions: z.string().max(20_000).optional(),
+        tone: z.string().max(2000).optional(),
+      }),
+    ),
+    async (c) => {
+      const agent = await ownedAgent(c);
+      if (!agent) return c.json({ error: 'not found' }, 404);
+      const rewrite = await rewritePrompt(db, agent, c.req.valid('json'));
+      if (rewrite === null)
+        return c.json({ error: 'rewrite failed — the agent needs authored instructions and a working LLM' }, 502);
+      return c.json({ rewrite });
     },
   );
 

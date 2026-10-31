@@ -141,7 +141,21 @@ via Copilot") — invisible until a regression test failed. POST
 knowledge notes, procedure triggers, and the platform persona/context
 lines) and returns colliding pairs {a, b, when, fix}. The Instructions
 card has a Check-for-conflicts button rendering the pairs + suggestion.
-checkPromptConflicts lives in lib/agentTests.ts.
+checkPromptConflicts lives in lib/agentTests.ts. Oct 31 deepened it:
+findings now carry kind (conflict | redundant), severity, a "why"
+sentence, and apply is a LIST of find/replace edits (delete = empty
+replace, multi-directive fixes — verified all-or-none: any find that
+doesn't locate verbatim drops the whole set rather than half-applying);
+no-apply findings say "no one-click fix" instead of silently lacking the
+button. New POST /agents/:id/prompt-rewrite + "Suggest rewrite" button
+proposes a consolidated full-instructions rewrite (preserve every rule,
+merge dupes, never import platform-injected lines) that lands in the
+draft textarea for review — saves stay on the normal flow. The concierge
+persona itself got the same treatment (scripts/concierge-persona.txt):
+the unconditional "list data categories instead of offering a handoff"
+and "specific realistic timeframe" lines were removed — handoff now
+explicitly wins, no invented SLAs, and approval-card retries require an
+actual error (a blind re-call double-posts the proposal).
 
 **Test sims understand human handoffs (Oct 30):** rescue-saved tests replayed
 without the conversation's escalation state — the synthetic conv carried
