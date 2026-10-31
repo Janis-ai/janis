@@ -265,11 +265,19 @@ The Behavior section holds the agent's greeting, system prompt, quick replies (I
 
 ---
 
-The Instructions card can audit itself: "Check for conflicts" reads the instructions, tone and injected context the way the model does and flags rules that contradict or duplicate each other — each finding carries an "Apply fix" edit or a "no one-click fix" note, and "Suggest rewrite" proposes a consolidated rewrite (with a dropped/added rules report before use). Both land as drafts for normal review.
+"Check for conflicts" on the agent's Instructions card (admins) audits the whole rule surface the way the model reads it — authored instructions and tone (in-flight unsaved text counts), injected knowledge notes, procedure triggers, and the platform-injected lines — and flags directive pairs that collide in the same situation or fully repeat each other, each quoted with the situation, a "why", a severity and a suggested fix.
 
 ---
 
-Version history keeps a snapshot on every save: instructions, greeting and quick replies on the Instructions card, and each help-center article — open the history to compare and restore an earlier version (restoring is itself a new version, nothing is lost).
+Each conflict finding either carries an "Apply fix" button — verbatim text edits to instructions, tone or a specific knowledge note that the server verified all locate and apply together — or says "no one-click fix"; applying auto-saves and re-runs the audit so the next finding is ready to click through. A second-pass verifier drops likely false positives (still listed, marked dismissed), and the audit also re-runs itself on every instructions save.
+
+---
+
+"Suggest rewrite" beside it (admins) proposes a consolidated rewrite of the instructions — reorganization, not re-authoring: the latest conflict findings steer which pairs merge, every rule must survive, nothing new is invented — and a review pass diffs the proposal against the source so the card lists any dropped or added rules with quotes before "Use this rewrite". It lands in the draft editor for normal Save; it never writes config itself, and there's nothing to rewrite when the agent still runs the default persona.
+
+---
+
+Version history keeps a snapshot on every save — instructions, tone, greeting and quick replies under the Instructions card ("Version history — N saved versions", each row editor-stamped), and each help-center article's full body — and admins can Restore an earlier version. A restore writes immediately as a new version rather than a draft, so nothing is ever lost; the coverage note is honest that saves predating the feature weren't snapshotted. Knowledge notes and procedures are NOT versioned — don't claim they are.
 
 ---
 
