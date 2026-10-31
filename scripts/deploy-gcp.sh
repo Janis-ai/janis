@@ -143,9 +143,13 @@ envs.setdefault('UPLOAD_DIR', '/app/data/uploads')
 
 # PUBLIC_ORIGIN (set in .env.production once the custom domain is live)
 # canonicalizes links/OAuth callbacks to the branded domain; otherwise the
-# raw run.app URL is used.
+# raw run.app URL is used. It's a FALLBACK: explicit API_ORIGIN/WEB_ORIGIN in
+# the env files win — the console serves on www.janis.ai while API-facing
+# callbacks (Twilio sigs, Shopify/Meta webhooks, OAuth URI fallbacks) stay
+# on app.janis.ai where providers registered them.
 public_origin = envs.pop('PUBLIC_ORIGIN', '') or os.environ['BASE']
-envs['API_ORIGIN'] = envs['WEB_ORIGIN'] = public_origin
+envs.setdefault('API_ORIGIN', public_origin)
+envs.setdefault('WEB_ORIGIN', public_origin)
 if 'SESSION_SECRET' not in envs:
     envs['SESSION_SECRET'] = secrets.token_urlsafe(32)
 # Always rewrite — a stale file from an earlier deploy must not attach

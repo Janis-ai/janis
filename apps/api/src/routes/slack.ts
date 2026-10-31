@@ -2144,7 +2144,7 @@ export function slackPublicRoutes(db: Db) {
           '• `/pause [minutes|forever]` — pause the agent on this channel’s latest conversation\n' +
           '• `/resume` — hand the conversation back to the agent\n' +
           '• DM `@janis` — the same concierge as Ask Janis in the console\n' +
-          '• <https://app.janis.ai|app.janis.ai> — agents, inbox, alerts and settings',
+          `• <${env.webOrigin}|${new URL(env.webOrigin).host}> — agents, inbox, alerts and settings`,
       });
     }
 
