@@ -94,6 +94,22 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Slack-style mobile shell (Oct 31):** at phone width the console spent
+~110px on a dead icon rail + dock strip. Now: `.sidebar` becomes an
+off-canvas drawer (full labels) behind a sticky `.mobile-bar` (☰ + the
+dock strip's icons) at ≤720px; `.nav-scrim`/Esc/nav-click/route-change
+close it. Conversation routes (`.layout.conv-open`) hide the bar and own
+the screen — `.conv-mobile-head` (back chevron → `navigate(-1)`, falling
+back to the owning inbox on cold opens + avatar/name/channel/state) and
+`.conv-actions` collapses utility buttons to icons (`.btn-label` spans).
+`.dock` went full-screen ≤720 (was 640); `/ask` hides `.main` and gets a
+`dock-back` chevron in place of the minimize glyph. Audit fixes folded in:
+literal `&amp;` in AgentDetail credentials title (JSX string, not decoded),
+`.ov-cols`/`.ov-side` stacking on AgentOverview (was ~50px for recent
+conversations), `.chan-row` names crushed to one char, Contacts search
+`.contacts-search` flex-basis 100%. `scripts/ui/mobile-audit.mjs` drives
+the whole console at 390×844 and reports scrollWidth overflow.
+
 **Loose lists keep their numbering (Oct 31):** agent replies rendered every
 numbered step as "1." — `splitBlocks` flushed the list at each blank line,
 so a model-style loose list (`1. …\n\n1. …`) became N one-item `<ol>`s that
