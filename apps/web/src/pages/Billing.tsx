@@ -60,6 +60,9 @@ export default function Billing() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [interval, setInterval_] = useState<'month' | 'year'>('month');
+  const [usageSort, setUsageSort] = useState<
+    'cost-desc' | 'cost-asc' | 'name-asc' | 'name-desc'
+  >('cost-desc');
   const qc = useQueryClient();
   const [upgraded, setUpgraded] = useState(
     () => new URLSearchParams(window.location.search).has('upgraded'),
@@ -85,6 +88,17 @@ export default function Billing() {
   useEffect(() => {
     if (data && upgraded && data.plan.key !== 'free') setUpgraded(false);
   }, [data, upgraded]);
+
+  const usageRows = [...(data?.by_agent ?? [])].sort((a, b) => {
+    const byName = a.agent_name.localeCompare(b.agent_name, undefined, {
+      sensitivity: 'base',
+    });
+    const byCost = b.cost_cents - a.cost_cents;
+    if (usageSort === 'cost-asc') return -byCost || byName;
+    if (usageSort === 'name-asc') return byName || byCost;
+    if (usageSort === 'name-desc') return -byName || byCost;
+    return byCost || byName;
+  });
 
   const checkout = async (plan: string) => {
     setError('');
@@ -316,11 +330,26 @@ export default function Billing() {
           </div>
 
           <div className="card">
-            <h3 style={{ marginTop: 0 }}>LLM usage by agent</h3>
+            <div className="row" style={{ marginTop: 0 }}>
+              <h3 style={{ marginTop: 0 }}>LLM usage by agent</h3>
+              <span className="grow" />
+              <label className="row" style={{ gap: 4 }}>
+                <span className="muted">Sort</span>
+                <select
+                  value={usageSort}
+                  onChange={(e) => setUsageSort(e.target.value as typeof usageSort)}
+                >
+                  <option value="cost-desc">cost ↓</option>
+                  <option value="cost-asc">cost ↑</option>
+                  <option value="name-asc">name A–Z</option>
+                  <option value="name-desc">name Z–A</option>
+                </select>
+              </label>
+            </div>
             {data.by_agent.length === 0 && (
               <div className="muted">No metered LLM usage this period.</div>
             )}
-            {data.by_agent.map((a) => (
+            {usageRows.map((a) => (
               <div key={`${a.agent_id ?? 'none'}:${a.model ?? ''}`} className="row" style={{ marginTop: 6 }}>
                 <span className="grow">
                   {a.agent_name}
