@@ -1612,11 +1612,10 @@ details summary:hover { color: var(--text); }
   .snooze-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
   .snooze-wrap .snz-ic { display: block; color: var(--muted); }
   .snooze-wrap.on .snz-ic { color: var(--accent); }
-  /* Any open sheet owns the scroll — backdrops aren't scrollable, so
-     touch-move chains through to .main and the two scrollers fight.
-     Lock the page while a backdrop exists, and keep the sheet's own
-     scroll contained so edge swipes don't bleed through. */
-  .layout:has(.menu-backdrop, .nav-scrim, .conv-side-scrim, .test-dock-dim, .modal-backdrop) .main {
+  /* Sheets dismiss on outside scroll — the backdrop doesn't consume the
+     gesture, it chains to .main while the sheet folds (Layout listens for
+     touchmove/wheel over backdrops). Only true modals lock the page. */
+  .layout:has(.modal-backdrop) .main {
     overflow: hidden;
   }
   .menu-pop {

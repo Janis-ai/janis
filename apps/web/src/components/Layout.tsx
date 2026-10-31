@@ -806,6 +806,25 @@ export default function Layout() {
     return () => window.removeEventListener('keydown', onKey);
   }, [navOpen]);
 
+  // Swipe-through dismiss — a scroll gesture landing on a sheet's backdrop
+  // folds the sheet while the same gesture keeps scrolling the page under
+  // it (backdrops can't scroll, so the browser already chained the move to
+  // .main). .click() reuses each backdrop's own close handler; modals are
+  // deliberately excluded — dialogs don't dismiss on scroll.
+  useEffect(() => {
+    const SHEET_BACKDROPS = '.menu-backdrop, .nav-scrim, .conv-side-scrim, .test-dock-dim';
+    const onMove = (e: Event) => {
+      const el = (e.target as Element | null)?.closest?.(SHEET_BACKDROPS);
+      if (el instanceof HTMLElement) el.click();
+    };
+    document.addEventListener('touchmove', onMove, { passive: true });
+    document.addEventListener('wheel', onMove, { passive: true });
+    return () => {
+      document.removeEventListener('touchmove', onMove);
+      document.removeEventListener('wheel', onMove);
+    };
+  }, []);
+
   // Deeplinks: ?rail=ask | ?rail=test&agent=<id> — merged into the existing
   // params so page params like ?tab= survive. Consumed once per combo.
   const railParam = searchParams.get('rail');
