@@ -1478,7 +1478,10 @@ details summary:hover { color: var(--text); }
    dock icons, the conversation page renders its own back header. */
 .mobile-bar, .conv-mobile-head, .dock-back, .conv-side-head { display: none; }
 /* Icon + label operator buttons align everywhere; the label drops at ≤720. */
-.conv-actions button.btn, .conv-ops.btn { display: inline-flex; align-items: center; gap: 6px; }
+.conv-actions button.btn, .conv-ops.btn, .filters button.btn { display: inline-flex; align-items: center; gap: 6px; }
+/* Filter button's active count — the label carries it on desktop, the
+   badge carries it on mobile where the label is gone. */
+.filter-badge { display: none; }
 /* Snooze wraps its select — the select is the visible dropdown on desktop;
    on mobile it goes invisible and the moon icon is the button face. */
 .snooze-wrap { position: relative; display: inline-flex; align-items: center; }
@@ -1591,7 +1594,14 @@ details summary:hover { color: var(--text); }
      snooze shows just the moon (accent when snoozed). */
   .conv-actions .conv-search { flex: 1 1 0; min-width: 0; }
   .conv-actions .btn { padding: 7px 10px; }
-  .conv-actions .btn-label, .conv-ops .btn-label { display: none; }
+  .conv-actions .btn-label, .conv-ops .btn-label, .filters .btn-label { display: none; }
+  .filters button.btn { padding: 7px 10px; }
+  .filter-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px; padding: 0 4px; margin-left: 2px;
+    border-radius: 8px; background: var(--accent); color: #06281f;
+    font-size: 10px; font-weight: 700; line-height: 1;
+  }
   .conv-ops { gap: 6px; }
   .conv-ops.btn { padding: 7px 10px; }
   .snooze-wrap {

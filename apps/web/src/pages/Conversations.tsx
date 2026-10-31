@@ -354,6 +354,13 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     });
 
   const list = searching ? hits?.conversations : convList;
+  // The funnel's badge counts the assignee flag too — it lives in the
+  // popover since the header went icon-only.
+  const activeFilters = filterCount(filters) + (mine ? 1 : 0);
+  // "Save view" only earns a slot when there's a filter set worth saving —
+  // an empty view is never useful.
+  const dirtyForView =
+    filterCount(filters) > 0 || mine || query.trim().length > 0 || tab !== 'all';
   const visibleIds = (list ?? []).map((c) => c.id);
   const allChecked = visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
 
@@ -544,9 +551,12 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             )}
           </>
         )}
-        <button className="btn" title="Save current filters as a view" onClick={saveView}>
-          <Save size={14} style={{ verticalAlign: '-2px', marginRight: 4 }} />Save view
-        </button>
+        {dirtyForView && (
+          <button className="btn" title="Save current filters as a view" aria-label="Save current filters as a view" onClick={saveView}>
+            <Save size={14} style={{ verticalAlign: '-2px' }} />
+            <span className="btn-label">Save view</span>
+          </button>
+        )}
         <input
           className="search-box"
           placeholder="Search transcripts, users, ids…"
@@ -555,12 +565,16 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         />
         <span className="src-menu-wrap">
           <button
-            className={`btn${filterCount(filters) ? ' primary' : ''}`}
+            className={`btn${activeFilters ? ' primary' : ''}`}
             onClick={() => setFilterOpen((o) => !o)}
             title="Filter conversations — states, flags and signals combine (each group's boxes are 'any of')"
+            aria-label="Filter conversations"
           >
-            <ListFilter size={14} style={{ verticalAlign: '-2px', marginRight: 4 }} />
-            {filterCount(filters) ? `Filter · ${filterCount(filters)}` : 'Filter'}
+            <ListFilter size={14} style={{ verticalAlign: '-2px' }} />
+            <span className="btn-label">
+              {activeFilters ? `Filter · ${activeFilters}` : 'Filter'}
+            </span>
+            {activeFilters > 0 && <span className="filter-badge">{activeFilters}</span>}
           </button>
           {filterOpen && (
             <>
@@ -606,8 +620,24 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
                     </div>
                   );
                 })}
+                <div className="filter-group">
+                  <label className="check filter-opt">
+                    <input
+                      type="checkbox"
+                      checked={mine}
+                      onChange={(e) => setMine(e.target.checked)}
+                    />
+                    Assigned to me
+                  </label>
+                </div>
                 <div className="filter-foot">
-                  <button className="link small" onClick={() => setFilters(EMPTY_FILTERS)}>
+                  <button
+                    className="link small"
+                    onClick={() => {
+                      setFilters(EMPTY_FILTERS);
+                      setMine(false);
+                    }}
+                  >
                     Clear all
                   </button>
                   <span className="filter-hint">Search covers archived threads automatically; this filter only scopes the browse list</span>
@@ -620,10 +650,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             it everywhere (nav subsection, Copilot, the other shared pages),
             and "All agents" leaves context entirely. */}
         <AgentScopePicker slug="inbox" value={agentId || undefined} />
-        <label className="check">
-          <input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} />
-          Assigned to me
-        </label>
       </div>
 
       {selected.size > 0 && (
@@ -720,7 +746,10 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
                   : 'No conversations.'}
             </Empty>
           )}
-          {(convList?.length ?? 0) > 0 && (
+          {/* Select-all only exists to enter bulk mode — once something is
+              checked the bulk bar carries its own select-all, so this row
+              yields its space. */}
+          {selected.size === 0 && (convList?.length ?? 0) > 0 && (
             <div className="conv-select-all">
               <label className="check">
                 <input
