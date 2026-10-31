@@ -94,6 +94,23 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Google card Add drops straight into the Drive picker (Oct 30):** adding
+Sheets/Docs/Slides/Drive on an already-connected account installed the
+tools but left the card fileless — the tools can't act until a file is
+shared, and finding "Pick files…" was on the operator. The install
+mutation's onSuccess now runs the card's own `openGooglePicker(t.id)`
+when `GFILE_MIME[t.id]` matches (the four google-* templates), so the
+next click is the file. Verified in-browser end-to-end (dev): copied a
+prod `agent_connections` google row into janis_dev (same
+JANIS_SECRETS_KEY → creds decrypt; GOOGLE_CLIENT_ID/SECRET in dev .env
+mint the refresh — deploy overlays .env under .env.production, so prod
+uses the same client), plus GOOGLE_API_KEY + GOOGLE_PICKER_APP_ID copied
+.env.production → .env (needed locally; unchanged in prod). Caveat: the
+Google Picker iframe shows a sign-in wall on localhost:5173 — that
+origin isn't a registered JS origin on the OAuth client; prod origins
+work. Removing the last google-* tool GCs the connection row
+(gcUnusedConnections) — re-copy when resetting test state.
+
 **Test sims understand human handoffs (Oct 30):** rescue-saved tests replayed
 without the conversation's escalation state — the synthetic conv carried
 profile/channel/summary but not `state`, so the prompt never got the "a
