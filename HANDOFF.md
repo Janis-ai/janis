@@ -164,7 +164,16 @@ false-positive pairs like "flag a human" vs "sign in for account work"
 (server returns {conflicts, dismissed}; the UI reports the count).
 Generation stays deliberately high-recall; verification fails open.
 Also fixed at the source: the platform sign-in line now states
-escalating to a human isn't workspace-bound (hostedAgent.ts).
+escalating to a human isn't workspace-bound (hostedAgent.ts). The
+Suggest-rewrite side got the same treatment: rewritePrompt is now
+findings-aware (the latest check results steer which pairs merge),
+reorganization-not-reauthoring (no invented conventions — it had been
+inlining procedure summaries as "ask for order number"), and a second
+REWRITE_REVIEW_SYSTEM pass diffs the proposal against the source so the
+card lists dropped/added rules with quotes before Use-this-rewrite —
+silent flattening became a reviewable report. The rewrite's ruleSurface
+hides knowledge/procedure CONTENT (fields named, text withheld) — can't
+inline what it can't see.
 
 **Test sims understand human handoffs (Oct 30):** rescue-saved tests replayed
 without the conversation's escalation state — the synthetic conv carried

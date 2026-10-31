@@ -1154,9 +1154,12 @@ export function InstructionsSection({
   } | null>(null);
   // "Suggest rewrite" — a consolidated-instructions proposal that lands
   // in the draft textarea for review; saving stays on the normal flow.
-  const [rewrite, setRewrite] = useState<{ pending?: boolean; err?: string; text?: string } | null>(
-    null,
-  );
+  const [rewrite, setRewrite] = useState<{
+    pending?: boolean;
+    err?: string;
+    text?: string;
+    review?: { dropped: { text: string; why: string }[]; added: { text: string; why: string }[] };
+  } | null>(null);
   // Cards the operator applied a suggested patch to — the draft cfg
   // changes like a typed edit; Apply fix also auto-saves and re-runs the
   // audit so the next finding shows up ready to fix.
@@ -1211,11 +1214,19 @@ export function InstructionsSection({
   const runRewrite = async () => {
     setRewrite({ pending: true });
     try {
-      const r = await api<{ rewrite: string }>(`/api/agents/${agentId}/prompt-rewrite`, {
+      const r = await api<{
+        rewrite: string;
+        review?: { dropped: { text: string; why: string }[]; added: { text: string; why: string }[] };
+      }>(`/api/agents/${agentId}/prompt-rewrite`, {
         method: 'POST',
-        body: JSON.stringify({ instructions: cfg.system_prompt ?? '', tone: cfg.tone ?? '' }),
+        body: JSON.stringify({
+          instructions: cfg.system_prompt ?? '',
+          tone: cfg.tone ?? '',
+          // Findings from the latest check steer which pairs to merge.
+          ...(check?.conflicts?.length ? { conflicts: check.conflicts } : {}),
+        }),
       });
-      setRewrite({ text: r.rewrite });
+      setRewrite({ text: r.rewrite, review: r.review });
     } catch (e) {
       setRewrite({ err: (e as Error).message });
     }
@@ -1373,6 +1384,27 @@ export function InstructionsSection({
             style={{ width: '100%', resize: 'vertical' }}
             value={rewrite.text}
           />
+          {rewrite.review && (rewrite.review.dropped.length > 0 || rewrite.review.added.length > 0) && (
+            <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+              {rewrite.review.dropped.map((d, i) => (
+                <div key={`d${i}`}>
+                  <span className="badge warn">dropped</span>{' '}
+                  <span className="muted">“{d.text}”{d.why ? ` — ${d.why}` : ''}</span>
+                </div>
+              ))}
+              {rewrite.review.added.map((a, i) => (
+                <div key={`a${i}`}>
+                  <span className="badge negative">added</span>{' '}
+                  <span className="muted">“{a.text}”{a.why ? ` — ${a.why}` : ''}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {rewrite.review && rewrite.review.dropped.length === 0 && rewrite.review.added.length === 0 && (
+            <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+              Review pass: every rule in the source survives; nothing new invented.
+            </div>
+          )}
           <div className="row" style={{ marginTop: 6, gap: 6 }}>
             <button
               className="btn primary sm"

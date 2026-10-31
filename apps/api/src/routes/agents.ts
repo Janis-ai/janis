@@ -48,7 +48,7 @@ import {
   triggerOf,
   type MatchTurn,
 } from '../lib/promptMatch.js';
-import { checkpointIndices, checkPromptConflicts, draftExpectation, generateScenarioDrafts, judgeExpectation, replayContextFrom, rewritePrompt, runAgentTest, stripInternalTurns, transcriptTurns, type TestTurn } from '../lib/agentTests.js';
+import { checkpointIndices, checkPromptConflicts, draftExpectation, generateScenarioDrafts, judgeExpectation, replayContextFrom, rewritePrompt, runAgentTest, stripInternalTurns, transcriptTurns, type PromptConflict, type TestTurn } from '../lib/agentTests.js';
 import { deleteAgentsCascade } from '../lib/agentCleanup.js';
 import { recordRun } from '../lib/evalRuns.js';
 import { configVersion } from '../lib/configVersion.js';
@@ -3545,15 +3545,21 @@ export function agentRoutes(db: Db) {
       z.object({
         instructions: z.string().max(20_000).optional(),
         tone: z.string().max(2000).optional(),
+        // Latest conflict-check findings — steer which pairs to merge.
+        conflicts: z.array(z.record(z.string(), z.unknown())).max(10).optional(),
       }),
     ),
     async (c) => {
       const agent = await ownedAgent(c);
       if (!agent) return c.json({ error: 'not found' }, 404);
-      const rewrite = await rewritePrompt(db, agent, c.req.valid('json'));
-      if (rewrite === null)
+      const result = await rewritePrompt(
+        db,
+        agent,
+        c.req.valid('json') as { instructions?: string; tone?: string; conflicts?: PromptConflict[] },
+      );
+      if (result === null)
         return c.json({ error: 'rewrite failed — the agent needs authored instructions and a working LLM' }, 502);
-      return c.json({ rewrite });
+      return c.json(result);
     },
   );
 

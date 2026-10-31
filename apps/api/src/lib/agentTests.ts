@@ -828,29 +828,42 @@ type RuleSurfaceCfg = {
  *  instructions (or the platform default persona), tone, always-injected
  *  knowledge notes, procedure triggers, plus the platform context lines
  *  that fill gaps. Shared by the conflict audit and the rewrite. */
-function ruleSurface(agent: AgentRow, cfg: RuleSurfaceCfg, instructions: string, tone: string): string {
+function ruleSurface(
+  agent: AgentRow,
+  cfg: RuleSurfaceCfg,
+  instructions: string,
+  tone: string,
+  /** For the rewrite path: knowledge/procedure CONTENT tempts the model
+   *  to inline it into the instructions — name the fields without the
+   *  text so nothing is there to copy. */
+  forRewrite = false,
+): string {
   return [
     instructions.trim()
       ? `Authored instructions:\n${instructions.slice(0, 8000)}`
       : `Built-in persona (platform default — the operator can't edit this):\n${defaultPersona(agent.name, { handoff: cfg.handoff_enabled !== false }).slice(0, 4000)}`,
     tone.trim() ? `Tone rules:\n${tone.slice(0, 1000)}` : null,
     Array.isArray(cfg.knowledge) && cfg.knowledge.length
-      ? `Knowledge notes (injected into EVERY reply — models treat them as rules too):\n${cfg.knowledge
-          .slice(0, 30)
-          .map((k, i) => `- [${i}] ${k.slice(0, 400)}`)
-          .join('\n')}`
+      ? forRewrite
+        ? 'Knowledge notes exist in their own field (injected into every reply) — do not fold them into the instructions.'
+        : `Knowledge notes (injected into EVERY reply — models treat them as rules too):\n${cfg.knowledge
+            .slice(0, 30)
+            .map((k, i) => `- [${i}] ${k.slice(0, 400)}`)
+            .join('\n')}`
       : null,
     Array.isArray(cfg.procedures) && cfg.procedures.length
-      ? `Procedures (runbooks — trigger plus required steps):\n${cfg.procedures
-          .slice(0, 10)
-          .map(
-            (p) =>
-              `- ${p.name}${p.when ? ` (use when: ${p.when})` : ''}: ${p.steps
-                .map((s) => (typeof s === 'string' ? s : s.text))
-                .join(' → ')
-                .slice(0, 300)}`,
-          )
-          .join('\n')}`
+      ? forRewrite
+        ? 'Procedures exist in their own field (named runbooks with required steps) — do not fold them into the instructions.'
+        : `Procedures (runbooks — trigger plus required steps):\n${cfg.procedures
+            .slice(0, 10)
+            .map(
+              (p) =>
+                `- ${p.name}${p.when ? ` (use when: ${p.when})` : ''}: ${p.steps
+                  .map((s) => (typeof s === 'string' ? s : s.text))
+                  .join(' → ')
+                  .slice(0, 300)}`,
+            )
+            .join('\n')}`
       : null,
     'Platform-injected context the operator cannot edit (reference only):\n' +
       '- When a conversation is already escalated: "a human teammate has already been notified — keep helping normally; only re-escalate for something new"\n' +
@@ -1042,27 +1055,53 @@ export async function checkPromptConflicts(
 }
 
 const REWRITE_SYSTEM =
-  "You rewrite a customer-support AI agent's authored instructions to " +
-  'remove contradictions and redundancy. Preserve EVERY behavioral rule ' +
-  '— including odd or over-specific lines, which usually exist because ' +
-  'of a real failure — but consolidate unconditional blanket rules that ' +
-  'fight the scoped ones and merge directives that repeat each other. ' +
-  "Keep the operator's voice and bullet format; add nothing they didn't " +
-  'write — never copy platform-injected context lines into the output, ' +
-  "they already apply unauthored. Output ONLY the rewritten instructions " +
-  '— no preamble, no commentary.';
+  "You consolidate a customer-support AI agent's authored instructions " +
+  '— the task is REORGANIZATION, not re-authoring. Every behavioral ' +
+  'rule in the source must survive verbatim or merged with identical ' +
+  'meaning — odd or over-specific lines exist because of real failures ' +
+  'and are load-bearing, and every tool name and enumeration must ' +
+  'survive complete. Never add rules, policies or domain conventions ' +
+  'the source lacks (no SLAs, order numbers, ticket systems — a ' +
+  'mechanism the source does not name does not exist), never soften a ' +
+  'condition or drop a qualifier for smoothness, and never fold the ' +
+  'listed tone rules, knowledge notes, procedure summaries or ' +
+  'platform-injected lines into the instructions — they apply from ' +
+  'their own fields already. When the listed ' +
+  'findings name a colliding pair, resolve it by merging or scoping ' +
+  'the directives while keeping both behaviors. Keep the source\'s ' +
+  'format (bulleted rules) — output ONLY the rewritten instructions.';
+
+const REWRITE_REVIEW_SYSTEM =
+  "You audit a proposed rewrite of a customer-support AI agent's " +
+  'instructions against the source. Report ONLY semantic changes, not ' +
+  'rewording or reordering: "dropped" — source behaviors, conditions ' +
+  'or details the rewrite lost or softened (quote the source text); ' +
+  '"added" — rules, mechanisms or claims in the rewrite the source ' +
+  'never contained (quote the rewrite text). Both empty when the ' +
+  'rewrite preserves everything and invents nothing. Reply ONLY with ' +
+  'JSON: {"dropped":[{"text":"…","why":"…"}],"added":[{"text":"…","why":"…"}]}.';
+
+export interface RewriteReview {
+  /** Source behaviors the rewrite lost or softened. */
+  dropped: { text: string; why: string }[];
+  /** Rules or claims the rewrite invented. */
+  added: { text: string; why: string }[];
+}
 
 /** Propose a consolidated rewrite of the authored instructions — the
  *  manual answer to redundancy/bloat that per-pair fixes can't reach.
- *  Lands in the editor as draft text for the operator to review and
- *  save; never writes config. Null when the agent has no authored
- *  instructions (the platform default isn't editable), no LLM, or the
- *  call fails. */
+ *  The operator's latest conflict findings steer which pairs to merge;
+ *  a second call diffs the proposal against the source so dropped and
+ *  invented rules surface in the review card instead of silently
+ *  shipping. Lands in the editor as draft text for the operator to
+ *  review and save; never writes config. Null when the agent has no
+ *  authored instructions (the platform default isn't editable), no
+ *  LLM, or the call fails. */
 export async function rewritePrompt(
   db: Db,
   agent: AgentRow,
-  draft?: { instructions?: string; tone?: string },
-): Promise<string | null> {
+  draft?: { instructions?: string; tone?: string; conflicts?: PromptConflict[] },
+): Promise<{ rewrite: string; review: RewriteReview } | null> {
   let llm: LlmSettings;
   try {
     llm = await llmFor(db, agent);
@@ -1076,26 +1115,66 @@ export async function rewritePrompt(
     draft?.instructions !== undefined ? draft.instructions : (cfg.system_prompt ?? '');
   if (!instructions.trim()) return null;
   const tone = draft?.tone !== undefined ? draft.tone : (cfg.tone ?? '');
+  const surface = ruleSurface(agent, cfg, instructions, tone, true);
+  const findings = (draft?.conflicts ?? [])
+    .slice(0, 10)
+    .map((c) => ({ kind: c.kind, a: c.a, b: c.b, when: c.when, fix: c.fix }));
 
   const res = await complete({ ...llm, temperature: 0, maxTokens: 3000 }, REWRITE_SYSTEM, [
     {
       role: 'user',
-      content: `Agent: ${agent.name}\n\n${ruleSurface(agent, cfg, instructions, tone)}\n\nRewrite ONLY the authored instructions.`,
+      content:
+        `Agent: ${agent.name}\n\n${surface}\n\n` +
+        (findings.length
+          ? `Findings to resolve while preserving everything else:\n${JSON.stringify(findings)}\n\n`
+          : '') +
+        'Rewrite ONLY the authored instructions.',
     },
   ]).catch(() => null);
   if (!res?.text?.trim()) return null;
-  if (res.promptTokens || res.completionTokens) {
-    await recordLlmUsage(db, {
-      workspaceId: agent.workspaceId,
-      agentId: agent.id,
-      model: res.model,
-      capModel: llm.model,
-      promptTokens: res.promptTokens,
-      completionTokens: res.completionTokens,
-      byok: llm.byok,
-    }).catch(() => {});
+  const rewrite = res.text.trim().slice(0, 12_000);
+  const review: RewriteReview = { dropped: [], added: [] };
+  let usage = [res];
+  const audit = await complete({ ...llm, temperature: 0, maxTokens: 1400 }, REWRITE_REVIEW_SYSTEM, [
+    {
+      role: 'user',
+      content: `Source instructions:\n${instructions}\n\nProposed rewrite:\n${rewrite}`,
+    },
+  ]).catch(() => null);
+  if (audit) usage.push(audit);
+  const am = audit ? /\{[\s\S]*\}/.exec(audit.text ?? '') : null;
+  if (am) {
+    try {
+      const p = JSON.parse(am[0]) as { dropped?: unknown; added?: unknown };
+      const norm = (x: unknown) =>
+        (Array.isArray(x) ? x : [])
+          .slice(0, 10)
+          .map((e) => e as { text?: unknown; why?: unknown })
+          .filter((e) => typeof e.text === 'string' && e.text.trim())
+          .map((e) => ({
+            text: (e.text as string).slice(0, 300),
+            why: typeof e.why === 'string' ? e.why.slice(0, 300) : '',
+          }));
+      review.dropped = norm(p.dropped);
+      review.added = norm(p.added);
+    } catch {
+      // unparseable review — ship the rewrite without the diff report
+    }
   }
-  return res.text.trim().slice(0, 12_000);
+  for (const u of usage) {
+    if (u.promptTokens || u.completionTokens) {
+      await recordLlmUsage(db, {
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        model: u.model,
+        capModel: llm.model,
+        promptTokens: u.promptTokens,
+        completionTokens: u.completionTokens,
+        byok: llm.byok,
+      }).catch(() => {});
+    }
+  }
+  return { rewrite, review };
 }
 
 const SCENARIO_CATEGORIES = [
