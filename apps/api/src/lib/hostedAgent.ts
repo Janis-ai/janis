@@ -1120,7 +1120,7 @@ function consoleHosts(): Set<string> {
   return hosts;
 }
 
-type ConsoleSlot = { kind: 'conversation' | 'agent' | 'channel' | 'contact'; id: string; parent?: string };
+type ConsoleSlot = { kind: 'conversation' | 'agent' | 'channel' | 'contact' | 'article'; id: string; parent?: string };
 
 /** A console URL is a lie unless its path is a real route — fetch-checking
  *  can't judge an SPA (every path returns the shell's 200). Returns the id
@@ -1155,7 +1155,17 @@ function consoleSlots(pathname: string): ConsoleSlot[] | null {
   if (a === 'conversations') return b !== undefined && segs.length === 2 && isId(b) ? [{ kind: 'conversation', id: b }] : b === undefined ? [] : null;
   if (a === 'contacts') return b !== undefined && segs.length === 2 && isId(b) ? [{ kind: 'contact', id: b }] : b === undefined ? [] : null;
   if (a === 'integrations') return b !== undefined && segs.length === 2 && isId(b) ? [{ kind: 'channel', id: b }] : b === undefined ? [] : null;
-  if (a === 'help') return b && isId(b) && (segs.length === 2 || (segs.length === 3 && isId(c))) ? [{ kind: 'agent', id: b }] : null;
+  // /help/<agent>/<key> — public article permalinks key on the slug; the
+  // row uuid still resolves too (mirrors /api/help/:agentId/:articleId).
+  if (a === 'help') {
+    if (b === undefined || !isId(b)) return null;
+    if (c === undefined) return [{ kind: 'agent', id: b }];
+    if (segs.length !== 3 || !(isId(c) || /^[a-z0-9][a-z0-9-]{0,80}$/.test(c))) return null;
+    return [
+      { kind: 'agent', id: b },
+      { kind: 'article', id: c, parent: b },
+    ];
+  }
   if (a === 'llm') return b === 'callback' && segs.length === 2 ? [] : null;
   return CONSOLE_PAGES.has(a) && segs.length === 1 ? [] : null;
 }
@@ -1198,6 +1208,24 @@ function consoleIdChecker(db: Db, workspaceId: string, opts?: { crossWorkspace?:
           .select({ id: contacts.id })
           .from(contacts)
           .where(and(eq(contacts.id, id), ...scope(contacts.workspaceId)))
+          .limit(1);
+        return r.length > 0;
+      }
+      if (kind === 'article') {
+        // Slug or row uuid under the claimed agent; the public help
+        // surface serves published articles only.
+        if (!parent) return false;
+        const byId = /^[0-9a-f-]{36}$/i.test(id);
+        const r = await db
+          .select({ id: helpArticles.id })
+          .from(helpArticles)
+          .where(
+            and(
+              byId ? eq(helpArticles.id, id) : eq(helpArticles.slug, id),
+              eq(helpArticles.agentId, parent),
+              eq(helpArticles.status, 'published'),
+            ),
+          )
           .limit(1);
         return r.length > 0;
       }
@@ -1314,14 +1342,25 @@ export async function guardReplyLinks(
   await Promise.all([
     ...[...toCheck].map(async (u) => verdicts.set(u, await checkUrl(u))),
     ...[...consoleUrls].map(async (u) => {
-      const slots = consoleSlots(new URL(u).pathname);
+      const parsed = new URL(u);
+      // A console URL lifted verbatim from context is definitionally a real
+      // page — the corpus wrote it. Help permalinks carry slugs the route
+      // skeleton can't judge, and test-channel drafts resolve nowhere else.
+      const verbatim = blessed.some(
+        (b) =>
+          b.origin === parsed.origin &&
+          b.path.replace(/\/+$/, '') === parsed.pathname.replace(/\/+$/, ''),
+      );
       let verdict: LinkVerdict = 'ok';
-      if (!slots) verdict = 'dead';
-      else if (check?.exists)
-        verdict = (await Promise.all(slots.map((s) => check.exists!(s.kind, s.id, s.parent)))).every(Boolean)
-          ? 'ok'
-          : 'dead';
-      else if (check?.ids) verdict = slots.every((s) => check.ids!.has(normId(s.id))) ? 'ok' : 'dead';
+      if (!verbatim) {
+        const slots = consoleSlots(parsed.pathname);
+        if (!slots) verdict = 'dead';
+        else if (check?.exists)
+          verdict = (await Promise.all(slots.map((s) => check.exists!(s.kind, s.id, s.parent)))).every(Boolean)
+            ? 'ok'
+            : 'dead';
+        else if (check?.ids) verdict = slots.every((s) => check.ids!.has(normId(s.id))) ? 'ok' : 'dead';
+      }
       verdicts.set(u, verdict);
     }),
   ]);

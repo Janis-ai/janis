@@ -482,6 +482,43 @@ describe('guardReplyLinks', () => {
     expect(exists).toHaveBeenCalledWith('channel', '1fb291f8-c3f9-422d-bf3d-09766829efb6', '586895f3-8285-4a95-ae2d-b18f389d838d');
   });
 
+  it('keeps help-article permalinks cited verbatim from the knowledge corpus', async () => {
+    // Regression: published articles inject `URL: {webOrigin}/help/<agent>/<slug>`
+    // into context; the route skeleton only knew uuid params and stripped the
+    // slugged permalink as a non-route.
+    const article = 'https://www.janis.ai/help/586895f3-8285-4a95-ae2d-b18f389d838d/bot-platforms';
+    const r = await guardReplyLinks(`see [the guide](${article}) for setup.`, [...blessed, article]);
+    expect(r.text).toContain(article);
+    expect(r.stripped).toHaveLength(0);
+  });
+
+  it('resolves help-article slugs through the article slot', async () => {
+    const exists = vi.fn(async () => true);
+    const r = await guardReplyLinks(
+      'see https://app.janis.ai/help/586895f3-8285-4a95-ae2d-b18f389d838d/bot-platforms',
+      blessed,
+      { exists },
+    );
+    expect(r.stripped).toHaveLength(0);
+    expect(exists).toHaveBeenCalledWith('agent', '586895f3-8285-4a95-ae2d-b18f389d838d', undefined);
+    expect(exists).toHaveBeenCalledWith('article', 'bot-platforms', '586895f3-8285-4a95-ae2d-b18f389d838d');
+  });
+
+  it('strips a help-article link whose slug names no published article', async () => {
+    const exists = vi.fn(async (kind: string) => kind !== 'article');
+    const r = await guardReplyLinks(
+      'see [the guide](https://app.janis.ai/help/586895f3-8285-4a95-ae2d-b18f389d838d/made-up-guide)',
+      blessed,
+      { exists },
+    );
+    expect(r.stripped).toEqual(['https://app.janis.ai/help/586895f3-8285-4a95-ae2d-b18f389d838d/made-up-guide']);
+  });
+
+  it('strips help links under a non-uuid agent segment', async () => {
+    const r = await guardReplyLinks('see https://app.janis.ai/help/my-agent/bot-platforms', blessed);
+    expect(r.stripped).toHaveLength(1);
+  });
+
   it('keeps builder links — /agents/new and /agents/new/<id>?step=teach', async () => {
     const exists = vi.fn(async () => true);
     const r = await guardReplyLinks(

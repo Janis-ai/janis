@@ -94,6 +94,20 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Link guard learned help-article slugs (Oct 31):** the concierge cited a
+published help article (`/help/<agent>/<slug>`) verbatim from its knowledge
+context and the link guard stripped it as a non-route — `consoleSlots` only
+knew `/help/<uuid>` and `/help/<uuid>/<uuid>`, while real permalinks key on
+the slug (routes/helpCenter.ts `/api/help/:agentId/:articleId` accepts
+slug-or-uuid). Surfaced as "Run error — link guard stripped 1 URL(s)" on a
+rule-trigger run right after the WEB_ORIGIN flip to www.janis.ai moved help
+URLs onto a console host. Fix: `consoleSlots` accepts a slugged third
+segment and emits an `article` slot; `consoleIdChecker` resolves it
+slug-or-id under the claimed agent, published-only (the public surface 404s
+drafts); and a console URL matching a blessed URL verbatim (origin+path —
+the corpus wrote it) now skips structural judgment entirely, which covers
+test-channel draft citations and any future route shape.
+
 **Concierge KB + help-center refresh (Oct 31):** concierge-kb.txt grew
 129→144 entries covering everything shipped since the last pass —
 Chatfuel/ManyChat bot channels (ingest URL, ~15s sync window, human
