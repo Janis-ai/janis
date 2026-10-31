@@ -25,10 +25,10 @@ import { DockContext, type DockTab, type TestWiring } from '../lib/dockContext';
 import { t } from '../lib/i18n';
 import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
 import {
-  BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronRight, ChevronsUpDown,
+  BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronLeft, ChevronRight, ChevronsUpDown,
   Columns2, Compass, CreditCard, FlaskConical, Gauge, Inbox, Maximize2, Megaphone,
-  MessageSquarePlus, Minimize2, PenLine, Rocket, Settings, Sparkles, Users, Wrench,
-  X, Zap,
+  Menu, MessageSquarePlus, Minimize2, PenLine, Rocket, Settings, Sparkles, Users,
+  Wrench, X, Zap,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
 import { CommandPalette } from './CommandPalette';
@@ -307,6 +307,9 @@ export default function Layout() {
   // Layout owns the strip/panel chrome; a page (the builder) can portal a
   // fully-wired test panel into the Test slot, else a plain chat renders.
   const [railOpen, setRailOpen] = useState(false);
+  // Mobile (≤720px): the sidebar leaves the flow and becomes an off-canvas
+  // drawer — the top bar's ☰ opens it, scrim/Esc/nav-click/route change close.
+  const [navOpen, setNavOpen] = useState(false);
   const [railTab, setRailTab] = useState<'ask' | 'test'>('ask');
   const [testRail, setTestRail] = useState<RailRequest | null>(null);
   const [askSeed, setAskSeed] = useState<{ text: string; nonce: number } | null>(null);
@@ -450,6 +453,11 @@ export default function Layout() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const isAskPage = location.pathname === '/ask';
+  // A conversation detail owns the phone screen Slack-style — CSS drops the
+  // sidebar and dock strip under .layout.conv-open at the mobile breakpoint.
+  const isConvPage =
+    /^\/conversations\/[^/]+$/.test(location.pathname) ||
+    /^\/agents\/[^/]+\/inbox\/[^/]+$/.test(location.pathname);
   // A shared page's scoped URL is still that page — /agents/:id/inbox lights
   // Inbox, not Agents (Agents itself is `end`-matched, list page only).
   const scopedActive =
@@ -771,6 +779,7 @@ export default function Layout() {
       return;
     }
     prevNav.current = key;
+    setNavOpen(false);
     if (window.matchMedia('(max-width: 1199px)').matches) setRailOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location.pathname, location.search]);
@@ -786,6 +795,16 @@ export default function Layout() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [railOpen, isAskPage]);
+
+  // The mobile nav drawer dismisses like the dock — Escape too.
+  useEffect(() => {
+    if (!navOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setNavOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navOpen]);
 
   // Deeplinks: ?rail=ask | ?rail=test&agent=<id> — merged into the existing
   // params so page params like ?tab= survive. Consumed once per combo.
@@ -1117,11 +1136,22 @@ export default function Layout() {
         (hasAsk || testAvail) && !isAskPage ? ' dock-available' : ''
       }${testAvail && onBuilderPage && !isAskPage ? ' dock-testable' : ''}${
         railOpen && splitActive ? ' dock-split' : ''
-      }${railOpen && dockExpanded && !isAskPage ? ' dock-wide' : ''}${isAskPage ? ' ask-page' : ''}`}
+      }${railOpen && dockExpanded && !isAskPage ? ' dock-wide' : ''}${isAskPage ? ' ask-page' : ''}${
+        isConvPage ? ' conv-open' : ''
+      }${navOpen ? ' nav-open' : ''}`}
     >
       {promptEl}
       <CommandPalette />
       <a className="skip-link" href="#main-content">Skip to content</a>
+      {/* Mobile nav scrim — sits under the drawer (z 65 < sidebar's 70),
+          catches the click-outside close like the dock's dim. */}
+      {navOpen && (
+        <button
+          className="nav-scrim"
+          aria-label="Close navigation"
+          onClick={() => setNavOpen(false)}
+        />
+      )}
       {/* Clicking a nav item while the rail overlays (≤720px) folds it — even
           a click on the section you're already on, which changes no path. */}
       <nav
@@ -1133,6 +1163,7 @@ export default function Layout() {
             window.matchMedia('(max-width: 720px)').matches
           ) {
             setRailOpen(false);
+            setNavOpen(false);
           }
         }}
       >
@@ -1289,6 +1320,53 @@ export default function Layout() {
         </div>
       </nav>
       <main className="main" id="main-content" tabIndex={-1}>
+        {/* Phone top bar (≤720px, hidden by CSS above): ☰ opens the nav
+            drawer, the dock strip's icons live here instead of claiming a
+            permanent 48px column. Conversation pages hide it — their own
+            back header replaces it — and /ask hides .main wholesale. */}
+        <div className="mobile-bar">
+          <button
+            className="mb-btn"
+            aria-label="Open navigation"
+            title="Menu"
+            onClick={() => setNavOpen(true)}
+          >
+            <Menu size={18} />
+          </button>
+          <span className="grow" />
+          {testAvail && (
+            <button
+              className={`mb-btn mb-test${railOpen && railTab === 'test' ? ' active' : ''}`}
+              title={railOpen && railTab === 'test' ? 'Close panel' : 'Test your agent'}
+              aria-expanded={railOpen && railTab === 'test'}
+              onClick={() =>
+                railOpen && railTab === 'test'
+                  ? setRailOpen(false)
+                  : (setRailTab('test'), setRailOpen(true), setDockCallout(false))
+              }
+            >
+              <FlaskConical size={16} />
+              {(agentStatus?.test_conversations ?? 0) === 0 && (
+                <span className="test-strip-dot" />
+              )}
+            </button>
+          )}
+          {hasAsk && (
+            <button
+              className={`mb-btn mb-copilot${railOpen && railTab === 'ask' ? ' active' : ''}`}
+              title={railOpen && railTab === 'ask' ? 'Close panel' : 'Copilot — ask Janis'}
+              aria-expanded={railOpen && railTab === 'ask'}
+              onClick={() =>
+                railOpen && railTab === 'ask'
+                  ? setRailOpen(false)
+                  : (setRailTab('ask'), setRailOpen(true))
+              }
+            >
+              <Sparkles size={16} />
+              {copilotUnread && <span className="test-strip-dot copilot-dot" />}
+            </button>
+          )}
+        </div>
         {data && data.invites.length > 0 && (
           <div className="card" style={{ marginBottom: 12 }}>
             {data.invites.map((inv) => (
@@ -1418,6 +1496,18 @@ export default function Layout() {
             className={`dock${isAskPage ? ' expanded' : ''}${splitActive ? ' split' : ''}${dockExpanded && !narrowWin ? ' wide' : ''}`}
           >
             <div className="dock-head">
+              {/* Mobile back — /ask hides every rail, so the chevron is the
+                  way out; on desktop the sidebar is right there. */}
+              {isAskPage && (
+                <button
+                  className="btn dock-back"
+                  title="Back"
+                  aria-label="Back"
+                  onClick={() => navigate(lastNonAsk.current)}
+                >
+                  <ChevronLeft size={16} />
+                </button>
+              )}
               {bothTabs && !isAskPage ? (
                 <div className="dock-tabs" role="tablist">
                   <button
@@ -1472,7 +1562,7 @@ export default function Layout() {
               )}
               {isAskPage ? (
                 <button
-                  className="btn"
+                  className="btn dock-min"
                   title="Dock panel"
                   onClick={() => navigate(lastNonAsk.current)}
                 >

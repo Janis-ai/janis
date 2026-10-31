@@ -5,7 +5,7 @@ import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
-import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, surfaceLabel } from '../components/bits';
+import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, StateBadge, surfaceLabel } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
@@ -17,7 +17,7 @@ import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { Paperclip, RefreshCw, Star, ThumbsDown, ThumbsUp, X } from 'lucide-react';
+import { ChevronLeft, FlaskConical, Mail, MailOpen, Paperclip, RefreshCw, Star, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -816,6 +816,15 @@ export default function ConversationPage() {
     if (delivered) lastDeliveredIdx = i;
   });
 
+  // Mobile back (the ☰ bar is hidden on conversation pages) — prefer the
+  // real history entry so list scroll/filters survive; a cold-opened deep
+  // link (push, PWA) has none, so fall back to the inbox that owns this URL.
+  const goBack = () => {
+    const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
+    if (idx > 0) navigate(-1);
+    else navigate(params.agentId ? `/agents/${params.agentId}/inbox` : '/conversations');
+  };
+
   const hitWho = (m: Message): string =>
     m.direction === 'in'
       ? c.user_profile.name ?? WHO.in
@@ -845,7 +854,27 @@ export default function ConversationPage() {
     <div className="conv-layout">
       {confirmEl}
       <div className="conv-main">
-        <div className="row">
+        {/* Phone-only header (hidden ≥721px): back + who this is, pinned —
+            the Slack-style frame the desktop sidebar provides for free. */}
+        <div className="conv-mobile-head">
+          <button
+            className="cmh-back"
+            aria-label="Back to inbox"
+            title="Back to inbox"
+            onClick={goBack}
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <Avatar c={c} size={30} />
+          <div className="cmh-id">
+            <div className="cmh-name">{name}</div>
+            <div className="cmh-sub">
+              {surfaceLabel(p)}{p.channel_name ? ` · ${p.channel_name}` : ''}{' · '}
+              <StateBadge state={c.state} />
+            </div>
+          </div>
+        </div>
+        <div className="row conv-actions">
           <input
             className="conv-search"
             type="search"
@@ -886,8 +915,10 @@ export default function ConversationPage() {
             className="btn"
             onClick={() => patch.mutate({ is_unread: !c.is_unread })}
             title={c.is_unread ? 'Mark as read' : 'Mark unread'}
+            aria-label={c.is_unread ? 'Mark as read' : 'Mark unread'}
           >
-            {c.is_unread ? 'Mark as read' : 'Mark unread'}
+            {c.is_unread ? <MailOpen size={15} /> : <Mail size={15} />}
+            <span className="btn-label">{c.is_unread ? 'Mark as read' : 'Mark unread'}</span>
           </button>
           <select
             className="btn"
@@ -924,9 +955,11 @@ export default function ConversationPage() {
             <button
               className="btn"
               title="Save this transcript as a scenario — replay it after prompt or knowledge changes"
+              aria-label="Save this transcript as a scenario"
               onClick={() => setTestSaveOpen((v) => !v)}
             >
-              Save as scenario
+              <FlaskConical size={15} />
+              <span className="btn-label">Save as scenario</span>
             </button>
           )}
         </div>

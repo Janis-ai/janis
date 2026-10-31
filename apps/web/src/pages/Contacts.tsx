@@ -165,7 +165,7 @@ export function Contacts({ agentId: routeAgent }: { agentId?: string } = {}) {
         </div>
         {tab === 'contacts' && (
           <input
-            className="grow"
+            className="grow contacts-search"
             style={{ maxWidth: 320 }}
             placeholder="Search name, email, phone…"
             value={q}

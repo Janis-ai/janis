@@ -359,7 +359,7 @@ export default function AgentOverview() {
         </div>
       </div>
 
-      <div className="row" style={{ alignItems: 'flex-start', gap: 12, marginTop: 12 }}>
+      <div className="row ov-cols" style={{ alignItems: 'flex-start', gap: 12, marginTop: 12 }}>
         <div className="card grow">
           <div className="row">
             <strong className="grow">Recent conversations</strong>
@@ -401,7 +401,7 @@ export default function AgentOverview() {
           )}
         </div>
 
-        <div style={{ width: 300, flexShrink: 0 }}>
+        <div className="ov-side">
           <div className="card">
             <strong>Configuration</strong>
             <div style={{ marginTop: 6, fontSize: 13 }}>

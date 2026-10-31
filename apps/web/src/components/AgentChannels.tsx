@@ -1288,7 +1288,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           <h2 className="section-title">Connected</h2>
           <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {channels.map((ch) => (
-              <div key={ch.id} className="row" style={{ alignItems: 'baseline' }}>
+              <div key={ch.id} className="row chan-row" style={{ alignItems: 'baseline' }}>
                 <span className="badge active">{KIND_LABEL[ch.kind] ?? ch.kind}</span>
                 <div className="grow" style={{ minWidth: 0 }}>
                   <strong>{ch.name}</strong>{' '}

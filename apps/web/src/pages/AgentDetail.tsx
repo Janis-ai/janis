@@ -4283,7 +4283,7 @@ function CredentialsCard({
 
   return (
       <div className="card" style={{ marginTop: 12 }}>
-        <strong>Credentials{agent.hosted ? '' : ' &amp; deliveries'}</strong>
+        <strong>Credentials{agent.hosted ? '' : ' & deliveries'}</strong>
         {freshSecret && (
           <FreshSecretCard label={freshSecret.label} value={freshSecret.value} />
         )}

@@ -507,7 +507,7 @@ button, input, select, textarea { font: inherit; }
   .layout.dock-wide.dock-open .main { margin-right: 780px; }
 }
 .main { transition: margin-right .15s ease; }
-@media (max-width: 640px) {
+@media (max-width: 720px) {
   .dock { left: 0; width: auto; max-width: none; border-left: none; }
 }
 /* Per-topic "Add source" popover — four affordances behind one control. */
@@ -852,6 +852,13 @@ button, input, select, textarea { font: inherit; }
 /* Page header: title left, controls right, wraps with gaps on narrow —
  * the Contacts header row relies on this for breathing room. */
 .page-head { display: flex; align-items: center; gap: 10px 12px; flex-wrap: wrap; margin-bottom: 16px; }
+/* Agent overview's two-column split — recent conversations vs config rail.
+   On a phone the rail stacks under the list at full width. */
+.ov-side { width: 300px; flex-shrink: 0; }
+@media (max-width: 720px) {
+  .ov-cols > * { flex-basis: 100%; }
+  .ov-side { width: 100%; }
+}
 .page-head > h1 { margin: 0; font-size: 22px; flex: 1 1 auto; min-width: 0; overflow-wrap: break-word; }
 .lede { font-size: 15px; line-height: 1.55; margin-bottom: 16px; }
 .lede p { margin: 0; }
@@ -1467,36 +1474,94 @@ details summary:hover { color: var(--text); }
 }
 .step.done .step-check { border-color: var(--accent); background: var(--accent-dim); }
 
+/* Phone chrome (hidden on desktop): the sticky top bar carries ☰ + the
+   dock icons, the conversation page renders its own back header. */
+.mobile-bar, .conv-mobile-head, .dock-back { display: none; }
+/* Icon + label operator buttons align everywhere; the label drops at ≤720. */
+.conv-actions button.btn { display: inline-flex; align-items: center; gap: 6px; }
+
 @media (max-width: 720px) {
-  .sidebar { width: 60px; }
-  .sidebar .brand, .sidebar a { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
-  .sidebar .brand .brand-wide { display: none; }
-  .sidebar .brand .brand-mark { display: block; margin: 0 auto; }
-  .sidebar a .label, .sidebar .user, .sidebar .ask-toggle .label { display: none; }
-  .sidebar a .icon, .sidebar .ask-toggle .icon { display: inline-flex; }
-  .sidebar .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
-  /* icon rail on mobile: agent rows drop the indent, the name row collapses
-     to its bot glyph */
-  .sidebar a.nav-indent { padding-left: 0; }
-  .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
-  .sidebar .nav-sec span { display: none; }
-  /* same collapse rules as the ask-rail case above */
-  .sidebar .nav-sec:not(:has(svg)) { display: none; }
-  /* badge overlays the icon's top-right so the icon itself stays centred
-     and aligned with the rows below */
-  .sidebar a { position: relative; }
-  .sidebar a .nav-badge {
-    position: absolute; top: 1px; left: 50%; margin: 0 0 0 7px;
-    font-size: 9px; line-height: 13px; min-width: 13px; padding: 0 3px;
-    border-radius: 8px;
+  /* Slack-style shell — the sidebar leaves the flow entirely and becomes an
+     off-canvas drawer behind the top bar's ☰, so every page gets the full
+     width. Inside the drawer it keeps its full desktop look (labels, the
+     context switcher, sign-out) — no cramped icon rail. */
+  .sidebar {
+    position: fixed; left: 0; top: 0; bottom: 0; z-index: 70;
+    width: min(300px, 85vw);
+    transform: translateX(-105%);
+    transition: transform .18s ease;
+    box-shadow: none;
   }
-  /* step marks badge the icon when the label is gone */
-  .sidebar a .step-mark {
-    position: absolute; top: 2px; left: 50%; margin: 0 0 0 6px; font-size: 10px;
+  .layout.nav-open .sidebar {
+    transform: none;
+    box-shadow: 12px 0 32px rgba(0,0,0,.4);
   }
-  /* the rail goes full-screen on mobile rather than squeezing the main column */
-  .ask-rail { position: fixed; left: 60px; right: 0; top: 0; bottom: 0; width: auto; z-index: 85; }
-  .main { padding: 14px; overflow-x: hidden; }
+  .nav-scrim {
+    position: fixed; inset: 0; z-index: 65; border: 0; padding: 0;
+    background: rgba(8,10,14,.45); cursor: default;
+  }
+  /* Sticky top bar — first child of .main, pinned while the page scrolls.
+     Negative margins make it full-bleed past .main's 14px padding. */
+  .mobile-bar {
+    display: flex; align-items: center; gap: 2px;
+    position: sticky; top: 0; z-index: 30;
+    margin: 0 -14px 10px; padding: 4px 8px;
+    background: var(--bg); border-bottom: 1px solid var(--border);
+  }
+  .mb-btn {
+    position: relative; display: inline-flex; align-items: center; justify-content: center;
+    min-width: 40px; min-height: 40px; padding: 8px;
+    background: none; border: 0; border-radius: 8px;
+    color: var(--muted); cursor: pointer;
+  }
+  .mb-btn:hover { background: var(--panel-2); color: var(--text); }
+  .mb-test { color: var(--accent); }
+  .mb-test.active { background: var(--accent-dim); }
+  .mb-copilot { color: var(--copilot, #7c6cf0); }
+  .mb-copilot.active { background: rgba(124, 108, 240, .12); }
+  .mb-btn .test-strip-dot { position: absolute; right: 4px; top: 4px; }
+  /* A conversation is a full-screen view — the page's own back header
+     replaces the bar, no rails on either edge. */
+  .layout.conv-open .mobile-bar { display: none; }
+  .dock-strip { display: none; }
+  .layout.dock-available:not(.dock-open) .main { margin-right: 0; }
+  /* /ask's dock head gets a back chevron instead of the minimize glyph. */
+  .dock-back { display: inline-flex; align-items: center; }
+  .dock-min { display: none; }
+  /* The conversation page's phone header — back + who this is, pinned. */
+  .conv-mobile-head {
+    display: flex; align-items: center; gap: 10px;
+    position: sticky; top: 0; z-index: 30;
+    margin: 0 -14px 10px; padding: 8px 12px 8px 6px;
+    background: var(--bg); border-bottom: 1px solid var(--border);
+  }
+  .cmh-back {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px; margin: -4px 0 -4px -4px; flex-shrink: 0;
+    background: none; border: 0; border-radius: 8px;
+    color: var(--text); cursor: pointer;
+  }
+  .cmh-back:hover { background: var(--panel-2); }
+  .cmh-id { min-width: 0; }
+  .cmh-name {
+    font-weight: 600; font-size: 15px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cmh-sub {
+    display: flex; align-items: center; gap: 4px;
+    font-size: 12px; color: var(--muted);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Operator utilities collapse to icons — the label is redundant on a
+     phone-width action row. */
+  .conv-actions .btn { padding: 7px 10px; }
+  .conv-actions .btn-label { display: none; }
+  /* Contacts search earns its own row instead of squeezing beside the tabs. */
+  .contacts-search { flex-basis: 100%; }
+  /* Connected-channel rows: a wide basis keeps the name on line 1 with its
+     badge; Configure/Disconnect wrap beneath instead of crushing it. */
+  .chan-row .grow { flex-basis: 170px; }
+  .main { padding: 0 14px 14px; overflow-x: hidden; }
 
   /* Rows stack instead of squeezing — asset rows carry a name plus up to
      two wide Connect/Remove buttons that can't fit side by side. */
@@ -1579,7 +1644,7 @@ details summary:hover { color: var(--text); }
 /* keep alert toasts above the banner bar */
 .layout:has(.push-banner) .toast-stack { bottom: 76px; }
 @media (max-width: 720px) {
-  .push-banner { left: 60px; padding: 12px 14px; }
+  .push-banner { left: 0; padding: 12px 14px; }
 }
 .landing-nav { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 8px 0 36px; }
 .landing-logo { height: 34px; }
