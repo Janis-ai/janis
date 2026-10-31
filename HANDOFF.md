@@ -111,6 +111,15 @@ origin isn't a registered JS origin on the OAuth client; prod origins
 work. Removing the last google-* tool GCs the connection row
 (gcUnusedConnections) — re-copy when resetting test state.
 
+**Conflict fixes are apply-able; version history is visible (Oct 31):**
+each prompt-check conflict can carry {field, find, replace} verified
+server-side against the real text — an Apply fix button lands it as a
+draft edit for normal Save. Version history now always renders (it hid
+under 2 revisions and looked absent) with honest coverage copy, and
+snapshots tone too — agent_instruction_revisions.tone added (migration
+0123; pre-tone rows restore keeping current tone). Knowledge notes and
+procedures still aren't versioned — the remaining gap.
+
 **"Check for conflicts" — rule-contradiction audit (Oct 30):** the concierge
 deflected a "speak to a human" request to sign-in because two authored rules
 collided ("flag for a human when asked" vs "manual intervention → sign in
