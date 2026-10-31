@@ -1185,7 +1185,7 @@ export default function ConversationPage() {
                   );
                 const Tag = blk.ordered ? 'ol' : 'ul';
                 return (
-                  <Tag key={bi} className={`md-list${cls}`}>
+                  <Tag key={bi} className={`md-list${blk.loose ? ' md-loose' : ''}${cls}`}>
                     {(blk.items ?? []).map((item, ii) => (
                       <li key={ii}>{mdSpans(item)}</li>
                     ))}

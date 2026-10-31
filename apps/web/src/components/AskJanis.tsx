@@ -149,7 +149,7 @@ function richBlocks(text: string, onNav: (to: string) => void) {
       );
     const Tag = b.ordered ? 'ol' : 'ul';
     return (
-      <Tag key={bi} className={`md-list${cls}`}>
+      <Tag key={bi} className={`md-list${b.loose ? ' md-loose' : ''}${cls}`}>
         {(b.items ?? []).map((item, ii) => (
           <li key={ii}>{richText(item, onNav)}</li>
         ))}

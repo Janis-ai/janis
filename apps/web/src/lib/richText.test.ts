@@ -247,6 +247,35 @@ describe('splitBlocks', () => {
       { kind: 'list', items: ['one', 'two'], ordered: false, breakBefore: true },
     ]);
   });
+
+  it('a loose numbered list stays ONE list — blank lines must not restart numbering', () => {
+    // Models emit "1. …\n\n1. …" loose lists; four one-item <ol>s each
+    // rendered "1." — the inbox all-1s bug.
+    expect(splitBlocks('Steps:\n\n1. one\n\n1. two\n\n1. three')).toEqual([
+      { kind: 'para', text: 'Steps:' },
+      { kind: 'list', items: ['one', 'two', 'three'], ordered: true, loose: true, breakBefore: true },
+    ]);
+  });
+
+  it('loose bullet lists merge the same way', () => {
+    expect(splitBlocks('- a\n\n- b')).toEqual([
+      { kind: 'list', items: ['a', 'b'], ordered: false, loose: true },
+    ]);
+  });
+
+  it('a marker kind change after a blank line still ends the list', () => {
+    expect(splitBlocks('1. one\n\n- two')).toEqual([
+      { kind: 'list', items: ['one'], ordered: true },
+      { kind: 'list', items: ['two'], ordered: false, breakBefore: true },
+    ]);
+  });
+
+  it('a paragraph after a paused list keeps its gap', () => {
+    expect(splitBlocks('1. one\n\ntrailing prose')).toEqual([
+      { kind: 'list', items: ['one'], ordered: true },
+      { kind: 'para', text: 'trailing prose', breakBefore: true },
+    ]);
+  });
 });
 
 describe('plainText', () => {

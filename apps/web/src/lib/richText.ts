@@ -119,6 +119,9 @@ export interface RichBlock {
   /** list */
   items?: string[];
   ordered?: boolean;
+  /** Blank lines between items ("1. a\n\n2. b") — render breathing room
+   *  between <li>s. Still ONE list, so an <ol> keeps numbering through. */
+  loose?: boolean;
   /** A blank line precedes this block — render a paragraph gap, not a bare
    *  line break. */
   breakBefore?: boolean;
@@ -160,17 +163,25 @@ export function splitBlocks(text: string): RichBlock[] {
   // a real gap instead of concatenating blocks inline (".You'll").
   let gapNext = false;
   let listGap = false;
+  let loose = false;
+  // A blank line inside a list doesn't end it — the next marker of the same
+  // kind continues a loose list (CommonMark: "1. a\n\n1. b" is one list).
+  // Defer the flush until a non-blank line shows what follows.
+  let listPause = false;
   const flush = () => {
     if (items.length) {
       const tail = detachTail(items);
       const list: RichBlock = { kind: 'list', items, ordered };
       if (listGap) list.breakBefore = true;
+      if (loose) list.loose = true;
       out.push(list);
       if (tail) out.push({ kind: 'para', text: tail });
     }
     items = [];
     ordered = false;
     listGap = false;
+    loose = false;
+    listPause = false;
   };
   const pushPara = (t: string) => {
     const b: RichBlock = { kind: 'para', text: t };
@@ -181,12 +192,13 @@ export function splitBlocks(text: string): RichBlock[] {
   for (const raw of text.split('\n')) {
     const t = raw.trim();
     if (!t) {
-      flush();
-      if (out.length) gapNext = true;
+      if (items.length) listPause = true;
+      else if (out.length) gapNext = true;
       continue;
     }
     const head = HEAD_LEAD.exec(t);
     if (head) {
+      if (listPause) gapNext = true;
       flush();
       const b: RichBlock = {
         kind: 'heading',
@@ -202,11 +214,18 @@ export function splitBlocks(text: string): RichBlock[] {
       // A numbered list mixing with bullet lines (or vice versa) starts a
       // new list — keep markers consistent within one <ul>/<ol>.
       const isOrdered = NUM_LEAD.test(t);
-      if (items.length && isOrdered !== ordered) flush();
-      if (!items.length) {
-        listGap = gapNext;
-        gapNext = false;
+      if (items.length && isOrdered !== ordered) {
+        const paused = listPause;
+        flush();
+        if (paused) listGap = true;
       }
+      if (!items.length) {
+        if (gapNext) listGap = true;
+        gapNext = false;
+      } else if (listPause) {
+        loose = true;
+      }
+      listPause = false;
       ordered = isOrdered;
       // A bullet line may itself carry more inline bullets after it.
       items.push(...t.replace(BULLET_LEAD, '').replace(NUM_LEAD, '').split(INLINE_BULLET));
@@ -215,6 +234,7 @@ export function splitBlocks(text: string): RichBlock[] {
     const inlineMarks = t.match(INLINE_BULLET) ?? [];
     if (inlineMarks.length >= 2) {
       const [lead, ...bullets] = t.split(INLINE_BULLET);
+      if (listPause) gapNext = true;
       flush();
       if (lead.trim()) pushPara(lead.trim());
       if (!items.length) {
@@ -225,6 +245,7 @@ export function splitBlocks(text: string): RichBlock[] {
       items.push(...bullets);
       continue;
     }
+    if (listPause) gapNext = true;
     flush();
     pushPara(t);
   }
