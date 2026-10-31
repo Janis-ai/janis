@@ -2812,6 +2812,36 @@ export function agentRoutes(db: Db) {
   // ── Regression tests — saved transcripts replayed against current config ──
   // The flywheel's closing loop: rescue → gap → fix → proof it can't regress.
 
+  /** Backfill missing source links lazily — every turn carries its
+   *  message id, so a null source_conversation_id is recoverable from
+   *  the messages table (older saves and non-conv save paths skipped
+   *  it). Writes the resolved ids back so the data heals on read. */
+  const healSourceLinks = async (rows: (typeof agentTests.$inferSelect)[]) => {
+    const missing = rows.filter((r) => !r.sourceConversationId);
+    const firstMid = (r: (typeof rows)[number]) =>
+      (r.turns as { mid?: string }[] | undefined)?.find((t) => t?.mid)?.mid;
+    const lastMid = (r: (typeof rows)[number]) =>
+      [...((r.turns as { mid?: string }[] | undefined) ?? [])].reverse().find((t) => t?.mid)?.mid;
+    const mids = [...new Set(missing.flatMap((r) => [firstMid(r), lastMid(r)].filter(Boolean)))] as string[];
+    if (!mids.length) return;
+    const hits = await db
+      .select({ id: messages.id, conversationId: messages.conversationId })
+      .from(messages)
+      .where(inArray(messages.id, mids));
+    const convByMid = new Map(hits.map((m) => [m.id, m.conversationId]));
+    for (const r of missing) {
+      const convId = (firstMid(r) && convByMid.get(firstMid(r)!)) ?? (lastMid(r) && convByMid.get(lastMid(r)!));
+      if (!convId) continue;
+      r.sourceConversationId = convId;
+      const msgId = !r.sourceMessageId ? (lastMid(r) ?? null) : null;
+      if (msgId) r.sourceMessageId = msgId;
+      await db
+        .update(agentTests)
+        .set({ sourceConversationId: convId, ...(msgId ? { sourceMessageId: msgId } : {}) })
+        .where(eq(agentTests.id, r.id));
+    }
+  };
+
   const toTest = (t: typeof agentTests.$inferSelect, currentVersion?: string) => ({
     id: t.id,
     name: t.name,
@@ -2853,6 +2883,7 @@ export function agentRoutes(db: Db) {
         .from(agentTests)
         .where(eq(agentTests.agentId, agent.id))
         .orderBy(desc(agentTests.createdAt));
+      await healSourceLinks(rows);
       return c.json({ tests: rows.map((t) => toTest(t, version)), config_version: version });
     }
     const limit = Math.min(Math.max(parseInt(limitParam, 10) || 0, 1), 500);
@@ -2959,6 +2990,7 @@ export function agentRoutes(db: Db) {
       internalMids.size
         ? ((t.turns ?? []) as { mid?: string }[]).filter((x) => !x.mid || !internalMids.has(x.mid))
         : t.turns;
+    await healSourceLinks(rows.map(({ row }) => row));
     return c.json({
       tests: rows.map(({ row }) => toTest({ ...row, turns: cleanTurns(row) as never }, version)),
       config_version: version,
