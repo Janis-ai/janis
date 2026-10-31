@@ -272,6 +272,9 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
     void qc.invalidateQueries({ queryKey: ['deliveries'] });
     // build progress is derived from config/channels — keep it fresh too
     void qc.invalidateQueries({ queryKey: ['build-status'] });
+    // A guidance save snapshots a revision — refetch so the new version
+    // shows without a page reload.
+    void qc.invalidateQueries({ queryKey: ['instruction-revisions', agent.id] });
   };
 
   const update = useMutation({
@@ -500,7 +503,15 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
       {section === 'behavior' && (
         <>
           {sub === 'instructions' && janisBrain(agent) && (
-            <InstructionsSection cfg={cfg} setCfg={setCfg} isAdmin={isAdmin} agentId={agent.id} />
+            <InstructionsSection
+              cfg={cfg}
+              setCfg={setCfg}
+              isAdmin={isAdmin}
+              agentId={agent.id}
+              onSave={saveAll}
+              saving={update.isPending}
+              saved={savedFlash}
+            />
           )}
           {/* 'greeting' is the external-webhook agents' own sub — the merged
               page is hosted-only, but Janis still delivers their greeting. */}
@@ -1102,11 +1113,19 @@ export function InstructionsSection({
   setCfg,
   isAdmin,
   agentId,
+  onSave,
+  saving,
+  saved,
 }: {
   cfg: AgentConfig;
   setCfg: (c: AgentConfig) => void;
   isAdmin: boolean;
   agentId: string;
+  /** In-card Save — the same shared-draft write the page's bottom Save
+   *  runs; rendered here because the behavior form is long. */
+  onSave?: () => void;
+  saving?: boolean;
+  saved?: boolean;
 }) {
   // "Check for conflicts" — audits instructions + tone (this text, in-flight)
   // against saved knowledge notes, procedures and the platform persona for
@@ -1172,6 +1191,11 @@ export function InstructionsSection({
             onClick={() => void runCheck()}
           >
             {check?.pending ? 'Checking…' : 'Check for conflicts'}
+          </button>
+        )}
+        {isAdmin && onSave && (
+          <button className="btn primary sm" disabled={saving} onClick={onSave}>
+            {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
           </button>
         )}
       </div>
