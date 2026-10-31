@@ -1476,9 +1476,13 @@ details summary:hover { color: var(--text); }
 
 /* Phone chrome (hidden on desktop): the sticky top bar carries ☰ + the
    dock icons, the conversation page renders its own back header. */
-.mobile-bar, .conv-mobile-head, .dock-back { display: none; }
+.mobile-bar, .conv-mobile-head, .dock-back, .conv-side-head { display: none; }
 /* Icon + label operator buttons align everywhere; the label drops at ≤720. */
-.conv-actions button.btn { display: inline-flex; align-items: center; gap: 6px; }
+.conv-actions button.btn, .conv-ops.btn { display: inline-flex; align-items: center; gap: 6px; }
+/* Snooze wraps its select — the select is the visible dropdown on desktop;
+   on mobile it goes invisible and the moon icon is the button face. */
+.snooze-wrap { position: relative; display: inline-flex; align-items: center; }
+.snooze-wrap .snz-ic { display: none; position: absolute; pointer-events: none; }
 
 @media (max-width: 720px) {
   /* Slack-style shell — the sidebar leaves the flow entirely and becomes an
@@ -1542,6 +1546,13 @@ details summary:hover { color: var(--text); }
     color: var(--text); cursor: pointer;
   }
   .cmh-back:hover { background: var(--panel-2); }
+  .cmh-info {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 36px; height: 36px; margin: -4px -4px -4px 0; flex-shrink: 0;
+    background: none; border: 0; border-radius: 8px;
+    color: var(--muted); cursor: pointer;
+  }
+  .cmh-info:hover { background: var(--panel-2); color: var(--text); }
   .cmh-id { min-width: 0; }
   .cmh-name {
     font-weight: 600; font-size: 15px;
@@ -1552,10 +1563,45 @@ details summary:hover { color: var(--text); }
     font-size: 12px; color: var(--muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  /* Operator utilities collapse to icons — the label is redundant on a
-     phone-width action row. */
+  /* Anchored conversation — only the transcript scrolls; the head, action
+     row and composer stay put, and .main never pages. */
+  .layout.conv-open .main { overflow: hidden; }
+  .conv-open .conv-layout { height: 100%; }
+  .conv-open .transcript { max-height: none; min-height: 0; }
+  /* Details slide-over — the side column leaves the flow and becomes a
+     right drawer behind the header's ⓘ. */
+  .conv-side {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 75;
+    width: min(320px, 88vw); padding: 0 12px 12px;
+    background: var(--bg); border-left: 1px solid var(--border);
+    transform: translateX(105%);
+    transition: transform .18s ease;
+    overflow-y: auto;
+  }
+  .conv-side.open {
+    transform: none;
+    box-shadow: -12px 0 32px rgba(0,0,0,.4);
+  }
+  .conv-side-scrim {
+    position: fixed; inset: 0; z-index: 72; border: 0; padding: 0;
+    background: rgba(8,10,14,.45); cursor: default;
+  }
+  .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
+  /* Search and the utility icons share one row; utilities go icon-only,
+     snooze shows just the moon (accent when snoozed). */
+  .conv-actions .conv-search { flex: 1 1 0; min-width: 0; }
   .conv-actions .btn { padding: 7px 10px; }
-  .conv-actions .btn-label { display: none; }
+  .conv-actions .btn-label, .conv-ops .btn-label { display: none; }
+  .conv-ops { gap: 6px; }
+  .conv-ops.btn { padding: 7px 10px; }
+  .snooze-wrap {
+    width: 34px; height: 33px; justify-content: center;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .snooze-wrap:hover { border-color: var(--accent); }
+  .snooze-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
+  .snooze-wrap .snz-ic { display: block; color: var(--muted); }
+  .snooze-wrap.on .snz-ic { color: var(--accent); }
   /* Contacts search earns its own row instead of squeezing beside the tabs. */
   .contacts-search { flex-basis: 100%; }
   /* Connected-channel rows: a wide basis keeps the name on line 1 with its

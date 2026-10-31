@@ -17,7 +17,7 @@ import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { ChevronLeft, FlaskConical, Mail, MailOpen, Paperclip, RefreshCw, Star, ThumbsDown, ThumbsUp, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Bot, Brain, ChevronLeft, FlaskConical, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -479,6 +479,17 @@ export default function ConversationPage() {
   };
 
   const [suggestOpen, setSuggestOpen] = useState(false);
+  // Mobile details slide-over — the right column is a drawer on phones,
+  // opened from the header's ⓘ. The page never scrolls; transcript only.
+  const [sideOpen, setSideOpen] = useState(false);
+  useEffect(() => {
+    if (!sideOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSideOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [sideOpen]);
 
   const decide = useMutation({
     mutationFn: ({ actionId, decision }: { actionId: string; decision: 'approved' | 'denied' }) =>
@@ -745,6 +756,7 @@ export default function ConversationPage() {
   const { conversation: c, messages, alerts, suggestions } = data;
   const p = c.user_profile ?? {};
   const name = displayName(c);
+  const snoozed = Boolean(c.snoozed_until && new Date(c.snoozed_until) > new Date());
   const KNOWN = new Set([
     'id', 'name', 'first_name', 'last_name', 'username', 'email', 'phone',
     'channel', 'channel_name', 'profile_fetched_at', 'metadata',
@@ -873,6 +885,15 @@ export default function ConversationPage() {
               <StateBadge state={c.state} />
             </div>
           </div>
+          <span className="grow" />
+          <button
+            className="cmh-info"
+            aria-label="Conversation details"
+            title="Details — status, assignee, intent, tags"
+            onClick={() => setSideOpen(true)}
+          >
+            <Info size={18} />
+          </button>
         </div>
         <div className="row conv-actions">
           <input
@@ -920,37 +941,42 @@ export default function ConversationPage() {
             {c.is_unread ? <MailOpen size={15} /> : <Mail size={15} />}
             <span className="btn-label">{c.is_unread ? 'Mark as read' : 'Mark unread'}</span>
           </button>
-          <select
-            className="btn"
-            style={{ width: 'auto' }}
-            title={
-              c.snoozed_until && new Date(c.snoozed_until) > new Date()
-                ? `Snoozed until ${new Date(c.snoozed_until).toLocaleString()} — hidden from the queue until then`
-                : 'Snooze — hide from the queue until later; a customer reply wakes it'
-            }
-            value={c.snoozed_until && new Date(c.snoozed_until) > new Date() ? 'snoozed' : ''}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v === 'snoozed') return;
-              patch.mutate({
-                snoozed_until:
-                  v === 'wake'
-                    ? null
-                    : new Date(Date.now() + snoozeMinutes(Number(v)) * 60_000).toISOString(),
-              });
-            }}
-          >
-            <option value="">😴 Snooze…</option>
-            {c.snoozed_until && new Date(c.snoozed_until) > new Date() && (
-              <option value="snoozed">
-                😴 until {new Date(c.snoozed_until).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
-              </option>
-            )}
-            {SNOOZE_OPTIONS.map(([l, m]) => (
-              <option key={l} value={m}>{l}</option>
-            ))}
-            <option value="wake">Unsnooze</option>
-          </select>
+          {/* The select IS the dropdown — invisible on mobile, stretched
+              over the moon icon so the tap lands on the native picker. */}
+          <div className={`snooze-wrap${snoozed ? ' on' : ''}`}>
+            <Moon size={15} className="snz-ic" />
+            <select
+              className="btn"
+              style={{ width: 'auto' }}
+              title={
+                snoozed
+                  ? `Snoozed until ${new Date(c.snoozed_until!).toLocaleString()} — hidden from the queue until then`
+                  : 'Snooze — hide from the queue until later; a customer reply wakes it'
+              }
+              value={snoozed ? 'snoozed' : ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === 'snoozed') return;
+                patch.mutate({
+                  snoozed_until:
+                    v === 'wake'
+                      ? null
+                      : new Date(Date.now() + snoozeMinutes(Number(v)) * 60_000).toISOString(),
+                });
+              }}
+            >
+              <option value="">😴 Snooze…</option>
+              {snoozed && (
+                <option value="snoozed">
+                  😴 until {new Date(c.snoozed_until!).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                </option>
+              )}
+              {SNOOZE_OPTIONS.map(([l, m]) => (
+                <option key={l} value={m}>{l}</option>
+              ))}
+              <option value="wake">Unsnooze</option>
+            </select>
+          </div>
           {janisBrain(agent) && (
             <button
               className="btn"
@@ -1547,9 +1573,9 @@ export default function ConversationPage() {
         )}
 
         {canSend && !suggestOpen && !(suggestions?.length > 0) && (
-          <div className="row" style={{ marginBottom: 10 }}>
-            <button className="btn" onClick={askSuggestion} disabled={suggest.isPending}>
-              ✨ Suggest reply
+          <div className="row conv-ops" style={{ marginBottom: 10 }}>
+            <button className="btn" onClick={askSuggestion} disabled={suggest.isPending} title="Suggest a reply" aria-label="Suggest a reply">
+              <Sparkles size={15} /><span className="btn-label">Suggest reply</span>
             </button>
           </div>
         )}
@@ -1572,33 +1598,44 @@ export default function ConversationPage() {
               sending={outbox.some((o) => o.status === 'pending')}
             />
             {c.state !== 'human' && (
-              <button className="btn" style={{ marginTop: 8 }} onClick={() => setSendAs('human')}>Cancel</button>
+              <button className="btn conv-ops" style={{ marginTop: 8 }} onClick={() => setSendAs('human')} title="Cancel" aria-label="Cancel">
+                <X size={15} /><span className="btn-label">Cancel</span>
+              </button>
             )}
           </>
         ) : (
-          <div className="row">
+          <div className="row conv-ops">
             {c.state !== 'archived' && (
               <>
-                <button className="btn primary" onClick={() => act.mutate('takeover')}>Take over</button>
+                <button className="btn primary" onClick={() => act.mutate('takeover')} title="Take over — reply as yourself" aria-label="Take over">
+                  <Headset size={15} /><span className="btn-label">Take over</span>
+                </button>
                 <button
                   className="btn"
-                  title="Your text goes out as if the AI agent wrote it — the customer sees no human takeover"
+                  title="Reply as the agent — the customer sees no human takeover"
+                  aria-label="Reply as the agent"
                   onClick={() => { setSendAs('agent'); }}
                 >
-                  Reply as the agent
+                  <Bot size={15} /><span className="btn-label">Reply as the agent</span>
                 </button>
-                <button className="btn" onClick={() => { setSendAs('note'); }}>🔒 Internal note</button>
+                <button className="btn" onClick={() => { setSendAs('note'); }} title="Internal note — only your team sees it" aria-label="Internal note">
+                  <Lock size={15} /><span className="btn-label">Internal note</span>
+                </button>
                 {canTeach && (
-                  <button className="btn" onClick={() => { setSendAs('teach'); }}>🧠 Teach agent</button>
+                  <button className="btn" onClick={() => { setSendAs('teach'); }} title="Teach the agent — store guidance for future replies" aria-label="Teach the agent">
+                    <Brain size={15} /><span className="btn-label">Teach agent</span>
+                  </button>
                 )}
-                <button className="btn danger" onClick={() => act.mutate('archive')}>Archive</button>
+                <button className="btn danger" onClick={() => act.mutate('archive')} title="Archive conversation" aria-label="Archive conversation">
+                  <Archive size={15} /><span className="btn-label">Archive</span>
+                </button>
               </>
             )}
             {c.state === 'archived' && (
               <>
                 <span className="muted">Archived</span>
-                <button className="btn" disabled={archive.isPending} onClick={() => archive.mutate(false)}>
-                  {archive.isPending ? 'Working…' : 'Unarchive'}
+                <button className="btn" disabled={archive.isPending} onClick={() => archive.mutate(false)} title="Unarchive" aria-label="Unarchive">
+                  <ArchiveRestore size={15} /><span className="btn-label">{archive.isPending ? 'Working…' : 'Unarchive'}</span>
                 </button>
               </>
             )}
@@ -1606,6 +1643,7 @@ export default function ConversationPage() {
               <button
                 className="btn danger"
                 title="Permanently delete this conversation and its transcript — archive keeps it searchable"
+                aria-label="Delete conversation"
                 disabled={del.isPending}
                 onClick={async () => {
                   if (await confirm('Permanently delete this conversation and its entire transcript? This cannot be undone — archive keeps it out of the inbox but searchable.', [{ key: 'ok', label: 'Delete', danger: true }])) {
@@ -1613,14 +1651,34 @@ export default function ConversationPage() {
                   }
                 }}
               >
-                {del.isPending ? 'Deleting…' : 'Delete'}
+                <Trash2 size={15} /><span className="btn-label">{del.isPending ? 'Deleting…' : 'Delete'}</span>
               </button>
             )}
           </div>
         )}
       </div>
 
-      <aside className="conv-side">
+      {/* Mobile (≤720px): the details column is a right slide-over behind
+          the header's ⓘ — scrim/Esc/X close it. On desktop it's the
+          static rail, exactly as before. */}
+      {sideOpen && (
+        <button
+          className="conv-side-scrim"
+          aria-label="Close details"
+          onClick={() => setSideOpen(false)}
+        />
+      )}
+      <aside className={`conv-side${sideOpen ? ' open' : ''}`}>
+        <div className="conv-side-head">
+          <button
+            className="cmh-back"
+            aria-label="Close details"
+            title="Close details"
+            onClick={() => setSideOpen(false)}
+          >
+            <X size={18} />
+          </button>
+        </div>
         <div className="card">
           <strong>Details</strong>
           <div className="profile-head">
