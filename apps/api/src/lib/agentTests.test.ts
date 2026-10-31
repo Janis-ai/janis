@@ -13,6 +13,7 @@ import {
 } from '../db/schema.js';
 import {
   checkPromptConflicts,
+  checkpointIndices,
   escalationOf,
   replayContextFor,
   runAgentTest,
@@ -507,5 +508,30 @@ describe('checkPromptConflicts', () => {
     expect(body.messages.find((m: { role: string }) => m.role === 'user').content).toContain(
       'Built-in persona',
     );
+  });
+});
+
+describe('checkpointIndices', () => {
+  it('ignores customer turns inside a human-takeover window', () => {
+    const turns: TestTurn[] = [
+      { role: 'customer', text: 'can I get a human?', mid: '1' },
+      { role: 'agent', text: '(passed to a human teammate)', mid: '2' },
+      { role: 'agent', text: '(human operator) hey there', mid: '3' },
+      // Agent is paused from here — "hi" is the customer greeting the
+      // human, not an agent prompt; a later rescue marker can't make it
+      // a checkpoint.
+      { role: 'customer', text: 'hi', mid: '4' },
+      { role: 'agent', text: '(a human teammate was offered)', mid: '5' },
+    ];
+    expect(checkpointIndices(turns)).toEqual([0]);
+  });
+
+  it('still checkpoints the turn that triggered the rescue', () => {
+    const turns: TestTurn[] = [
+      { role: 'customer', text: 'refund please', mid: '1' },
+      { role: 'agent', text: '(the customer was told a human teammate is joining)', mid: '2' },
+      { role: 'customer', text: 'hello?', mid: '3' },
+    ];
+    expect(checkpointIndices(turns)).toEqual([0]);
   });
 });

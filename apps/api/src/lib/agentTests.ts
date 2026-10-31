@@ -225,8 +225,19 @@ const OFFER_MARKER = '(a human teammate was offered)';
  *  answered and then courteously offered a human, which isn't a failure. */
 export function checkpointIndices(turns: TestTurn[]): number[] {
   const points: number[] = [];
+  // Once a human owns the thread the agent is paused — customer turns
+  // inside that window aren't agent prompts, so they can't be triggers
+  // even when another rescue marker follows them.
+  let humanInLoop = false;
   for (let i = 0; i < turns.length; i++) {
-    if (turns[i].role !== 'customer') continue;
+    const t = turns[i];
+    if (
+      t.text.startsWith('(passed to a human teammate)') ||
+      t.text.startsWith('(the customer was told a human teammate is joining)') ||
+      t.text.startsWith('(human operator)')
+    )
+      humanInLoop = true;
+    if (t.role !== 'customer' || humanInLoop) continue;
     for (let j = i + 1; j < turns.length && turns[j].role !== 'customer'; j++) {
       if (turns[j].text.startsWith(OFFER_MARKER) && j > i + 1) continue;
       if (RESCUE_MARKERS.some((m) => turns[j].text.startsWith(m))) {
