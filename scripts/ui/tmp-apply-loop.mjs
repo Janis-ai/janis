@@ -29,9 +29,20 @@ try {
   });
   await page.waitForTimeout(800);
 
-  // Textarea resizable?
+  // Textarea resizable? Computed style alone lies under flex layout —
+  // actually drag the bottom-right gripper and check the height grew.
   const ta = page.locator('textarea').first();
   console.log('textarea resize style:', await ta.evaluate((el) => getComputedStyle(el).resize));
+  const box = await ta.boundingBox();
+  const h0 = box.height;
+  const gx = box.x + box.width - 6;
+  const gy = box.y + box.height - 6;
+  await page.mouse.move(gx, gy);
+  await page.mouse.down();
+  await page.mouse.move(gx, gy + 120, { steps: 6 });
+  await page.mouse.up();
+  const h1 = (await ta.boundingBox()).height;
+  console.log(`textarea drag: ${h0} → ${h1}`, h1 > h0 + 50 ? 'RESIZES' : 'STILL STUCK');
 
   await page.getByRole('button', { name: 'Check for conflicts' }).click();
   await page

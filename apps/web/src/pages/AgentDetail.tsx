@@ -1397,7 +1397,10 @@ export function InstructionsSection({
       </label>
       <textarea
         rows={8}
-        style={{ flex: 1, minHeight: 200, resize: 'vertical' }}
+        // flex:1 looks nice but owns the height — the resize gripper shows
+        // yet every drag is overridden by the next layout pass. Its own
+        // box (rows + min-height) is what makes vertical resize real.
+        style={{ minHeight: 280, resize: 'vertical' }}
         placeholder="You are the support agent for Acme Co. You help with orders, returns…"
         value={cfg.system_prompt ?? ''}
         onChange={(e) => setCfg({ ...cfg, system_prompt: e.target.value })}
