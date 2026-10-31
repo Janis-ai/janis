@@ -2716,6 +2716,29 @@ describe('conversationContext traits', () => {
     expect(visitor).toContain('x'.repeat(120));
     expect(visitor).not.toContain('x'.repeat(121));
   });
+
+  it('tells the resumed agent the human stepped away — only outside needs_human', () => {
+    const resumed = conversationContext(
+      { externalId: 'webchat:c1', state: 'open', userProfile: {} } as never,
+      'Bot',
+      false,
+      false,
+      false,
+      true, // humanSpoke — operator messaged, conv is back with the AI
+    );
+    expect(resumed).toContain('no longer watching this thread');
+    expect(resumed).toContain('never present yourself as the human');
+
+    const pending = conversationContext(
+      { externalId: 'webchat:c1', state: 'needs_human', userProfile: {} } as never,
+      'Bot',
+      false,
+      false,
+      false,
+      true,
+    );
+    expect(pending).not.toContain('no longer watching this thread');
+  });
 });
 
 describe('procedures', () => {

@@ -366,6 +366,11 @@ export function conversationContext(
     lines.push(
       '- Earlier turns marked "(human operator) …" were written by a human teammate who stepped in — not by you. Treat what the human told the customer as already said: build on it, don\'t repeat or contradict it, and don\'t offer a human who is already involved.',
     );
+    if (conv.state !== 'needs_human') {
+      lines.push(
+        "- The human teammate's turn has ended and you are back in control — they are no longer watching this thread. If the customer's newest message replies to the human's last message, acknowledge plainly that the human has stepped away and offer to connect them to a human again if needed. You are the AI — never present yourself as the human or as the author of their earlier messages.",
+      );
+    }
   }
   if (conv.state === 'needs_human' && !forSuggestion) {
     lines.push(
