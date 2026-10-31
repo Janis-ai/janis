@@ -894,9 +894,11 @@ const CONFLICT_VERIFY_SYSTEM =
   'stated order is RESOLVED, not a conflict; and whether a reply could ' +
   'satisfy both directives without being incoherent — only then is it ' +
   'a real conflict. Verdict "noise" ONLY when you are confident the ' +
-  'pair is safe: the directives compose, one does not fire, or ' +
-  'precedence is explicitly written — including when one says "X ' +
-  'instead of Y", which IS a conflict, not composition. When in ' +
+  'pair is safe: the directives compose, one does not fire, ' +
+  'precedence is explicitly written, or BOTH prescribe the same ' +
+  'actions (e.g. each says "offer a human AND sign in" in different ' +
+  'words — agreement is not a collision). "X instead of Y" IS a ' +
+  'conflict, not composition. When in ' +
   'doubt keep the finding (verdict "conflict") — a human reviews it ' +
   'either way, and a missed real contradiction is worse than a ' +
   'reviewed false alarm. Reply ONLY with a JSON array: ' +
@@ -1011,12 +1013,14 @@ export async function checkPromptConflicts(
         replace: ap.replace.slice(0, 2000),
       });
     }
+    const clip = (s: string, n: number) =>
+      s.length <= n ? s : s.slice(0, s.lastIndexOf(' ', n)) + '…';
     out.push({
       kind: c.kind === 'redundant' ? 'redundant' : 'conflict',
-      a: c.a.slice(0, 300),
-      b: c.b.slice(0, 300),
-      when: typeof c.when === 'string' ? c.when.slice(0, 300) : '',
-      why: typeof c.why === 'string' ? c.why.slice(0, 600) : '',
+      a: clip(c.a, 400),
+      b: clip(c.b, 400),
+      when: typeof c.when === 'string' ? clip(c.when, 400) : '',
+      why: typeof c.why === 'string' ? clip(c.why, 600) : '',
       ...(c.severity === 'high' || c.severity === 'medium' || c.severity === 'low'
         ? { severity: c.severity }
         : {}),
