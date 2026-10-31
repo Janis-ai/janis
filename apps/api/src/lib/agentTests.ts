@@ -860,6 +860,23 @@ function ruleSurface(agent: AgentRow, cfg: RuleSurfaceCfg, instructions: string,
     .join('\n\n');
 }
 
+const CONFLICT_VERIFY_SYSTEM =
+  "You verify claimed conflicts in a customer-support AI agent's " +
+  'instruction layers. For each claim judge four things: what triggers ' +
+  'directive "a" and directive "b" — the claimed "when" must satisfy ' +
+  'BOTH triggers (a directive that does not fire cannot collide); ' +
+  'whether the two prescribe actions for the SAME decision or different ' +
+  'ones — directives on different axes (escalating vs authenticating, ' +
+  'length vs tone) compose, and composing is NOT a conflict; whether ' +
+  'the text already states which wins or the order they run in — a ' +
+  'stated order is RESOLVED, not a conflict; and whether a reply could ' +
+  'satisfy both directives without being incoherent — only then is it ' +
+  'a real conflict. Verdict "conflict" only when a model executing both ' +
+  'directives could produce a contradictory or impossible reply; ' +
+  '"noise" when they compose, when one does not fire, or when ' +
+  'precedence is already written. Reply ONLY with a JSON array: ' +
+  '[{"i":0,"verdict":"conflict"|"noise"}] — one entry per claim.';
+
 /** Read the agent's rule surface the way the model does — instructions,
  *  tone, always-injected knowledge notes, procedure triggers, plus the
  *  platform persona/context lines that fill gaps — and report directive
@@ -870,7 +887,7 @@ export async function checkPromptConflicts(
   db: Db,
   agent: AgentRow,
   draft?: { instructions?: string; tone?: string },
-): Promise<PromptConflict[] | null> {
+): Promise<{ conflicts: PromptConflict[]; dismissed: number } | null> {
   let llm: LlmSettings;
   try {
     llm = await llmFor(db, agent);
@@ -982,7 +999,46 @@ export async function checkPromptConflicts(
       ...(applyOk ? { apply: edits } : {}),
     });
   }
-  return out;
+  if (!out.length) return { conflicts: [], dismissed: 0 };
+  // Verify pass — the generator is deliberately high-recall and reads
+  // co-applicable directives on different axes (escalate vs sign in) as
+  // collisions. A second call plays skeptic per claim. Fail-open: a
+  // failed or garbled verdict keeps the finding — a missed real
+  // conflict is worse than noise.
+  const verify = await complete({ ...llm, temperature: 0, maxTokens: 800 }, CONFLICT_VERIFY_SYSTEM, [
+    {
+      role: 'user',
+      content:
+        `Agent: ${agent.name}\n\n${parts}\n\nClaimed findings:\n` +
+        JSON.stringify(out.map(({ apply: _apply, ...rest }) => rest)),
+    },
+  ]).catch(() => null);
+  if (verify?.promptTokens || verify?.completionTokens) {
+    await recordLlmUsage(db, {
+      workspaceId: agent.workspaceId,
+      agentId: agent.id,
+      model: verify.model,
+      capModel: llm.model,
+      promptTokens: verify.promptTokens,
+      completionTokens: verify.completionTokens,
+      byok: llm.byok,
+    }).catch(() => {});
+  }
+  const vm = verify ? /\[[\s\S]*\]/.exec(verify.text ?? '') : null;
+  let verdicts: unknown;
+  try {
+    verdicts = vm ? JSON.parse(vm[0]) : null;
+  } catch {
+    verdicts = null;
+  }
+  if (!Array.isArray(verdicts)) return { conflicts: out, dismissed: 0 };
+  const noise = new Set<number>();
+  for (const v of verdicts) {
+    const e = v as { i?: unknown; verdict?: unknown };
+    if (Number.isInteger(e.i) && e.verdict === 'noise') noise.add(e.i as number);
+  }
+  const kept = out.filter((_, i) => !noise.has(i));
+  return { conflicts: kept, dismissed: out.length - kept.length };
 }
 
 const REWRITE_SYSTEM =

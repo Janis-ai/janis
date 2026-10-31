@@ -1135,6 +1135,7 @@ export function InstructionsSection({
   const [check, setCheck] = useState<{
     pending?: boolean;
     err?: string;
+    dismissed?: number;
     conflicts?: {
       kind?: 'conflict' | 'redundant';
       a: string;
@@ -1192,17 +1193,17 @@ export function InstructionsSection({
     // run's Applied marks.
     setApplied(new Set());
     try {
-      const r = await api<{ conflicts: { a: string; b: string; when: string; fix: string }[] }>(
-        `/api/agents/${agentId}/prompt-check`,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            instructions: draft?.instructions ?? cfg.system_prompt ?? '',
-            tone: draft?.tone ?? cfg.tone ?? '',
-          }),
-        },
-      );
-      setCheck({ conflicts: r.conflicts });
+      const r = await api<{
+        conflicts: { a: string; b: string; when: string; fix: string }[];
+        dismissed?: number;
+      }>(`/api/agents/${agentId}/prompt-check`, {
+        method: 'POST',
+        body: JSON.stringify({
+          instructions: draft?.instructions ?? cfg.system_prompt ?? '',
+          tone: draft?.tone ?? cfg.tone ?? '',
+        }),
+      });
+      setCheck({ conflicts: r.conflicts, dismissed: r.dismissed ?? 0 });
     } catch (e) {
       setCheck({ err: (e as Error).message });
     }
@@ -1275,6 +1276,8 @@ export function InstructionsSection({
             <div className="muted" style={{ fontSize: 12 }}>
               No contradicting rules found across instructions, tone, knowledge
               notes and procedures.
+              {(check.dismissed ?? 0) > 0 &&
+                ` ${check.dismissed} ${check.dismissed === 1 ? 'finding was' : 'findings were'} dismissed as likely false positives.`}
             </div>
           ) : (
             check.conflicts.map((c, i) => (
@@ -1344,6 +1347,12 @@ export function InstructionsSection({
                 )}
               </div>
             ))
+          )}
+          {(check.dismissed ?? 0) > 0 && check.conflicts.length > 0 && (
+            <div className="muted" style={{ fontSize: 11 }}>
+              {check.dismissed} {check.dismissed === 1 ? 'finding was' : 'findings were'} dismissed
+              as likely false positives.
+            </div>
           )}
         </div>
       )}

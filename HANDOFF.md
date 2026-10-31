@@ -155,7 +155,16 @@ persona itself got the same treatment (scripts/concierge-persona.txt):
 the unconditional "list data categories instead of offering a handoff"
 and "specific realistic timeframe" lines were removed — handoff now
 explicitly wins, no invented SLAs, and approval-card retries require an
-actual error (a blind re-call double-posts the proposal).
+actual error (a blind re-call double-posts the proposal). Oct 31 cont.:
+Apply fix now auto-saves and re-runs the audit so the next finding is
+ready to click through; the instructions textarea is user-resizable; and
+a second-pass verifier (CONFLICT_VERIFY_SYSTEM — judges each claimed
+finding's triggers, axis, stated precedence, and coherence) drops
+false-positive pairs like "flag a human" vs "sign in for account work"
+(server returns {conflicts, dismissed}; the UI reports the count).
+Generation stays deliberately high-recall; verification fails open.
+Also fixed at the source: the platform sign-in line now states
+escalating to a human isn't workspace-bound (hostedAgent.ts).
 
 **Test sims understand human handoffs (Oct 30):** rescue-saved tests replayed
 without the conversation's escalation state — the synthetic conv carried

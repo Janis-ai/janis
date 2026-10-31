@@ -3528,9 +3528,9 @@ export function agentRoutes(db: Db) {
     async (c) => {
       const agent = await ownedAgent(c);
       if (!agent) return c.json({ error: 'not found' }, 404);
-      const conflicts = await checkPromptConflicts(db, agent, c.req.valid('json'));
-      if (conflicts === null) return c.json({ error: 'check failed — check the agent has a working LLM' }, 502);
-      return c.json({ conflicts });
+      const result = await checkPromptConflicts(db, agent, c.req.valid('json'));
+      if (result === null) return c.json({ error: 'check failed — check the agent has a working LLM' }, 502);
+      return c.json(result);
     },
   );
 

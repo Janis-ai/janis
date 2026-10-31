@@ -436,49 +436,42 @@ describe('checkPromptConflicts', () => {
           '[{"kind":"conflict","a":"flag for a human when the customer asks","b":"manual intervention → sign in via Copilot","when":"a visitor asks for a person","why":"both rules claim the same request","severity":"high","fix":"scope the sign-in rule to account actions like refunds","apply":[{"field":"knowledge","index":0,"find":"Manual intervention requests → send the user to sign in via the Copilot.","replace":"Refund and account-action requests → send the user to sign in via the Copilot."}]},{"kind":"redundant","a":"flag for a human","b":"","when":"repeats the rule above","why":"the second rule adds nothing","severity":"low","fix":"delete it","apply":[{"field":"instructions","find":"Flag for a human whenever the customer asks for one.","replace":""}]},{"a":"x","b":"y","when":"w","fix":"f","apply":[{"field":"instructions","find":"Flag for a human","replace":"z"},{"field":"instructions","find":"not actually in the text","replace":"z"}]}]',
       }),
     );
-    const conflicts = await checkPromptConflicts(db, agent, {
+    // Verify pass — the second finding is judged noise and dropped.
+    fetchMock.mockResolvedValueOnce(
+      llmReply({
+        content: '[{"i":0,"verdict":"conflict"},{"i":1,"verdict":"noise"},{"i":2,"verdict":"conflict"}]',
+      }),
+    );
+    const result = await checkPromptConflicts(db, agent, {
       instructions: 'Flag for a human whenever the customer asks for one.',
     });
-    expect(conflicts).toEqual([
-      {
-        kind: 'conflict',
-        a: 'flag for a human when the customer asks',
-        b: 'manual intervention → sign in via Copilot',
-        when: 'a visitor asks for a person',
-        why: 'both rules claim the same request',
-        severity: 'high',
-        fix: 'scope the sign-in rule to account actions like refunds',
-        // verbatim find located in knowledge[0] → apply survives
-        apply: [
-          {
-            field: 'knowledge',
-            index: 0,
-            find: 'Manual intervention requests → send the user to sign in via the Copilot.',
-            replace: 'Refund and account-action requests → send the user to sign in via the Copilot.',
-          },
-        ],
-      },
-      {
-        kind: 'redundant',
-        a: 'flag for a human',
-        b: '',
-        when: 'repeats the rule above',
-        why: 'the second rule adds nothing',
-        severity: 'low',
-        fix: 'delete it',
-        // empty replace — a deletion — locates and is offered
-        apply: [
-          {
-            field: 'instructions',
-            find: 'Flag for a human whenever the customer asks for one.',
-            replace: '',
-          },
-        ],
-      },
-      // one edit's find doesn't locate → the whole apply set is dropped
-      // (a half-applied fix is worse than none), conflict still listed
-      { kind: 'conflict', a: 'x', b: 'y', when: 'w', why: '', fix: 'f' },
-    ]);
+    expect(result).toEqual({
+      dismissed: 1,
+      conflicts: [
+        {
+          kind: 'conflict',
+          a: 'flag for a human when the customer asks',
+          b: 'manual intervention → sign in via Copilot',
+          when: 'a visitor asks for a person',
+          why: 'both rules claim the same request',
+          severity: 'high',
+          fix: 'scope the sign-in rule to account actions like refunds',
+          // verbatim find located in knowledge[0] → apply survives
+          apply: [
+            {
+              field: 'knowledge',
+              index: 0,
+              find: 'Manual intervention requests → send the user to sign in via the Copilot.',
+              replace: 'Refund and account-action requests → send the user to sign in via the Copilot.',
+            },
+          ],
+        },
+        // i=2 kept (verdict conflict): one edit's find doesn't locate →
+        // the whole apply set is dropped (a half-applied fix is worse
+        // than none), conflict still listed
+        { kind: 'conflict', a: 'x', b: 'y', when: 'w', why: '', fix: 'f' },
+      ],
+    });
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     const userMsg = body.messages.find((m: { role: string }) => m.role === 'user').content;
     expect(userMsg).toContain('sign in via the Copilot'); // knowledge note audited too
@@ -489,8 +482,8 @@ describe('checkPromptConflicts', () => {
   it('uses the built-in persona when the agent has no authored instructions', async () => {
     const agent = await makeAgent();
     fetchMock.mockResolvedValueOnce(llmReply({ content: '[]' }));
-    const conflicts = await checkPromptConflicts(db, agent);
-    expect(conflicts).toEqual([]);
+    const result = await checkPromptConflicts(db, agent);
+    expect(result).toEqual({ conflicts: [], dismissed: 0 });
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(body.messages.find((m: { role: string }) => m.role === 'user').content).toContain(
       'Built-in persona',
