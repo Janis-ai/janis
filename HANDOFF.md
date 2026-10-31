@@ -94,6 +94,24 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Landing page revision pass (Oct 31):** `Landing.tsx` rewritten to match
+the shipped product — the flat 8-card feature grid became four themed
+sections: "One front line, every channel" (inbox now lists Gmail/Outlook
+shared inboxes; help-center card; personas folded into takeover), "An
+agent that gets safer every week" (approvals, rescue→replayable-test with
+simulated teammate + run diffs, prompt conflict-audit/rewrite/version
+history, site-crawl + private Google-file knowledge), "Run support like a
+system" (campaigns, reports/CSAT/conversions, contacts+CRM sync), and
+"Bring your own — agent, bot, or model" (npm SDK/webhook, Chatfuel/
+ManyChat ingest, BYOK $0 LLM line). Hero gives hosted and BYO equal
+billing instead of treating hosted as a footnote; steps/comparison table
+(updated 'Your agent' + new 'Changing the rules' row)/integrations
+(Salesforce, Calendly, Google Drive, Slack, Make)/FAQ (Google Docs Q,
+bot-ingest answer) all refreshed; pricing intro notes Scale's SSO/SCIM +
+GDPR export. Eight new inline stroke glyphs (book, shield, refresh, send,
+chart, users, bot, key). Still owed: real screenshots + proof assets
+(AGENTS.md #36).
+
 **Slack-style mobile shell (Oct 31):** at phone width the console spent
 ~110px on a dead icon rail + dock strip. Now: `.sidebar` becomes an
 off-canvas drawer (full labels) behind a sticky `.mobile-bar` (☰ + the

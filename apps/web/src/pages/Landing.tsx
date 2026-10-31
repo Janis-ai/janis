@@ -55,6 +55,62 @@ const GLYPHS = {
     <path d="M22 16.92v3a2 2 0 01-2.18 2 19.79 19.79 0 01-8.63-3.07 19.5 19.5 0 01-6-6A19.79 19.79 0 012.12 4.18 2 2 0 014.11 2h3a2 2 0 012 1.72c.13.96.36 1.9.7 2.81a2 2 0 01-.45 2.11L8.09 9.91a16 16 0 006 6l1.27-1.27a2 2 0 012.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0122 16.92z" />
   ),
   code: <path d="M16 18l6-6-6-6M8 6l-6 6 6 6" />,
+  book: (
+    <>
+      <path d="M12 6c-2-1.5-5-2-8-1v14c3-1 6-.5 8 1 2-1.5 5-2 8-1V5c-3-1-6-.5-8 1z" />
+      <path d="M12 6v14" />
+    </>
+  ),
+  shield: (
+    <>
+      <path d="M12 3l7 3v5c0 5-3 8.5-7 10-4-1.5-7-5-7-10V6z" />
+      <path d="M9 12l2 2 4-4" />
+    </>
+  ),
+  refresh: (
+    <>
+      <path d="M21 12a9 9 0 11-2.6-6.3" />
+      <path d="M21 3v6h-6" />
+    </>
+  ),
+  send: (
+    <>
+      <path d="M22 2L11 13" />
+      <path d="M22 2l-7 20-4-9-9-4z" />
+    </>
+  ),
+  chart: (
+    <>
+      <path d="M3 21h18" />
+      <path d="M7 21v-7" />
+      <path d="M12 21V9" />
+      <path d="M17 21V5" />
+    </>
+  ),
+  users: (
+    <>
+      <circle cx="9" cy="8" r="3.5" />
+      <path d="M3 20v-1a6 6 0 0112 0v1" />
+      <circle cx="17" cy="9" r="2.5" />
+      <path d="M16 14.5a5 5 0 015 5V20" />
+    </>
+  ),
+  bot: (
+    <>
+      <rect x="5" y="8" width="14" height="11" rx="3" />
+      <path d="M12 8V5" />
+      <circle cx="12" cy="4" r="1" />
+      <path d="M9.5 13h.01M14.5 13h.01" />
+      <path d="M10 16h4" />
+    </>
+  ),
+  key: (
+    <>
+      <circle cx="7.5" cy="16.5" r="4.5" />
+      <path d="M11 13l9-9" />
+      <path d="M17 6l3 3" />
+    </>
+  ),
 } as const;
 
 function Icon({ name }: { name: keyof typeof GLYPHS }) {
@@ -74,54 +130,113 @@ function Icon({ name }: { name: keyof typeof GLYPHS }) {
   );
 }
 
-const FEATURES = [
+const FEATURE_GROUPS: {
+  heading: string;
+  sub: string;
+  items: { icon: keyof typeof GLYPHS; title: string; body: string }[];
+}[] = [
   {
-    icon: 'inbox',
-    title: 'Every channel, one inbox',
-    body: 'Messenger, Instagram, WhatsApp, SMS, email, and web chat — unified, searchable, triageable.',
+    heading: 'One front line, every channel',
+    sub: 'Every conversation in one inbox — with the same AI-first, human-on-tap flow on all of them.',
+    items: [
+      {
+        icon: 'inbox',
+        title: 'Every channel, one inbox',
+        body: 'Messenger, Instagram, WhatsApp, SMS, Gmail and Outlook inboxes, and web chat — unified, searchable, triageable.',
+      },
+      {
+        icon: 'phone',
+        title: 'Voice calls, answered',
+        body: 'A real phone number answers callers, transcribes the conversation, and speaks the agent\u2019s reply — or bridges straight to a human.',
+      },
+      {
+        icon: 'handover',
+        title: 'Take over from anywhere',
+        body: 'Escalations land with an AI brief. Step in from the console or reply right in the Slack thread — typing indicators and operator personas mean the customer sees a person, not a broken bot.',
+      },
+      {
+        icon: 'book',
+        title: 'A help center that answers first',
+        body: 'Publish a branded help center from the same knowledge the agent uses. The widget suggests articles before visitors even ask — and every article keeps version history.',
+      },
+    ],
   },
   {
-    icon: 'phone',
-    title: 'Voice calls, answered',
-    body: 'A real phone number answers callers, transcribes the conversation, and speaks the agent\u2019s reply — or bridges straight to a human.',
+    heading: 'An agent that gets safer every week',
+    sub: 'The improvement loop is built in — every fix ships against evidence, not vibes.',
+    items: [
+      {
+        icon: 'flag',
+        title: 'Autonomous, with checkpoints',
+        body: 'Agents reply and run tools unattended. Mark an action approval-required — refunds, plan changes — and it waits for a human click.',
+      },
+      {
+        icon: 'loop',
+        title: 'Every rescue becomes a test',
+        body: 'Save any handoff as a replayable scenario — it reruns with real session context and a simulated teammate. Change a rule, run the suite, read the diff before it ships.',
+      },
+      {
+        icon: 'shield',
+        title: 'Instructions that audit themselves',
+        body: 'One click checks your agent\u2019s rules for contradictions and redundancy, applies verified fixes, or drafts a merged rewrite — with version history on every save.',
+      },
+      {
+        icon: 'refresh',
+        title: 'Knowledge that stays fresh',
+        body: 'Crawl your whole site on a schedule — pages join and drop as the site changes — or plug in private Google Docs, Sheets, and Drive files.',
+      },
+    ],
   },
   {
-    icon: 'plug',
-    title: 'Hosted or bring-your-own',
-    body: 'Run your agent inside Janis, or keep the one you built and connect it with a webhook.',
+    heading: 'Run support like a system',
+    sub: 'Outbound, measurement, and customer records — not just a queue.',
+    items: [
+      {
+        icon: 'send',
+        title: 'Outbound, not just inbound',
+        body: 'Segment contacts and send campaigns over email and SMS. Replies land in the same inbox — and the agent picks up the thread with the campaign in mind.',
+      },
+      {
+        icon: 'chart',
+        title: 'Reports that close the loop',
+        body: 'CSAT, conversion tracking, per-agent reports, and digests to your inbox and Slack — the numbers come to you.',
+      },
+      {
+        icon: 'users',
+        title: 'Customers, not tickets',
+        body: 'One contact per person across every channel — traits, full history, and CRM sync to HubSpot, Salesforce, and Zendesk.',
+      },
+    ],
   },
   {
-    icon: 'handover',
-    title: 'Take over from anywhere',
-    body: 'Escalations land with an AI brief. Step in from the Janis console — or reply in Slack right in the thread and the customer sees you, not a bot.',
+    heading: 'Bring your own — agent, bot, or model',
+    sub: 'Janis wraps what you already have; nothing needs a rebuild.',
+    items: [
+      {
+        icon: 'code',
+        title: 'Your agent',
+        body: 'Five lines of the janis npm package — or one webhook — adds approvals, takeover, and transcripts to an agent you already built. LangGraph, custom code, anything.',
+      },
+      {
+        icon: 'bot',
+        title: 'Your bot',
+        body: 'Running Chatfuel or ManyChat today? Connect it as a channel — Janis adds the inbox and approval cards, and goes quiet for the bot while a human owns the thread.',
+      },
+      {
+        icon: 'key',
+        title: 'Your LLM key',
+        body: 'Point Janis at your own OpenAI-compatible key or base URL — tokens run on your provider account and the Janis AI line drops to $0.',
+      },
+    ],
   },
-  {
-    icon: 'flag',
-    title: 'Autonomous, with checkpoints',
-    body: 'Agents reply and run tools unattended. Mark an action approval-required — refunds, plan changes — and it waits for a human click.',
-  },
-  {
-    icon: 'loop',
-    title: 'Every rescue teaches the agent',
-    body: 'Recurring escalations cluster into knowledge gaps — Janis drafts the fix, you approve.',
-  },
-  {
-    icon: 'headset',
-    title: 'A handoff that feels human',
-    body: 'Typing indicators, receipts, operator personas — customers see a person, not a broken bot.',
-  },
-  {
-    icon: 'code',
-    title: 'Five lines to instrument',
-    body: 'The janis npm package adds approvals, takeover, and transcripts to an agent you already built — LangGraph, custom code, anything.',
-  },
-] as const;
+];
 
 const DIFFERENT: [string, string, string][] = [
-  ['Your agent', 'Rebuild it on their bot platform', 'Keep yours — or use ours'],
+  ['Your agent', 'Rebuild it on their bot platform', 'Keep yours — agent, bot, or use ours'],
   ['Autonomy', 'All-or-nothing, decided globally', 'Full speed — checkpoints where you draw them'],
   ['The handoff', 'A bolted-on escape hatch', 'The core of the product'],
   ['When the AI fails', 'A dashboard shows you where', 'Janis drafts the fix for you'],
+  ['Changing the rules', 'Publish and pray', 'Replay real conversations before it ships'],
   ['Pricing', 'Per seat, per teammate', 'Per message + metered tokens'],
 ];
 
@@ -149,15 +264,19 @@ const PLAN_NOTES: Record<string, string> = {
 const FAQ = [
   [
     'Do I need to rebuild my bot on Janis?',
-    'No. Keep the agent you already built — LangGraph, custom code, anything — and connect it with a webhook or the janis npm package. Don\u2019t have one? Janis hosts agents trained on your docs and site.',
+    'No. Keep the agent you already built — LangGraph, custom code, anything — and connect it with a webhook or the janis npm package. Already on Chatfuel or ManyChat? Plug that in too — Janis adds the inbox and takeover around it. Starting fresh? Janis hosts agents trained on your docs and site.',
   ],
   [
     'Which channels does it cover?',
-    'Messenger, Instagram, WhatsApp, SMS, email, web chat, and voice — every conversation in one inbox, with the same takeover flow on all of them.',
+    'Messenger, Instagram, WhatsApp, SMS, Gmail and Outlook shared inboxes, web chat, and voice — every conversation in one inbox, with the same takeover flow on all of them.',
   ],
   [
     'How do approvals work?',
     'Mark any agent action approval-required — refunds, plan changes, anything sensitive. The agent pauses until a human approves it in the console or straight from Slack, then picks up where it left off.',
+  ],
+  [
+    'Can it read our Google Docs?',
+    'Yes. Connect a Google account, then paste private Doc, Sheet, Slides, or Drive links as knowledge sources — or install the Google tools so the agent can read, create, and update files itself.',
   ],
   [
     'What counts as a message?',
@@ -169,13 +288,13 @@ const FAQ = [
   ],
 ] as const;
 
-const INTEGRATIONS = ['Shopify', 'HubSpot', 'Zendesk', 'Stripe', 'Cal.com', 'Zapier', 'Twilio', 'Google'];
+const INTEGRATIONS = ['Shopify', 'HubSpot', 'Salesforce', 'Zendesk', 'Stripe', 'Google Drive', 'Cal.com', 'Calendly', 'Twilio', 'Slack', 'Zapier', 'Make'];
 
 const STEPS = [
-  ['Connect', 'Link your channels and your agent — hosted on Janis or your own webhook.'],
-  ['Agent answers', 'Instant replies grounded in your knowledge base, 24/7.'],
+  ['Connect', 'Link your channels and knowledge — plus the agent: hosted on Janis, your own code, or your Chatfuel/ManyChat bot.'],
+  ['Agent answers', 'Instant replies grounded in your docs, site, and Google files — 24/7.'],
   ['Human steps in', 'An alert lands with an AI brief — take over in the console or straight from Slack, and approve gated actions inline.'],
-  ['Hand it back', 'Resume the agent; the exchange becomes training data.'],
+  ['Hand it back', 'Resume the agent; the rescue becomes a replayable regression test.'],
 ];
 
 type Beat = {
@@ -473,7 +592,8 @@ export default function Landing() {
           where it left off.
         </p>
         <p className="landing-sub">
-          Don&rsquo;t have an agent yet? Janis hosts one — trained on your docs, live in minutes.
+          Build a hosted agent on your docs in minutes — or bring the agent, bot,
+          or LLM key you already have.
         </p>
         <div className="row" style={{ justifyContent: 'center', gap: 12 }}>
           <Link className="btn primary lg" to={cta.to} onClick={ctaClick('hero')}>
@@ -501,15 +621,21 @@ export default function Landing() {
         <DemoStrip />
       </section>
 
-      <section className="landing-grid">
-        {FEATURES.map((f) => (
-          <div key={f.title} className="card landing-card">
-            <Icon name={f.icon} />
-            <strong>{f.title}</strong>
-            <p className="muted">{f.body}</p>
+      {FEATURE_GROUPS.map((g) => (
+        <section className="landing-steps" key={g.heading}>
+          <h2>{g.heading}</h2>
+          <p className="landing-sub">{g.sub}</p>
+          <div className={`landing-grid${g.items.length === 4 ? ' four' : ''}`}>
+            {g.items.map((f) => (
+              <div key={f.title} className="card landing-card">
+                <Icon name={f.icon} />
+                <strong>{f.title}</strong>
+                <p className="muted">{f.body}</p>
+              </div>
+            ))}
           </div>
-        ))}
-      </section>
+        </section>
+      ))}
 
       <section className="landing-steps" id="how">
         <h2>How it works</h2>
@@ -554,6 +680,7 @@ export default function Landing() {
           Every plan includes the console, unlimited seats and channels, alerts, and digests.
           You pay for messages — not seats. LLM tokens are metered at provider rates on
           our platform key — or bring your own key and the LLM line drops to $0.
+          Scale adds SSO/SCIM and GDPR export.
         </p>
         {plans.some((p) => p.yearly_cents) && (
           <div className="row" style={{ gap: 4, justifyContent: 'center', marginBottom: 24 }}>
@@ -622,8 +749,8 @@ export default function Landing() {
       <section className="landing-steps">
         <h2>Plays well with your stack</h2>
         <p className="landing-sub">
-          Built-in tools for the systems your support team already runs — plus webhooks
-          for everything else.
+          Built-in tools for the systems your support team already runs — plus a REST API,
+          webhooks, and Zapier or Make for everything else.
         </p>
         <div className="landing-integrations">
           {INTEGRATIONS.map((name) => (

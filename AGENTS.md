@@ -569,11 +569,14 @@ drizzle-kit/workbox-build, nothing to drop directly).
     comparison pages, trust/security page.
 37. `/for/:slug` landing variants — copy written; ship when campaign
     data shows platform skew.
-51. Marketing website revisions (per Mike 2026-10-29) — the janis.ai
-    landing/marketing surface needs a revision pass. Scope TBD by Mike —
-    likely: product-story refresh (hosted+BYOK agents, approval cards,
-    channels grid), new screenshots, proof assets per #36, and copy
-    reflecting what actually shipped vs the original launch pitch.
+51. DONE 2026-10-31 — landing revision pass shipped (full restructure,
+    scope approved by Mike): 8 flat feature cards → four themed groups
+    (channels+help center / agent-quality loop incl. regression tests +
+    conflict audit / outbound+reports+CRM / bring-your-own agent, bot —
+    Chatfuel/ManyChat — and LLM key). Hero now gives hosted and BYO equal
+    billing; channel list gained Gmail/Outlook; integrations + FAQ +
+    comparison table refreshed; Scale pricing notes SSO/SCIM+GDPR.
+    Still owed from #36: screenshots, testimonials, logo wall.
 
 *G. Gated/deferred (correctly parked)*
 38. Per-agent member scope — agent_members scoping/'hidden' role exists;
