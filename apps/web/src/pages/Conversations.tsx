@@ -7,7 +7,7 @@ import { api } from '../api/client';
 import { Avatar, displayName, Empty, Md, SearchInput, StateBadge, surfaceLabel, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
-import { Bot, Cog, Headset, ListFilter, Moon, Save, Star, User, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Bot, Cog, Headset, ListFilter, Mail, MailOpen, Moon, Save, Star, Tag, Trash2, User, UserCheck, UserX, X } from 'lucide-react';
 import { useConfirm, usePrompt } from '../components/Prompt';
 import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
 import { isEditableTarget } from '../lib/keys';
@@ -673,15 +673,17 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             />
             <strong>{selected.size} selected</strong>
           </label>
-          <button className="btn" disabled={busy} onClick={() => bulk('archive')}>Archive</button>
-          <button className="btn" disabled={busy} onClick={() => bulk('unarchive')}>Unarchive</button>
-          <button className="btn" disabled={busy} onClick={() => bulk('mark_read')}>Mark read</button>
-          <button className="btn" disabled={busy} onClick={() => bulk('mark_unread')}>Mark unread</button>
-          <button className="btn" disabled={busy} onClick={() => bulk('star')}>Star</button>
-          <button className="btn" disabled={busy} onClick={() => bulk('assign_me')}>Assign to me</button>
-          <button className="btn" disabled={busy} onClick={() => bulk('unassign')}>Unassign</button>
+          <button className="btn" title="Archive" aria-label="Archive" disabled={busy} onClick={() => bulk('archive')}><Archive size={14} /></button>
+          <button className="btn" title="Unarchive" aria-label="Unarchive" disabled={busy} onClick={() => bulk('unarchive')}><ArchiveRestore size={14} /></button>
+          <button className="btn" title="Mark read" aria-label="Mark read" disabled={busy} onClick={() => bulk('mark_read')}><MailOpen size={14} /></button>
+          <button className="btn" title="Mark unread" aria-label="Mark unread" disabled={busy} onClick={() => bulk('mark_unread')}><Mail size={14} /></button>
+          <button className="btn" title="Star" aria-label="Star" disabled={busy} onClick={() => bulk('star')}><Star size={14} /></button>
+          <button className="btn" title="Assign to me" aria-label="Assign to me" disabled={busy} onClick={() => bulk('assign_me')}><UserCheck size={14} /></button>
+          <button className="btn" title="Unassign" aria-label="Unassign" disabled={busy} onClick={() => bulk('unassign')}><UserX size={14} /></button>
           <button
             className="btn danger"
+            title="Delete"
+            aria-label="Delete"
             disabled={busy}
             onClick={async () => {
               const ok = await confirm(
@@ -692,14 +694,16 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
               if (ok === 'delete') void bulk('delete');
             }}
           >
-            Delete
+            <Trash2 size={14} />
           </button>
           <button
             className="btn"
             disabled={busy}
+            title="Tag"
+            aria-label="Tag"
             onClick={() => setTagDlg({ tag: '' })}
           >
-            Tag…
+            <Tag size={14} />
           </button>
           <select
             className="btn"
@@ -716,7 +720,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             {SNOOZE_OPTIONS.map(([l, m]) => <option key={l} value={m}>{l}</option>)}
             <option value="0">Unsnooze</option>
           </select>
-          <button className="btn" onClick={() => setSelected(new Set())}>Clear</button>
+          <button className="btn" title="Clear selection" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>
       )}
 
