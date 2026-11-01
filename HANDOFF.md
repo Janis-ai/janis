@@ -134,6 +134,20 @@ backdrops, and `snapToBottom` on image load no longer calls
 were being yanked to the top of the last message (top-anchor survives
 only on explicit jump-to-latest).
 
+**Mobile scroll/icon audit round 2 (Nov 1):** conv footer is now truly
+anchored — .conv-foot sticky-bottom under @container conv (≤780px),
+opaque bg, margin-top:auto inside a definite-height chain
+(.layout.conv-open .main flex-column → conv-layout flex:1 → conv-main
+min-height:100%), so it holds bottom on short AND long threads. Inbox:
+.conv-list is the scroll region at every width (.main locks via
+.layout:has(.inbox-head)); DiscoveryCards/Onboarding render only when
+the inbox is empty (force prop kills the "Take a tour" stub). Buttons
+iconify by COLUMN width — .conv-main is a @container conv (≤780px);
+the ≤1100/dock-open viewport rules remain as fallback. The ≤900
+transcript 55vh cap was removed (nested scroller). Dock reflows at
+≥960px (was 1200) — no more .test-dock-dim wash; conv-side stacks
+below transcript when dock squeezes 721–1500px.
+
 **Landing wave 2 — demos + real screenshots (Oct 31):** per Josh Barkin's
 feedback (shared via iMessage — taken as direction, not gospel): DemoStrip
 is now data-driven — a `.demo-chip` row (Shopify, Stripe, Zendesk,
