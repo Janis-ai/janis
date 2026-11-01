@@ -1376,7 +1376,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   }
   .snooze-wrap:hover, .sendas-wrap:hover { border-color: var(--accent); }
   .snooze-wrap select, .sendas-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
-  .snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: block; color: var(--muted); }
+  .snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: block; position: static; color: var(--muted); }
   .snooze-wrap.on .snz-ic, .sendas-wrap.on .sendas-ic { color: var(--accent); }
   /* Footer anchors to the viewport bottom whenever the column is narrow —
      opaque, and bled past .main's padding so nothing shows beneath it. */
