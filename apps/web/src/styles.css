@@ -1751,8 +1751,8 @@ details summary:hover { color: var(--text); }
     background: var(--bg);
   }
   /* Dead air trimmed — the chrome hugs the content, not the padding. */
-  .conv-actions { margin-top: 4px; }
-  .transcript { margin-top: 8px; margin-bottom: 0; }
+  .conv-main .conv-actions { margin-top: 6px; }
+  .transcript { margin-top: 10px; margin-bottom: 0; }
   .composer { margin-top: 4px; }
   /* Search and the utility icons share one row; utilities go icon-only,
      snooze shows just the moon (accent when snoozed). */
