@@ -83,7 +83,7 @@ button, input, select, textarea { font: inherit; }
 /* iOS elastic overscroll reveals dead space below the shell even with
    .layout locked — clamp the document itself when the shell exists
    (landing has no .layout and keeps its document scroll). */
-body:has(.layout) { overflow: hidden; overscroll-behavior: none; }
+html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: none; }
 .sidebar {
   width: 210px; flex-shrink: 0; background: var(--panel);
   border-right: 1px solid var(--border); padding: 16px 0;
