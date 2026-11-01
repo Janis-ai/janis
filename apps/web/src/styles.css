@@ -1684,7 +1684,7 @@ details summary:hover { color: var(--text); }
   .conv-mobile-head {
     display: flex; align-items: center; gap: 10px;
     position: sticky; top: 0; z-index: 30;
-    margin: 0 -14px 10px; padding: 8px 12px 8px 6px;
+    margin: 0 -14px 4px; padding: 8px 12px 8px 6px;
     background: var(--bg); border-bottom: 1px solid var(--border);
   }
   .cmh-back {
@@ -1751,7 +1751,7 @@ details summary:hover { color: var(--text); }
     background: var(--bg);
   }
   /* Dead air trimmed — the chrome hugs the content, not the padding. */
-  .conv-actions { margin-top: 6px; }
+  .conv-actions { margin-top: 4px; }
   .transcript { margin-top: 8px; }
   .composer { margin-top: 6px; }
   /* Search and the utility icons share one row; utilities go icon-only,
