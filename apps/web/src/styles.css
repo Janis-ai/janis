@@ -962,6 +962,8 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 /* Clear-× inside a field — wrapper is positioned, input pads right of it. */
 .search-wrap { position: relative; display: inline-flex; flex: 1 1 0; min-width: 0; }
 .search-wrap > input { flex: 1 1 0; min-width: 0; width: 100%; padding-right: 28px; }
+/* WebKit draws its own cancel control on type=search — ours replaces it. */
+.search-wrap > input::-webkit-search-cancel-button { display: none; }
 .search-clear {
   position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
   display: inline-flex; align-items: center; justify-content: center;
