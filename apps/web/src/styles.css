@@ -500,11 +500,18 @@ button, input, select, textarea { font: inherit; }
 .layout.dock-testable .main { max-width: 880px; }
 /* With room to spare, push the column instead — reflow beats overlay.
    Below this the dock is a drawer: dim + click-outside/Esc/nav close. */
-@media (min-width: 1200px) {
+@media (min-width: 960px) {
   .test-dock-dim { display: none; }
   .layout.dock-open .main { margin-right: 360px; }
   .layout.dock-split.dock-open .main { margin-right: 840px; }
   .layout.dock-wide.dock-open .main { margin-right: 780px; }
+}
+/* A squeezed conversation column (dock open at mid widths) stacks the
+   details rail under the transcript instead of crushing it — same move
+   as the ≤900px layout. */
+@media (min-width: 721px) and (max-width: 1500px) {
+  .layout.dock-open .conv-layout { flex-direction: column; }
+  .layout.dock-open .conv-side { width: auto; }
 }
 .main { transition: margin-right .15s ease; }
 @media (max-width: 720px) {
