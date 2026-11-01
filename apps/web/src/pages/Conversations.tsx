@@ -722,7 +722,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
               <option value="0">Unsnooze</option>
             </select>
           </span>
-          <button className="btn" title="Clear selection" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
+          <button className="btn bulk-close" title="Clear selection" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>
       )}
 

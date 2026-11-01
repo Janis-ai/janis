@@ -1727,6 +1727,13 @@ details summary:hover { color: var(--text); }
   .inbox-head { top: 49px; margin: 0 -14px; padding: 0 14px 4px; }
   .filters { margin-bottom: 4px; }
   .conv-list { margin: 0 -14px; padding: 0 14px; }
+  /* Bulk bar on phones: count+close own the top row (close far right),
+     the ten actions wrap as two rows of five. */
+  .bulk-bar { row-gap: 8px; }
+  .bulk-bar .bulk-close { order: 1; margin-left: auto; }
+  .bulk-bar > .btn:not(.bulk-close), .bulk-bar > .bulk-snz {
+    order: 5; flex: 0 0 calc(20% - 8px); justify-content: center;
+  }
   /* Details slide-over — the side column leaves the flow and becomes a
      right drawer behind the header's ⓘ. */
   .conv-side {
