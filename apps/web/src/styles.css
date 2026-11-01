@@ -1831,6 +1831,9 @@ details summary:hover { color: var(--text); }
   /* Search and the utility icons share one row; utilities go icon-only,
      snooze shows just the moon (accent when snoozed). */
   .conv-actions .conv-search { flex: 1 1 0; min-width: 0; }
+  /* iOS auto-zooms on inputs under 16px — keep text fields at 16 so focus
+     never triggers a page zoom. */
+  .conv-search, .composer-inner textarea { font-size: 16px; }
   /* The mobile head already carries ⓘ — the actions-row copy stays hidden. */
   .conv-actions .info-btn { display: none; }
   .conv-actions .btn { padding: 7px 10px; }
