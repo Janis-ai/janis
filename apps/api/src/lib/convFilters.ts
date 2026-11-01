@@ -8,7 +8,7 @@ import { agentScopeCond, type AgentScope } from './access.js';
  * open-alert kinds. Values inside a group OR together; groups AND. */
 export const CONV_STATES = ['active', 'needs_human', 'human', 'archived', 'snoozed'] as const;
 export const CONV_FLAGS = ['unread', 'starred'] as const;
-export const CONV_SIGNALS = ['handoff_offer', 'failure', 'overdue'] as const;
+export const CONV_SIGNALS = ['handoff_offer', 'failure', 'overdue', 'negative_sentiment'] as const;
 
 const csvIn = (allowed: readonly string[]) =>
   z
@@ -23,7 +23,7 @@ const csvIn = (allowed: readonly string[]) =>
  * filter popover speaks — a legacy `state` folds into the same buckets. */
 export const convListQuery = z.object({
   state: z
-    .enum(['active', 'needs_human', 'human', 'archived', 'snoozed', 'unread', 'starred', 'handoff_offer', 'failure', 'overdue'])
+    .enum(['active', 'needs_human', 'human', 'archived', 'snoozed', 'unread', 'starred', 'handoff_offer', 'failure', 'overdue', 'negative_sentiment'])
     .optional(),
   states: csvIn(CONV_STATES),
   flags: csvIn(CONV_FLAGS),
@@ -86,7 +86,7 @@ export function convListConditions(
   const flags = new Set(q.flags ?? []);
   const signals = new Set(q.signals ?? []);
   if (q.state === 'unread' || q.state === 'starred') flags.add(q.state);
-  else if (q.state === 'handoff_offer' || q.state === 'failure' || q.state === 'overdue')
+  else if (q.state === 'handoff_offer' || q.state === 'failure' || q.state === 'overdue' || q.state === 'negative_sentiment')
     signals.add(q.state);
   else if (q.state) states.add(q.state);
 
@@ -120,6 +120,7 @@ export function convListConditions(
   const signalOrs: SQL[] = [];
   if (signals.has('handoff_offer')) signalOrs.push(openAlertOf('handoff_offer'));
   if (signals.has('failure')) signalOrs.push(openAlertOf('failure'));
+  if (signals.has('negative_sentiment')) signalOrs.push(eq(conversations.sentiment, 'negative'));
   if (signals.has('overdue'))
     signalOrs.push(
       and(

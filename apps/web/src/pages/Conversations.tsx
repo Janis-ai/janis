@@ -51,6 +51,7 @@ const FILTER_GROUPS: {
       ['handoff_offer', 'Handoff offered'],
       ['failure', 'Errors'],
       ['overdue', 'Overdue'],
+      ['negative_sentiment', 'Negative sentiment'],
     ],
   },
 ];
@@ -558,9 +559,9 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           >
             <ListFilter size={14} style={{ verticalAlign: '-2px' }} />
             <span className="btn-label">
-              {activeFilters ? `Filter · ${activeFilters}` : 'Filter'}
+              {activeFilters + (tab === 'attention' ? 1 : 0) ? `Filter · ${activeFilters + (tab === 'attention' ? 1 : 0)}` : 'Filter'}
             </span>
-            {(attn?.count ?? 0) > 0 && <span className="filter-badge">{attn!.count}</span>}
+            {(activeFilters + (tab === 'attention' ? 1 : 0)) > 0 && <span className="filter-badge">{activeFilters + (tab === 'attention' ? 1 : 0)}</span>}
           </button>
           {filterOpen && (
             <>
