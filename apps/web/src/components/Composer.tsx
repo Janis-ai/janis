@@ -207,12 +207,12 @@ export default function Composer({
           placeholder={
             placeholder ??
             (sendAs === 'agent'
-              ? narrow ? 'As the agent…' : 'Message the agent will deliver…'
+              ? narrow ? 'Reply as the agent…' : 'Reply as the agent — the agent keeps control…'
               : sendAs === 'note'
-                ? narrow ? 'Internal note…' : 'Internal note — teammates only…'
+                ? narrow ? 'Note for teammates…' : 'Leave an internal note — only your team sees it…'
                 : sendAs === 'teach'
-                  ? narrow ? 'Teach the agent…' : 'Teach the agent a fact it should always know…'
-                  : narrow ? 'Reply…' : 'Reply as a human… (Enter sends, Shift+Enter for newline)')
+                  ? narrow ? 'Teach the agent…' : 'Teach the agent — saved and used in future replies…'
+                  : narrow ? 'Reply as yourself…' : 'Reply as yourself — takes over, pausing the agent…')
           }
         />
 
