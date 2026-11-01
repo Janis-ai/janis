@@ -1383,7 +1383,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   /* Footer anchors to the viewport bottom whenever the column is narrow —
      opaque, and bled past .main's padding so nothing shows beneath it. */
 }
-.conv-side { width: 280px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden; overflow-wrap: break-word; }
+.conv-side { width: 280px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden; overflow-wrap: break-word; padding-top: 14px; }
 .card.suggestion { border-color: var(--accent); }
 /* The Ask Janis rail claims ~340px — on the conversation screen at mid widths
    that squeezes the transcript + details into nested scrollbars, so the sidebar
