@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ImgHTMLAttributes } from 'react';
+import { useEffect, useRef, useState, type ImgHTMLAttributes, type InputHTMLAttributes } from 'react';
 import { Link } from 'react-router-dom';
 import type { Conversation, ConversationState, UserProfile } from '@janis/shared';
 import { friendlyName } from '@janis/shared';
@@ -8,6 +8,36 @@ import { linkifyParts, splitEmphasis, stripStrayMarkers } from '../lib/richText'
 
 /** The wordmark/mark PNGs are white-on-transparent — invisible in light mode.
  *  Swaps to the ink variant when the theme flips (or on first render). */
+
+/** Search input with a clear-× — appears only when the field has text;
+ *  the field's right padding keeps long queries from sliding under it. */
+export function SearchInput({
+  value,
+  onClear,
+  className = 'search-box',
+  ...props
+}: {
+  value: string;
+  onClear: () => void;
+  className?: string;
+} & Omit<InputHTMLAttributes<HTMLInputElement>, 'value' | 'className'>) {
+  return (
+    <span className="search-wrap">
+      <input type="search" className={className} value={value} {...props} />
+      {value && (
+        <button
+          type="button"
+          className="search-clear"
+          aria-label="Clear search"
+          onClick={onClear}
+        >
+          ×
+        </button>
+      )}
+    </span>
+  );
+}
+
 export function BrandImg({ mark, ...rest }: { mark?: boolean } & ImgHTMLAttributes<HTMLImageElement>) {
   const [theme, setTheme] = useState(currentTheme());
   useEffect(() => {

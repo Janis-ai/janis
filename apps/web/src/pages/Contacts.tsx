@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
-import { Md, timeAgo } from '../components/bits';
+import { Md, SearchInput, timeAgo } from '../components/bits';
 import { useConfirm } from '../components/Prompt';
 import { useChannels, useMe } from '../api/hooks';
 import { useContextAgent } from '../lib/agentContext';
@@ -162,12 +162,13 @@ export function Contacts({ agentId: routeAgent }: { agentId?: string } = {}) {
           </button>
         </div>
         {tab === 'contacts' && (
-          <input
+          <SearchInput
             className="grow contacts-search"
             style={{ maxWidth: 320 }}
             placeholder="Search name, email, phone…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
+            onClear={() => setQ('')}
           />
         )}
         {tab === 'contacts' && (

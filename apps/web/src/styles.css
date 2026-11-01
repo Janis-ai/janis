@@ -959,6 +959,18 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .profile-head { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .profile-name { font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
 .search-box { flex: 1; min-width: 200px; }
+/* Clear-× inside a field — wrapper is positioned, input pads right of it. */
+.search-wrap { position: relative; display: inline-flex; flex: 1 1 0; min-width: 0; }
+.search-wrap > input { flex: 1 1 0; min-width: 0; width: 100%; padding-right: 28px; }
+.search-clear {
+  position: absolute; right: 7px; top: 50%; transform: translateY(-50%);
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: var(--muted); font-size: 14px; line-height: 1; cursor: pointer;
+}
+.search-clear:hover { color: var(--text); background: var(--panel-2); }
+.filters .search-wrap { order: 9; }
+
 
 .transcript {
   display: flex; flex-direction: column; gap: 8px; margin: 16px 0;
@@ -1774,7 +1786,7 @@ details summary:hover { color: var(--text); }
   .asset-row .grow { overflow-wrap: anywhere; }
   .search-box { min-width: 0; flex-basis: 100%; }
   /* Inbox row stays single-line: funnel + search share it. */
-  .filters .search-box { flex-basis: auto; flex: 1 1 0; min-width: 0; }
+  .filters .search-wrap, .filters .search-box { flex-basis: auto; flex: 1 1 0; min-width: 0; }
   input, select, textarea { max-width: 100%; }
   /* the title must claim its own line — with min-width:0 + anywhere
      wrapping it can otherwise be squeezed to one character per line */

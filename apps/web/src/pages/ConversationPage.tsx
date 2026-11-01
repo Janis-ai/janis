@@ -5,7 +5,7 @@ import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
-import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, StateBadge, surfaceLabel } from '../components/bits';
+import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, StateBadge, surfaceLabel } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
@@ -918,13 +918,13 @@ export default function ConversationPage() {
           >
             <Info size={15} />
           </button>
-          <input
+          <SearchInput
             className="conv-search"
-            type="search"
             placeholder="Search this conversation…"
             aria-label="Search this conversation"
             value={convQ}
             onChange={(e) => setConvQ(e.target.value)}
+            onClear={() => { setConvQ(''); setConvHits(null); }}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && convHits?.length) jumpToHit(convHits[0].id);
               if (e.key === 'Escape') {

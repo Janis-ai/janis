@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
 import { useAttentionCount, useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
-import { Avatar, displayName, Empty, Md, StateBadge, surfaceLabel, timeAgo } from '../components/bits';
+import { Avatar, displayName, Empty, Md, SearchInput, StateBadge, surfaceLabel, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
 import { Bot, Cog, Headset, ListFilter, Moon, Save, Star, User, X } from 'lucide-react';
@@ -542,11 +542,12 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             <span className="btn-label">Save view</span>
           </button>
         )}
-        <input
+        <SearchInput
           className="search-box"
           placeholder="Search transcripts, users, ids…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onClear={() => setQuery('')}
         />
         <span className="src-menu-wrap">
           <button
