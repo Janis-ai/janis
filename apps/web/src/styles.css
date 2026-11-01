@@ -1338,6 +1338,11 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 /* Search always sorts last — when the row wraps it drops to its own
    bottom line, leaving pills + funnel + agent picker together on top. */
 .filters .search-box { order: 9; }
+/* Reading order is filter→views→save→search: the funnel leads, the
+   view picker and save action follow, search anchors the far end. */
+.filters .src-menu-wrap { order: 1; }
+.filters > select { order: 2; }
+.filters .save-view-btn { order: 3; }
 /* One row, one height — buttons, selects and inputs all 38px. */
 .filters .btn, .filters select, .filters .search-box, .filters .scope-picker { height: 38px; box-sizing: border-box; }
 .filters .search-box { padding-top: 0; padding-bottom: 0; }
@@ -1730,6 +1735,11 @@ details summary:hover { color: var(--text); }
   .filters select { min-width: 0; max-width: none; }
   /* Search sorts last so tabs + funnel + picker pack into the first row. */
   .filters .search-box { order: 9; }
+/* Reading order is filter→views→save→search: the funnel leads, the
+   view picker and save action follow, search anchors the far end. */
+.filters .src-menu-wrap { order: 1; }
+.filters > select { order: 2; }
+.filters .save-view-btn { order: 3; }
 /* One row, one height — buttons, selects and inputs all 38px. */
 .filters .btn, .filters select, .filters .search-box, .filters .scope-picker { height: 38px; box-sizing: border-box; }
 .filters .search-box { padding-top: 0; padding-bottom: 0; }

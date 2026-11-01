@@ -537,7 +537,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           </>
         )}
         {dirtyForView && (
-          <button className="btn" title="Save current filters as a view" aria-label="Save current filters as a view" onClick={saveView}>
+          <button className="btn save-view-btn" title="Save current filters as a view" aria-label="Save current filters as a view" onClick={saveView}>
             <Save size={14} style={{ verticalAlign: '-2px' }} />
             <span className="btn-label">Save view</span>
           </button>
@@ -558,7 +558,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           >
             <ListFilter size={14} style={{ verticalAlign: '-2px' }} />
             <span className="btn-label">
-              {activeFilters + (tab === 'attention' ? 1 : 0) ? `Filter · ${activeFilters + (tab === 'attention' ? 1 : 0)}` : 'Filter'}
+              Filter
             </span>
             {(activeFilters + (tab === 'attention' ? 1 : 0)) > 0 && <span className="filter-badge">{activeFilters + (tab === 'attention' ? 1 : 0)}</span>}
           </button>
