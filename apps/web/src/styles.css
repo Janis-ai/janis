@@ -529,6 +529,9 @@ button, input, select, textarea { font: inherit; }
   background: none; color: var(--text); font-size: 13px;
   cursor: pointer; white-space: nowrap;
 }
+/* Filter/sheet pops near the right edge must open leftward — left:0
+   anchored to the button runs off-viewport. */
+.filters .menu-pop { left: auto; right: 0; max-width: calc(100vw - 16px); }
 .menu-pop button:hover:not(:disabled) { background: var(--panel-2); }
 .menu-pop button:disabled { color: var(--muted); cursor: default; }
 /* Inbox multi-select filter popover — checkbox groups instead of the old
@@ -1698,7 +1701,7 @@ details summary:hover { color: var(--text); }
   .filters .scope-picker select { width: 100%; min-width: 0; }
   .filters select { min-width: 0; max-width: none; }
   /* Search sorts last so tabs + funnel + picker pack into the first row. */
-  .filters .search-box { order: 5; }
+  .filters .search-box { order: 9; }
   .attn-btn .filter-badge { background: var(--warn); color: #241a00; }
   .attn-btn.primary .filter-badge { background: #06281f; color: var(--accent); }
   /* Onboarding cards and the standalone select-all yield their rows. */
