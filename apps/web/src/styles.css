@@ -1232,6 +1232,8 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .inspector-outcome { color: var(--muted); }
 .inspector-outcome.failed { color: var(--danger); }
 .inspector-outcome.proposed { color: var(--accent); }
+.inspector-knowledge summary { cursor: pointer; font-size: 12px; color: var(--muted); margin: 2px 0 4px 10px; }
+.inspector-knowledge summary:hover { color: var(--text); }
 
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .grow { flex: 1; min-width: 0; }

@@ -2077,11 +2077,16 @@ function InspectorPanel({ data }: { data: unknown }) {
           ].join(' · ') || 'none loaded'}
         </span>
       </div>
-      {d.knowledge?.map((k, i) => (
-        <div key={`k${i}`} className="inspector-tool">
-          <span>{k}</span>
-        </div>
-      ))}
+      {d.knowledge?.length ? (
+        <details className="inspector-knowledge">
+          <summary>retrieved snippets ({d.knowledge.length})</summary>
+          {d.knowledge.map((k, i) => (
+            <div key={`k${i}`} className="inspector-tool">
+              <span>{k}</span>
+            </div>
+          ))}
+        </details>
+      ) : null}
       <div className="inspector-row">
         <span className="muted">tools</span>
         <span>{d.tools?.length ? `${d.tools.length} called` : 'none'}</span>
