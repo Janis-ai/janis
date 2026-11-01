@@ -1313,6 +1313,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .docs-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .error { color: var(--danger); font-size: 13px; margin-top: 8px; }
 .filters { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+/* Search always sorts last — when the row wraps it drops to its own
+   bottom line, leaving pills + funnel + agent picker together on top. */
+.filters .search-box { order: 9; }
 /* Inbox list pages: the title+filters bar pins to the top of .main while
    the conversation list scrolls beneath it — -24px compensates .main's
    top padding (same trick as .agent-head); the ≤720 block re-tunes the
