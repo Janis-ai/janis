@@ -673,6 +673,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             />
             <strong>{selected.size} selected</strong>
           </label>
+          <div className="bulk-actions">
           <button className="btn" title="Archive" aria-label="Archive" disabled={busy} onClick={() => bulk('archive')}><Archive size={14} /></button>
           <button className="btn" title="Unarchive" aria-label="Unarchive" disabled={busy} onClick={() => bulk('unarchive')}><ArchiveRestore size={14} /></button>
           <button className="btn" title="Mark read" aria-label="Mark read" disabled={busy} onClick={() => bulk('mark_read')}><MailOpen size={14} /></button>
@@ -722,6 +723,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
               <option value="0">Unsnooze</option>
             </select>
           </span>
+          </div>
           <button className="btn bulk-close" title="Clear selection" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>
       )}
