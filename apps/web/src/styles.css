@@ -1829,6 +1829,10 @@ details summary:hover { color: var(--text); }
   .conv-main .conv-actions { margin-top: 6px; }
   .transcript { margin-top: 10px; margin-bottom: 0; }
   .composer { margin-top: 4px; }
+  .composer-box { margin-top: 4px; }
+  /* One row, always — the bar can't afford Pause/Send on a second line. */
+  .composer-bar { flex-wrap: nowrap !important; gap: 4px; margin-top: 6px; overflow-x: auto; }
+  .composer-bar .btn { padding: 6px 8px; font-size: 12px; }
   /* Search and the utility icons share one row; utilities go icon-only,
      snooze shows just the moon (accent when snoozed). */
   .conv-actions .conv-search { flex: 1 1 0; min-width: 0; }
