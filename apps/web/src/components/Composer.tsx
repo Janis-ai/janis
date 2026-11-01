@@ -272,10 +272,10 @@ export default function Composer({
         <div className="emoji-pop sendas-pop">
           {(
             [
-              ['human', Headset, 'as yourself (human)'],
-              ['agent', Bot, 'as the agent'],
-              ['note', Lock, 'internal note'],
-              ...(canTeach ? [['teach', Brain, 'teach agent'] as const] : []),
+              ['human', Headset, 'Reply as yourself'],
+              ['agent', Bot, 'Reply as the agent'],
+              ['note', Lock, 'Leave an internal note'],
+              ...(canTeach ? [['teach', Brain, 'Teach the agent'] as const] : []),
             ] as const
           ).map(([mode, Icon, label]) => (
             <button
