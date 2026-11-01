@@ -1724,7 +1724,8 @@ details summary:hover { color: var(--text); }
      scroll; nothing scrolls within itself. */
   .conv-open .transcript { max-height: none; }
   /* Inbox head stays pinned under the mobile-bar instead of .main's top. */
-  .inbox-head { top: 49px; margin: 0 -14px; padding: 0 14px 8px; }
+  .inbox-head { top: 49px; margin: 0 -14px; padding: 0 14px 4px; }
+  .filters { margin-bottom: 4px; }
   .conv-list { margin: 0 -14px; padding: 0 14px; }
   /* Details slide-over — the side column leaves the flow and becomes a
      right drawer behind the header's ⓘ. */
