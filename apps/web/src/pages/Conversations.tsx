@@ -500,6 +500,8 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           </div>
         </div>
       )}
+      {/* Pinned under the mobile-bar on phones — the list scrolls beneath. */}
+      <div className="inbox-head">
       <h1 className="page-title">
         {scopeAgent ? `${agents?.agents.find((a) => a.id === scopeAgent)?.name ?? 'Agent'} inbox` : 'Inbox'}
       </h1>
@@ -661,6 +663,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             it everywhere (nav subsection, Copilot, the other shared pages),
             and "All agents" leaves context entirely. */}
         <AgentScopePicker slug="inbox" value={agentId || undefined} />
+      </div>
       </div>
 
       {selected.size > 0 && (

@@ -1573,16 +1573,18 @@ details summary:hover { color: var(--text); }
     font-size: 12px; color: var(--muted);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  /* Anchored conversation — only the transcript scrolls; the head, action
-     row and composer stay put, and .main never pages. Stacked cards cap at
-     a third of the view and scroll internally so a giant alert can't push
-     the transcript + composer off the screen entirely. */
-  .layout.conv-open .main { overflow: hidden; overscroll-behavior: none; }
-  .conv-open .conv-layout { height: 100%; }
-  .conv-open .transcript { max-height: none; min-height: 0; }
-  .conv-open .conv-main > * { flex-shrink: 0; }
-  .conv-open .conv-main > .transcript { flex-shrink: 1; flex-grow: 1; min-height: 0; }
-  .conv-open .conv-main > .card { max-height: 32vh; overflow-y: auto; overscroll-behavior: contain; }
+  /* Conversation on a phone: the page scrolls normally and only the top
+     bar pins (conv-mobile-head is sticky) — the transcript stays uncapped
+     (the ≤900 rule caps it at 55vh) so the whole thread rides the page
+     scroll; nothing scrolls within itself. */
+  .conv-open .transcript { max-height: none; }
+  /* Inbox list pages: the title+filters bar pins under the mobile-bar
+     while the conversation list scrolls beneath it. */
+  .inbox-head {
+    position: sticky; top: 49px; z-index: 25;
+    margin: 0 -14px; padding: 0 14px 8px;
+    background: var(--bg); border-bottom: 1px solid var(--border);
+  }
   /* Details slide-over — the side column leaves the flow and becomes a
      right drawer behind the header's ⓘ. */
   .conv-side {
@@ -1610,7 +1612,10 @@ details summary:hover { color: var(--text); }
   .filters button.btn { padding: 7px 10px; }
   /* One header row — tabs + funnel + agent picker share it; the search box
      wraps beneath. The attention tab collapses to an alert icon + count. */
-  .filters .scope-picker { flex: 1 1 auto; min-width: 0; }
+  /* Content basis, no shrink, grow on whatever line it lands: the picker
+     keeps the agent name whole, fills the remaining space on row 1 when it
+     fits, and stretches full-width when it wraps. */
+  .filters .scope-picker { flex: 1 0 auto; min-width: 0; }
   .filters .scope-picker select { width: 100%; min-width: 0; }
   .filters select { min-width: 0; max-width: none; }
   /* Search sorts last so tabs + funnel + picker pack into the first row. */
