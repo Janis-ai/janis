@@ -1608,6 +1608,19 @@ details summary:hover { color: var(--text); }
   .conv-actions .btn { padding: 7px 10px; }
   .conv-actions .btn-label, .conv-ops .btn-label, .filters .btn-label { display: none; }
   .filters button.btn { padding: 7px 10px; }
+  /* One header row — tabs + funnel + agent picker share it; the search box
+     wraps beneath. The attention tab collapses to an alert icon + count. */
+  .filters .scope-picker { flex: 1 1 auto; min-width: 0; }
+  .filters .scope-picker select { width: 100%; min-width: 0; }
+  .filters select { min-width: 0; max-width: none; }
+  /* Search sorts last so tabs + funnel + picker pack into the first row. */
+  .filters .search-box { order: 5; }
+  .attn-btn .filter-badge { background: var(--warn); color: #241a00; }
+  .attn-btn.primary .filter-badge { background: #06281f; color: var(--accent); }
+  /* Onboarding cards and the standalone select-all yield their rows. */
+  .inbox-onboard { display: none; }
+  .conv-select-all { display: none; }
+  .kb-hints { display: none; }
   .filter-badge {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 16px; height: 16px; padding: 0 4px; margin-left: 2px;

@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
-import { useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
+import { useAttentionCount, useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
 import { Avatar, displayName, Empty, Md, StateBadge, surfaceLabel, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
-import { Bot, Cog, Headset, ListFilter, Moon, Save, Star, User, X } from 'lucide-react';
+import { AlertTriangle, Bot, Cog, Headset, ListFilter, Moon, Save, Star, User, X } from 'lucide-react';
 import { usePrompt } from '../components/Prompt';
 import { AgentScopePicker } from '../components/AgentScopePicker';
 import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
@@ -278,6 +278,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const knownTags = [...new Set((convList ?? []).flatMap((c) => c.tags ?? []))].sort();
   const { data: agents, isPending: agentsPending } = useAgents();
   const { data: views } = useViews();
+  const { data: attn } = useAttentionCount();
   const { data: hits, isPending: searchPending } = useSearch(query, {
     attention: tab === 'attention' || undefined,
     ...filterParams,
@@ -502,8 +503,12 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       <h1 className="page-title">
         {scopeAgent ? `${agents?.agents.find((a) => a.id === scopeAgent)?.name ?? 'Agent'} inbox` : 'Inbox'}
       </h1>
-      <DiscoveryCards />
-      <Onboarding />
+      {/* Onboarding cards earn their space on desktop; on a phone they're
+          a screenful of chrome between the header and the list. */}
+      <div className="inbox-onboard">
+        <DiscoveryCards />
+        <Onboarding />
+      </div>
       {drill && (
         <div className="row" style={{ marginBottom: 8 }}>
           <span className="chip">
@@ -523,10 +528,16 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           All
         </button>
         <button
-          className={`btn ${tab === 'attention' ? 'primary' : ''}`}
+          className={`btn attn-btn${tab === 'attention' ? ' primary' : ''}`}
           onClick={() => setTab('attention')}
+          title="Needs attention — threads in needs_human or human-owned"
+          aria-label="Needs attention"
         >
-          Needs attention
+          <AlertTriangle size={14} className="attn-ic" />
+          <span className="btn-label">
+            Needs attention{attn?.count ? ` · ${attn.count}` : ''}
+          </span>
+          {(attn?.count ?? 0) > 0 && <span className="filter-badge">{attn!.count}</span>}
         </button>
         {(views?.views.length ?? 0) > 0 && (
           <>
@@ -777,7 +788,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
               </button>
             </div>
           )}
-          <div className="muted" style={{ fontSize: 11, marginTop: 14, textAlign: 'center' }}>
+          <div className="muted kb-hints" style={{ fontSize: 11, marginTop: 14, textAlign: 'center' }}>
             j/k move · Enter open · e archive · s star · u read/unread · x select · ⌘K palette
           </div>
         </>
