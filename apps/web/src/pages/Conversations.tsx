@@ -7,7 +7,7 @@ import { api } from '../api/client';
 import { Avatar, displayName, Empty, Md, StateBadge, surfaceLabel, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
-import { AlertTriangle, Bot, Cog, Headset, ListFilter, Moon, Save, Star, User, X } from 'lucide-react';
+import { Bot, Cog, Headset, ListFilter, Moon, Save, Star, User, X } from 'lucide-react';
 import { usePrompt } from '../components/Prompt';
 import { AgentScopePicker } from '../components/AgentScopePicker';
 import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
@@ -514,24 +514,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         </div>
       )}
       <div className="filters">
-        <button
-          className={`btn ${tab === 'all' ? 'primary' : ''}`}
-          onClick={() => setTab('all')}
-        >
-          All
-        </button>
-        <button
-          className={`btn attn-btn${tab === 'attention' ? ' primary' : ''}`}
-          onClick={() => setTab('attention')}
-          title="Needs attention — threads in needs_human or human-owned"
-          aria-label="Needs attention"
-        >
-          <AlertTriangle size={14} className="attn-ic" />
-          <span className="btn-label">
-            Needs attention{attn?.count ? ` · ${attn.count}` : ''}
-          </span>
-          {(attn?.count ?? 0) > 0 && <span className="filter-badge">{attn!.count}</span>}
-        </button>
         {(views?.views.length ?? 0) > 0 && (
           <>
             <select
@@ -578,7 +560,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             <span className="btn-label">
               {activeFilters ? `Filter · ${activeFilters}` : 'Filter'}
             </span>
-            {activeFilters > 0 && <span className="filter-badge">{activeFilters}</span>}
+            {(attn?.count ?? 0) > 0 && <span className="filter-badge">{attn!.count}</span>}
           </button>
           {filterOpen && (
             <>
@@ -592,6 +574,19 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
                   el.style.left = over > 0 ? `${-over}px` : '0px';
                 }}
               >
+                <div className="filter-group">
+                  <label className="check filter-group-head">
+                    <input
+                      type="checkbox"
+                      checked={tab === 'attention'}
+                      onChange={() => setTab(tab === 'attention' ? 'all' : 'attention')}
+                    />
+                    Needs attention
+                    {(attn?.count ?? 0) > 0 && (
+                      <span className="filter-badge">{attn!.count}</span>
+                    )}
+                  </label>
+                </div>
                 {FILTER_GROUPS.map((g) => {
                   const sel = filters[g.key];
                   const values = g.options.map(([v]) => v);
