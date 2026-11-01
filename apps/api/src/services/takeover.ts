@@ -140,7 +140,9 @@ export async function humanReply(
   );
   if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
   if (conversation.state !== 'human') {
-    throw new TakeoverError('take over the conversation before replying', 409);
+    // A human reply IS an implicit takeover — the operator shouldn't have
+    // to press a separate button before typing to the customer.
+    await takeover(db, workspaceId, conversationId, user, scope);
   }
 
   const [message] = await db
