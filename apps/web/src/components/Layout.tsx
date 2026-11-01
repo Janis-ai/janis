@@ -1201,10 +1201,10 @@ export default function Layout() {
           }
         }}
       >
-        <Link className="brand" to="/conversations" title="Janis inbox">
+        <span className="brand">
           <BrandImg className="brand-wide" alt="Janis" />
           <BrandImg className="brand-mark" mark alt="" />
-        </Link>
+        </span>
         {data?.workspace && (
           <ContextSwitcher
             data={data}
