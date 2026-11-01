@@ -583,7 +583,15 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           {filterOpen && (
             <>
               <div className="menu-backdrop" onClick={() => setFilterOpen(false)} />
-              <div className="menu-pop filter-pop">
+              <div
+                className="menu-pop filter-pop"
+                ref={(el) => {
+                  if (!el) return;
+                  const r = el.getBoundingClientRect();
+                  const over = r.right - (window.innerWidth - 12);
+                  el.style.left = over > 0 ? `${-over}px` : '0px';
+                }}
+              >
                 {FILTER_GROUPS.map((g) => {
                   const sel = filters[g.key];
                   const values = g.options.map(([v]) => v);
