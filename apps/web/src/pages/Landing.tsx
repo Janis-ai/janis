@@ -133,7 +133,7 @@ function Icon({ name }: { name: keyof typeof GLYPHS }) {
 const FEATURE_GROUPS: {
   heading: string;
   sub: string;
-  shot?: { src: string; alt: string; cap: string };
+  shot?: { src: string; alt: string; cap: string; vid?: string };
   items: { icon: keyof typeof GLYPHS; title: string; body: string }[];
 }[] = [
   {
@@ -141,8 +141,9 @@ const FEATURE_GROUPS: {
     sub: 'Every conversation in one inbox — with the same AI-first, human-on-tap flow on all of them.',
     shot: {
       src: '/img/marketing-inbox.png',
-      alt: 'The Janis inbox — every channel in one triageable queue',
-      cap: 'Web chat, WhatsApp, Instagram and email land in one queue — intent, owner and state on every row.',
+      vid: '/img/marketing-inbox-flow.mp4',
+      alt: 'An approval request lands in the inbox — open the thread, approve it, the agent resumes',
+      cap: 'A fee-waiver approval lands live — open the thread, sign off, the agent finishes the job.',
     },
     items: [
       {
@@ -700,7 +701,7 @@ export default function Landing() {
           where it left off.
         </p>
         <p className="landing-sub">
-          Build a hosted agent on your docs in minutes — or bring the agent, bot,
+          Build a hosted agent in minutes — or bring the agent, bot,
           or LLM key you already have.
         </p>
         <div className="row" style={{ justifyContent: 'center', gap: 12 }}>
@@ -709,24 +710,6 @@ export default function Landing() {
           </Link>
         </div>
         <p className="landing-fine">Free plan available · No credit card required</p>
-        <figure className="demo-window hero-shot">
-          <video
-            className="hero-vid"
-            src="/img/marketing-approval.mp4"
-            poster="/img/marketing-console.png"
-            autoPlay
-            muted
-            loop
-            playsInline
-            preload="metadata"
-            aria-label="A real approval flow in the Janis console — an agent requests a refund, a teammate approves it, and the agent replies to the customer"
-          />
-          <img
-            className="hero-still"
-            src="/img/marketing-console.png"
-            alt="The Janis console — a refund approval card waiting on a human decision"
-          />
-        </figure>
       </section>
 
       <section className="landing-steps landing-demo" id="demo">
@@ -744,7 +727,21 @@ export default function Landing() {
           <p className="landing-sub">{g.sub}</p>
           {g.shot && (
             <figure className="demo-window landing-shot">
-              <img src={g.shot.src} alt={g.shot.alt} loading="lazy" />
+              {g.shot.vid ? (
+                <video
+                  className="hero-vid"
+                  src={g.shot.vid}
+                  poster={g.shot.src}
+                  autoPlay
+                  muted
+                  loop
+                  playsInline
+                  preload="metadata"
+                  aria-label={g.shot.alt}
+                />
+              ) : (
+                <img src={g.shot.src} alt={g.shot.alt} loading="lazy" />
+              )}
               <figcaption className="landing-shot-cap">{g.shot.cap}</figcaption>
             </figure>
           )}
