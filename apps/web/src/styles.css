@@ -1351,12 +1351,18 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .info-btn { display: inline-flex; }
 }
 .conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; container-name: conv; }
-/* Footer anchoring needs a definite-height chain: .main becomes a column
-   flex so conv-layout's used height is definite, letting conv-main's
-   min-height:100% resolve and margin-top:auto push the foot down. */
-.layout.conv-open .main { display: flex; flex-direction: column; }
-.conv-open .conv-layout { flex: 1 0 auto; }
-.conv-open .conv-main { min-height: 100%; }
+/* Anchored conversation: .main never scrolls — the transcript is the
+   only scroller, head stays up top, foot is a static block at the
+   bottom of the column. No sticky, no bleeds, nothing can show
+   through or stack beneath. */
+.layout.conv-open .main { display: flex; flex-direction: column; overflow: hidden; }
+.conv-open .conv-layout { flex: 1 1 auto; min-height: 0; }
+.conv-open .conv-main { min-height: 0; }
+.conv-open .transcript { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.conv-foot { flex-shrink: 0; border-top: 1px solid var(--border); }
+/* Stacked cards (alerts, suggestion) cap instead of squeezing the
+   transcript out of the column — they scroll within themselves. */
+.conv-open .conv-main > .card { flex-shrink: 0; max-height: 34vh; overflow-y: auto; }
 /* Button fit is a column question, not a viewport one — when the
    conversation column can't hold labeled buttons they go icon-only,
    whether the squeeze comes from a phone, the dock, or the details rail. */
@@ -1374,18 +1380,6 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .snooze-wrap.on .snz-ic, .sendas-wrap.on .sendas-ic { color: var(--accent); }
   /* Footer anchors to the viewport bottom whenever the column is narrow —
      opaque, and bled past .main's padding so nothing shows beneath it. */
-  .conv-foot {
-    position: sticky; bottom: 0; z-index: 20; margin-top: auto;
-    margin-left: -24px; margin-right: -24px;
-    padding: 8px 24px calc(24px + env(safe-area-inset-bottom));
-    background: var(--bg); border-top: 1px solid var(--border);
-  }
-  /* Opaque tail past the box — whatever gap remains under the pinned foot
-     (.main's bottom padding, safe area) stays covered as content scrolls. */
-  .conv-foot::after {
-    content: ''; position: absolute; top: 100%; left: 0; right: 0;
-    height: 120px; background: var(--bg);
-  }
 }
 .conv-side { width: 280px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden; overflow-wrap: break-word; }
 .card.suggestion { border-color: var(--accent); }
@@ -1680,16 +1674,11 @@ details summary:hover { color: var(--text); }
     background: rgba(8,10,14,.45); cursor: default;
   }
   .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
-  /* Same bottom anchor at phone widths, sized to .main's 14px padding. */
+  /* Foot keeps a border at phone widths — static block in the column. */
   .conv-foot {
-    position: sticky; bottom: 0; z-index: 20; margin-top: auto;
-    margin-left: -14px; margin-right: -14px;
-    padding: 8px 14px calc(14px + env(safe-area-inset-bottom));
-    background: var(--bg); border-top: 1px solid var(--border);
-  }
-  .conv-foot::after {
-    content: ''; position: absolute; top: 100%; left: 0; right: 0;
-    height: 120px; background: var(--bg);
+    border-top: 1px solid var(--border);
+    margin: 0 -14px -14px; padding: 8px 14px calc(14px + env(safe-area-inset-bottom));
+    background: var(--bg);
   }
   /* Search and the utility icons share one row; utilities go icon-only,
      snooze shows just the moon (accent when snoozed). */
