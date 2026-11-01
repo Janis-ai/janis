@@ -1319,6 +1319,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 /* Search always sorts last — when the row wraps it drops to its own
    bottom line, leaving pills + funnel + agent picker together on top. */
 .filters .search-box { order: 9; }
+/* One row, one height — buttons, selects and inputs all 38px. */
+.filters .btn, .filters select, .filters .search-box { height: 38px; box-sizing: border-box; }
+.filters .search-box { padding-top: 0; padding-bottom: 0; }
 /* Inbox list pages: the title+filters bar pins to the top of .main while
    the conversation list scrolls beneath it — -24px compensates .main's
    top padding (same trick as .agent-head); the ≤720 block re-tunes the
@@ -1708,6 +1711,9 @@ details summary:hover { color: var(--text); }
   .filters select { min-width: 0; max-width: none; }
   /* Search sorts last so tabs + funnel + picker pack into the first row. */
   .filters .search-box { order: 9; }
+/* One row, one height — buttons, selects and inputs all 38px. */
+.filters .btn, .filters select, .filters .search-box { height: 38px; box-sizing: border-box; }
+.filters .search-box { padding-top: 0; padding-bottom: 0; }
   .attn-btn .filter-badge { background: var(--warn); color: #241a00; }
   .attn-btn.primary .filter-badge { background: #06281f; color: var(--accent); }
   /* Onboarding cards and the standalone select-all yield their rows. */
