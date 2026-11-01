@@ -191,6 +191,9 @@ export default function AgentOverview() {
             {agent.hosted ? 'hosted' : agent.webhook_url ? 'external' : 'unreachable'}
           </span>
         )}
+        {/* Actions move to their own line as a unit instead of packing
+            beside the title until it truncates. */}
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
         {agent && hosted && (
           <button
             className="btn"
@@ -214,6 +217,7 @@ export default function AgentOverview() {
         <button className="btn" onClick={() => navigate(`/agents/${id}/settings`)}>
           Agent settings
         </button>
+        </div>
       </div>
       <div className="muted" style={{ marginBottom: 12 }}>
         {summary
