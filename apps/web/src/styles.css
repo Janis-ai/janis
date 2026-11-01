@@ -1396,12 +1396,14 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .layout.dock-open .conv-side { width: 100%; }
   /* stacked mode: keep the transcript internally scrollable so the composer
      stays adjacent instead of dropping below a page-length of messages */
-  .layout.dock-open .transcript { max-height: 55vh; min-height: 220px; }
+  /* No inner cap: .main scrolls naturally at ≤900 — a capped transcript
+     would nest a second scroller inside the page's. */
+  .layout.dock-open .transcript { max-height: none; min-height: 220px; }
 }
 @media (max-width: 900px) {
   .conv-layout { flex-direction: column; height: auto; }
   .conv-side { width: 100%; }
-  .transcript { max-height: 55vh; min-height: 220px; }
+  .transcript { max-height: none; min-height: 220px; }
 }
 
 .login-wrap {
