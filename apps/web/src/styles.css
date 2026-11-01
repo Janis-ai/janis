@@ -1102,6 +1102,15 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   border-radius: 8px; padding: 4px 10px; font-size: 12px; color: var(--text);
 }
 .attach-chip a { color: var(--muted); }
+/* Take-over/resume toggle keeps its words at every width — the
+   .btn-label hide rules are for space-starved icon rows, not this. */
+.composer-bar .btn-label.always { display: inline; }
+.composer-bar .btn { gap: 9px; }
+.emoji-pop.sendas-pop { width: 212px; grid-template-columns: 1fr; padding: 4px; }
+.sendas-opt { display: flex; align-items: center; gap: 9px; width: 100%; background: none; border: none; color: var(--text); font-size: 13px; padding: 8px 10px; border-radius: 7px; cursor: pointer; text-align: left; }
+.sendas-opt:hover { background: var(--panel-2); }
+.sendas-opt .ck { margin-left: auto; color: var(--accent); }
+.sendas-on { color: var(--accent); }
 .emoji-pop {
   position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 10;
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
@@ -1458,6 +1467,8 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    * ops buttons can't sit on one row even wrapped, so icons take over. */
 @container conv (max-width: 560px) {
   .conv-actions .btn-label, .conv-ops .btn-label, .composer-bar .btn-label { display: none; }
+  .composer-bar .btn.icon { padding: 6px 8px; }
+  .composer-bar { gap: 6px; }
 }
 @container conv (max-width: 780px) {
   .conv-actions .btn, .conv-ops.btn { padding: 7px 10px; }

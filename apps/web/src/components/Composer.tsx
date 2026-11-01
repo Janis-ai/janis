@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Attachment } from '@janis/shared';
 import { useSavedReplies } from '../api/hooks';
-import { Bot, Brain, FileText, Headset, Image, Lock, Paperclip, Smile, Sparkles, X } from 'lucide-react';
+import { Bot, Brain, Check, FileText, Headset, Image, Lock, Paperclip, Smile, Sparkles, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 
 export default function Composer({
@@ -48,6 +48,7 @@ export default function Composer({
   const boxRef = useRef<HTMLDivElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [repliesOpen, setRepliesOpen] = useState(false);
+  const [sendasOpen, setSendasOpen] = useState(false);
   // Phone width gets terse placeholders + an icon-face mode picker —
   // the verbose "(Enter sends…)" hint means nothing on a touch keyboard
   // anyway.
@@ -67,17 +68,19 @@ export default function Composer({
   // Dismiss the emoji/replies popovers on Escape or a click outside the
   // composer — re-clicking the trigger button is not the obvious close path.
   useEffect(() => {
-    if (!emojiOpen && !repliesOpen) return;
+    if (!emojiOpen && !repliesOpen && !sendasOpen) return;
     const close = (e: MouseEvent) => {
       if (!boxRef.current?.contains(e.target as Node)) {
         setEmojiOpen(false);
         setRepliesOpen(false);
+        setSendasOpen(false);
       }
     };
     const esc = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setEmojiOpen(false);
         setRepliesOpen(false);
+        setSendasOpen(false);
       }
     };
     // Capture phase: the emoji picker's keydown handler stops propagation
@@ -88,7 +91,7 @@ export default function Composer({
       document.removeEventListener('mousedown', close);
       document.removeEventListener('keydown', esc, true);
     };
-  }, [emojiOpen, repliesOpen]);
+  }, [emojiOpen, repliesOpen, sendasOpen]);
 
   // autosize: grow with content up to ~8 lines; no scrollbar until it overflows
   useEffect(() => {
@@ -230,19 +233,16 @@ export default function Composer({
             onChange={(e) => e.target.files && void uploadFiles(e.target.files)}
           />
           {showModeSelect && (
-            <div className={`sendas-wrap${sendAs !== 'human' ? ' on' : ''}`}>
-              <ModeIcon size={15} className="sendas-ic" />
-              <select
-                aria-label="Reply as"
-                value={sendAs}
-                onChange={(e) => setSendAs(e.target.value as 'human' | 'agent' | 'note' | 'teach')}
-              >
-                <option value="human">as yourself (human)</option>
-                <option value="agent">as the agent</option>
-                <option value="note">🔒 internal note</option>
-                {canTeach && <option value="teach">🧠 teach agent</option>}
-              </select>
-            </div>
+            <button
+              type="button"
+              className={`btn icon${sendAs !== 'human' ? ' sendas-on' : ''}`}
+              title="Reply as"
+              aria-label="Reply as"
+              aria-expanded={sendasOpen}
+              onClick={() => setSendasOpen((o) => !o)}
+            >
+              <ModeIcon size={16} />
+            </button>
           )}
           <span className="grow" />
           {(onResume || onTakeover) && (
@@ -254,7 +254,7 @@ export default function Composer({
               aria-label={onResume ? 'Resume agent' : 'Take over'}
             >
               {onResume ? <Bot size={14} /> : <Headset size={14} />}
-              <span className="btn-label">{onResume ? 'Resume agent' : 'Take over'}</span>
+              <span className="btn-label always">{onResume ? 'Resume agent' : 'Take over'}</span>
             </button>
           )}
           <button
@@ -268,6 +268,32 @@ export default function Composer({
       </div>
 
       {emojiOpen && <EmojiPicker onPick={insertEmoji} />}
+      {sendasOpen && (
+        <div className="emoji-pop sendas-pop">
+          {(
+            [
+              ['human', Headset, 'as yourself (human)'],
+              ['agent', Bot, 'as the agent'],
+              ['note', Lock, 'internal note'],
+              ...(canTeach ? [['teach', Brain, 'teach agent'] as const] : []),
+            ] as const
+          ).map(([mode, Icon, label]) => (
+            <button
+              key={mode}
+              type="button"
+              className="sendas-opt"
+              onClick={() => {
+                setSendAs(mode);
+                setSendasOpen(false);
+              }}
+            >
+              <Icon size={14} />
+              <span>{label}</span>
+              {sendAs === mode && <Check size={14} className="ck" />}
+            </button>
+          ))}
+        </div>
+      )}
       {repliesOpen && (
         <div className="emoji-pop reply-pop">
           <div className="row" style={{ padding: '4px 8px 0', alignItems: 'center' }}>
