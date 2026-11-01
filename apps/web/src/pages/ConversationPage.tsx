@@ -1908,7 +1908,6 @@ export default function ConversationPage() {
           </div>
         </div>
 
-        <div className="card">
         <div className="card conv-side-status">
           <strong>Status</strong>
           <select
@@ -1940,6 +1939,7 @@ export default function ConversationPage() {
           </select>
         </div>
 
+        <div className="card">
           <strong>
             Intent
             {(c.intent_source ?? 'ai') === 'manual' && (
