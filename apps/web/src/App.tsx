@@ -170,6 +170,7 @@ const APP_HOSTS = new Set([
   '127.0.0.1',
 ]);
 const isAppHost = () =>
+  import.meta.env.DEV || // vite dev server — LAN IPs and ad-hoc tunnels all serve the console
   APP_HOSTS.has(window.location.hostname) ||
   /\.(devin\.app|loca\.lt|ngrok[^.]*\.(io|dev|com))$/.test(window.location.hostname);
 
