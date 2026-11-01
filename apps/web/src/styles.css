@@ -1106,7 +1106,8 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
    .btn-label hide rules are for space-starved icon rows, not this. */
 .composer-bar .btn-label.always { display: inline; }
 .composer-bar .btn { display: inline-flex; align-items: center; gap: 10px; }
-.emoji-pop.sendas-pop { width: 212px; grid-template-columns: 1fr; padding: 4px; }
+.emoji-pop.sendas-pop { width: 240px; grid-template-columns: 1fr; padding: 4px; }
+.sendas-opt span { flex: 1; white-space: nowrap; }
 .sendas-opt { display: flex; align-items: center; gap: 9px; width: 100%; background: none; border: none; color: var(--text); font-size: 13px; padding: 8px 10px; border-radius: 7px; cursor: pointer; text-align: left; }
 .sendas-opt:hover { background: var(--panel-2); }
 .sendas-opt .ck { margin-left: auto; color: var(--accent); }
