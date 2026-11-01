@@ -250,11 +250,11 @@ export default function Composer({
               className="btn"
               type="button"
               onClick={onResume ?? onTakeover}
-              title={onResume ? 'Resume agent — hand the thread back to the AI' : 'Take over — pause the agent and reply yourself'}
-              aria-label={onResume ? 'Resume agent' : 'Take over'}
+              title={onResume ? 'Resume — hand the thread back to the agent' : 'Pause — take over and reply yourself'}
+              aria-label={onResume ? 'Resume the agent' : 'Pause the agent and take over'}
             >
               {onResume ? <Bot size={14} /> : <Headset size={14} />}
-              <span className="btn-label always">{onResume ? 'Resume agent' : 'Take over'}</span>
+              <span className="btn-label always">{onResume ? 'Resume' : 'Pause'}</span>
             </button>
           )}
           <button

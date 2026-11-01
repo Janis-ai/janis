@@ -1468,6 +1468,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 @container conv (max-width: 560px) {
   .conv-actions .btn-label, .conv-ops .btn-label, .composer-bar .btn-label { display: none; }
   .composer-bar .btn.icon { padding: 6px 8px; }
+  .composer-bar .btn { font-size: 13px; }
   .composer-bar { gap: 6px; }
 }
 @container conv (max-width: 780px) {
