@@ -93,6 +93,19 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-01 — Open alerts render inline in the transcript as dismissible warn boxes
+- ConversationPage: the stacked top alert card (⚠ type — detail + Dismiss
+  per row, duplicated the flagged blurbs it summarized) is now a compact
+  chip strip (type only). Chips scroll to the blurb via the existing ?msg=
+  deep-link/msg-hit machinery.
+- Each open alert anchors to the transcript row its event wrote — flagged
+  system lines (help_request/failure/handoff_offer/custom), internal
+  rule_trigger notes (sla/inactivity/keyword/intent/sentiment/error/csat,
+  matched by detail substring + closest ts), or the pending-approval card
+  (approval_request — warn border only, its own Approve/Deny resolves it).
+  Unanchored alerts render a synthetic warn box sorted in at created_at.
+- Dismiss unwraps the box; the blurb stays (and the API's alert_status
+  note records who resolved it). ALERT_LABELS exported from Layout.tsx.
 ## 2026-11-01 — Copilot can answer "who is this customer" — contact + transcript tools
 - Two new concierge builtins (builtinTools.ts): `lookup_contact` finds a
   person in the visitor's workspace by name/email/phone/tag/id and returns
