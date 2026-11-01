@@ -1613,6 +1613,12 @@ details summary:hover { color: var(--text); }
     background: rgba(8,10,14,.45); cursor: default;
   }
   .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
+  /* Footer anchors to the viewport bottom while the thread scrolls. */
+  .conv-foot {
+    position: sticky; bottom: 0; z-index: 20;
+    margin: 0 -14px -14px; padding: 8px 14px 14px;
+    background: var(--bg); border-top: 1px solid var(--border);
+  }
   /* Search and the utility icons share one row; utilities go icon-only,
      snooze shows just the moon (accent when snoozed). */
   .conv-actions .conv-search { flex: 1 1 0; min-width: 0; }

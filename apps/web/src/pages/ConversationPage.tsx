@@ -1584,6 +1584,9 @@ export default function ConversationPage() {
           </div>
         )}
 
+        {/* Footer pins to the viewport bottom on phones while the page
+            scrolls above it — composer or the ops row, whichever renders. */}
+        <div className="conv-foot">
         {canSend ? (
           <>
             <Composer
@@ -1661,6 +1664,7 @@ export default function ConversationPage() {
             )}
           </div>
         )}
+        </div>
       </div>
 
       {/* Mobile (≤720px): the details column is a right slide-over behind
