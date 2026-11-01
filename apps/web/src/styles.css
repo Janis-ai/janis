@@ -1615,7 +1615,10 @@ details summary:hover { color: var(--text); }
    dock icons, the conversation page renders its own back header. */
 .mobile-bar, .conv-mobile-head, .dock-back, .conv-side-head { display: none; }
 /* Icon + label operator buttons align everywhere; the label drops at ≤720. */
-.conv-actions button.btn, .conv-ops.btn, .filters button.btn { display: inline-flex; align-items: center; gap: 6px; }
+.conv-actions button.btn:not(.info-btn), .conv-ops.btn, .filters button.btn { display: inline-flex; align-items: center; gap: 6px; }
+/* ⓘ only exists for the drawer — and it lives at the right edge the
+   drawer slides out from. */
+.conv-actions .info-btn { order: 9; margin-left: auto; }
 /* Filter button's active count — the label carries it on desktop, the
    badge carries it on mobile where the label is gone. */
 .filter-badge { display: none; }
