@@ -139,11 +139,6 @@ const FEATURE_GROUPS: {
   {
     heading: 'One front line, every channel',
     sub: 'Every conversation in one inbox — with the same AI-first, human-on-tap flow on all of them.',
-    shot: {
-      src: '/img/marketing-inbox.png',
-      alt: 'The Janis inbox — conversations across channels with agent, intent, and state labels',
-      cap: 'One inbox across channels — agent badges, auto-classified intents, and per-thread state built in.',
-    },
     items: [
       {
         icon: 'inbox',
@@ -170,11 +165,6 @@ const FEATURE_GROUPS: {
   {
     heading: 'An agent that gets safer every week',
     sub: 'The improvement loop is built in — every fix ships against evidence, not vibes.',
-    shot: {
-      src: '/img/marketing-tests.png',
-      alt: 'The scenario suite — saved conversations replayed against the current agent, with expected vs actual replies and the judge’s reasoning',
-      cap: 'The scenario suite — real conversations replayed against your current setup, judged per expectation.',
-    },
     items: [
       {
         icon: 'flag',
@@ -201,11 +191,6 @@ const FEATURE_GROUPS: {
   {
     heading: 'Run support like a system',
     sub: 'Outbound, measurement, and customer records — not just a queue.',
-    shot: {
-      src: '/img/marketing-reports.png',
-      alt: 'The reports view — AI-versus-human workload split, approvals, resolution speed, volume, and CSAT',
-      cap: 'AI-vs-human workload, approval turnaround, resolution speed, and CSAT — per agent, per channel.',
-    },
     items: [
       {
         icon: 'send',
@@ -704,18 +689,6 @@ export default function Landing() {
           </Link>
         </div>
         <p className="landing-fine">Free plan available · No credit card required</p>
-        <figure className="demo-window hero-shot">
-          <div className="demo-header">
-            <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
-            <span className="demo-title">The console your team lives in</span>
-          </div>
-          <video
-            src="/img/marketing-approval.mp4"
-            poster="/img/marketing-console.png"
-            autoPlay muted loop playsInline
-            aria-label="A Janis conversation in the console — the agent's card-based reply, customer context in the side panel, and one-click operator controls"
-          />
-        </figure>
       </section>
 
       <section className="landing-steps landing-demo" id="demo">
