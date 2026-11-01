@@ -518,7 +518,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       <div className="filters">
         <SearchInput
           className="search-box"
-          placeholder="Search transcripts, users, ids…"
+          placeholder="Search transcripts, users, ids, tags…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onClear={() => setQuery('')}
