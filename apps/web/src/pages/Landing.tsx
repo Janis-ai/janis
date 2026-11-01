@@ -134,11 +134,22 @@ const FEATURE_GROUPS: {
   heading: string;
   sub: string;
   shot?: { src: string; alt: string; cap: string };
+  sideShot?: { src: string; alt: string; cap: string };
   items: { icon: keyof typeof GLYPHS; title: string; body: string }[];
 }[] = [
   {
     heading: 'One front line, every channel',
     sub: 'Every conversation in one inbox — with the same AI-first, human-on-tap flow on all of them.',
+    shot: {
+      src: '/img/marketing-inbox.png',
+      alt: 'The Janis inbox — every channel in one triageable queue',
+      cap: 'Web chat, WhatsApp, Instagram and email land in one queue — intent, owner and state on every row.',
+    },
+    sideShot: {
+      src: '/img/marketing-phone.png',
+      alt: 'The same conversation on a phone — approval card decided on the go',
+      cap: '…and on your phone. Approvals and takeover work wherever you are.',
+    },
     items: [
       {
         icon: 'inbox',
@@ -165,6 +176,11 @@ const FEATURE_GROUPS: {
   {
     heading: 'An agent that gets safer every week',
     sub: 'The improvement loop is built in — every fix ships against evidence, not vibes.',
+    shot: {
+      src: '/img/marketing-tests.png',
+      alt: 'Scenario tests — rescued conversations replayed against the agent',
+      cap: 'Every rescue becomes a replayable scenario — expected behavior on record, diffs before they ship.',
+    },
     items: [
       {
         icon: 'flag',
@@ -191,6 +207,11 @@ const FEATURE_GROUPS: {
   {
     heading: 'Run support like a system',
     sub: 'Outbound, measurement, and customer records — not just a queue.',
+    shot: {
+      src: '/img/marketing-reports.png',
+      alt: 'Janis reports — handled rate, approvals, resolution speed and volume',
+      cap: 'Handled rate, approval turnaround, resolution speed — measured, not guessed.',
+    },
     items: [
       {
         icon: 'send',
@@ -689,6 +710,24 @@ export default function Landing() {
           </Link>
         </div>
         <p className="landing-fine">Free plan available · No credit card required</p>
+        <figure className="demo-window hero-shot">
+          <video
+            className="hero-vid"
+            src="/img/marketing-approval.mp4"
+            poster="/img/marketing-console.png"
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="metadata"
+            aria-label="A real approval flow in the Janis console — an agent requests a refund, a teammate approves it, and the agent replies to the customer"
+          />
+          <img
+            className="hero-still"
+            src="/img/marketing-console.png"
+            alt="The Janis console — a refund approval card waiting on a human decision"
+          />
+        </figure>
       </section>
 
       <section className="landing-steps landing-demo" id="demo">
@@ -704,7 +743,19 @@ export default function Landing() {
         <section className="landing-steps" key={g.heading}>
           <h2>{g.heading}</h2>
           <p className="landing-sub">{g.sub}</p>
-          {g.shot && (
+          {g.shot && g.sideShot && (
+            <div className="landing-shot-pair">
+              <figure className="demo-window landing-shot">
+                <img src={g.shot.src} alt={g.shot.alt} loading="lazy" />
+                <figcaption className="landing-shot-cap">{g.shot.cap}</figcaption>
+              </figure>
+              <figure className="demo-window landing-shot phone-shot">
+                <img src={g.sideShot.src} alt={g.sideShot.alt} loading="lazy" />
+                <figcaption className="landing-shot-cap">{g.sideShot.cap}</figcaption>
+              </figure>
+            </div>
+          )}
+          {g.shot && !g.sideShot && (
             <figure className="demo-window landing-shot">
               <img src={g.shot.src} alt={g.shot.alt} loading="lazy" />
               <figcaption className="landing-shot-cap">{g.shot.cap}</figcaption>

@@ -2131,8 +2131,23 @@ details summary:hover { color: var(--text); }
 /* Real-console imagery — framed like the demo windows. */
 .hero-shot { max-width: 880px; margin: 42px auto 0; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
 .hero-shot img, .hero-shot video { display: block; width: 100%; }
+.hero-shot .hero-still { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .hero-shot video { display: none; }
+  .hero-shot .hero-still { display: block; }
+}
 .landing-shot { max-width: 880px; margin: 0 auto 20px; }
 .landing-shot img { display: block; width: 100%; }
+.landing-shot-pair {
+  display: grid; grid-template-columns: minmax(0, 1fr) 230px; gap: 14px;
+  max-width: 1080px; margin: 0 auto 20px; align-items: stretch;
+}
+.landing-shot-pair .landing-shot { max-width: none; margin: 0; }
+.landing-shot-pair .phone-shot img { object-fit: cover; height: 100%; object-position: top; }
+@media (max-width: 720px) {
+  .landing-shot-pair { grid-template-columns: 1fr; }
+  .landing-shot-pair .phone-shot { max-width: 280px; margin: 0 auto; }
+}
 .landing-shot-cap {
   padding: 10px 14px; font-size: 13px; color: var(--muted); text-align: center;
   border-top: 1px solid var(--border);

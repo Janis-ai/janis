@@ -1,6 +1,6 @@
 // Marketing screenshots for the landing page — captures console surfaces
 // clipped to .main at 1440x900 @2x → apps/web/public/img/marketing-*.png.
-// Data source: local janis_dev "Michael's workspace" (admin needs a temp
+// Data source: local janis_dev "Luxe Salon" workspace (admin needs a temp
 // membership there — add before running, remove after).
 import { chromium } from 'playwright';
 import { fileURLToPath } from 'url';
@@ -9,8 +9,8 @@ import { BASE, EMAIL, PASSWORD } from './lib.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const OUT = path.join(ROOT, 'apps/web/public/img');
-const WS = '69df0b23-a37f-429e-92db-d1a384782f7a'; // Michael's workspace
-const CONSOLE_CONV = '139c67cb-110c-4dd1-aaa7-dee636b4018b'; // Janis concierge — approval cards
+const WS = '69df0b23-a37f-429e-92db-d1a384782f7a'; // Luxe Salon
+const CONSOLE_CONV = 'eeeb4277-d056-4f0c-8a93-19392fd0fbe0'; // Willa Frost — live pending approval
 const TESTS_AGENT = '48d2ad27-8155-4cde-8112-d8daf3de7a98'; // Hair Salon Concierge
 
 const SHOTS = [
