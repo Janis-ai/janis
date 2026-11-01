@@ -1197,7 +1197,7 @@ export default function Layout() {
           }
         }}
       >
-        <Link className="brand" to="/" title="Janis home">
+        <Link className="brand" to="/conversations" title="Janis inbox">
           <BrandImg className="brand-wide" alt="Janis" />
           <BrandImg className="brand-mark" mark alt="" />
         </Link>
