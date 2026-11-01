@@ -141,9 +141,8 @@ const FEATURE_GROUPS: {
     sub: 'Every conversation in one inbox — with the same AI-first, human-on-tap flow on all of them.',
     shot: {
       src: '/img/marketing-inbox.png',
-      vid: '/img/marketing-inbox-flow.mp4',
-      alt: 'An approval request lands in the inbox — open the thread, approve it, the agent resumes',
-      cap: 'A fee-waiver approval lands live — open the thread, sign off, the agent finishes the job.',
+      alt: 'The Janis inbox — every channel in one triageable queue',
+      cap: 'Web chat, WhatsApp, Instagram and email land in one queue — intent, owner and state on every row.',
     },
     items: [
       {
@@ -719,6 +718,22 @@ export default function Landing() {
           human: approve or deny the request yourself.
         </p>
         <DemoStrip />
+        <figure className="demo-window landing-shot">
+          <video
+            className="hero-vid"
+            src="/img/marketing-approval.mp4"
+            poster="/img/marketing-console.png"
+            autoPlay
+            muted
+            loop
+            playsInline
+            preload="metadata"
+            aria-label="The same flow in the real console — a fee waiver waits on a human decision, gets approved, and the agent replies"
+          />
+          <figcaption className="landing-shot-cap">
+            The same flow, in the real console — a fee-waiver request lands, a teammate approves it, the agent finishes the rebooking.
+          </figcaption>
+        </figure>
       </section>
 
       {FEATURE_GROUPS.map((g) => (
