@@ -429,14 +429,19 @@ describe('takeover lifecycle', () => {
     expect(p.channel).toBe('instagram'); // earlier fields preserved
   });
 
-  it('rejects reply without takeover', async () => {
+  it('human reply implicitly takes over', async () => {
     const [conv] = await db
       .select()
       .from(conversations)
       .where(eq(conversations.externalId, 'c1'));
-    await expect(humanReply(db, agent.workspaceId, conv.id, admin, 'hi')).rejects.toThrow(
-      'take over',
-    );
+    const { message } = await humanReply(db, agent.workspaceId, conv.id, admin, 'hi');
+    expect(message.direction).toBe('human');
+    const [after] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, conv.id));
+    expect(after.state).toBe('human');
+    expect(after.assigneeId).toBe(admin.id);
   });
 });
 
