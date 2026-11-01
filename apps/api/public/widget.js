@@ -2,6 +2,11 @@
    Embed: <script src="https://<api>/widget.js" data-janis-token="<channel id>" async></script>
    Optional: data-janis-api="https://<api>" to override the API origin. */
 (function () {
+  // Boot once — a host page that mounts the script twice (React StrictMode
+  // replays effects; the first tag can still be downloading when cleanup
+  // removes it) would stack two bubbles/panels with dueling state.
+  if (window.__janis_booted) return;
+  window.__janis_booted = true;
   var script = document.currentScript ||
     document.querySelector('script[data-janis-token]');
   if (!script) return;
@@ -155,6 +160,7 @@
   // node so nothing leaks onto console routes after unmount.
   window.Janis.destroy = function () {
     destroyed = true;
+    window.__janis_booted = false;
     if (state.timer) { clearInterval(state.timer); state.timer = null; }
     if (state.closedTimer) { clearInterval(state.closedTimer); state.closedTimer = null; }
     if (state.typingTimer) { clearTimeout(state.typingTimer); state.typingTimer = null; }
