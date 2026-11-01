@@ -134,7 +134,6 @@ const FEATURE_GROUPS: {
   heading: string;
   sub: string;
   shot?: { src: string; alt: string; cap: string };
-  sideShot?: { src: string; alt: string; cap: string };
   items: { icon: keyof typeof GLYPHS; title: string; body: string }[];
 }[] = [
   {
@@ -144,11 +143,6 @@ const FEATURE_GROUPS: {
       src: '/img/marketing-inbox.png',
       alt: 'The Janis inbox — every channel in one triageable queue',
       cap: 'Web chat, WhatsApp, Instagram and email land in one queue — intent, owner and state on every row.',
-    },
-    sideShot: {
-      src: '/img/marketing-copilot.png',
-      alt: 'Ask Janis — the copilot answers from the page and the customer record',
-      cap: 'Ask the copilot about the customer on screen — it answers with the unified record across every channel.',
     },
     items: [
       {
@@ -748,19 +742,7 @@ export default function Landing() {
         <section className="landing-steps" key={g.heading}>
           <h2>{g.heading}</h2>
           <p className="landing-sub">{g.sub}</p>
-          {g.shot && g.sideShot && (
-            <div className="landing-shot-pair">
-              <figure className="demo-window landing-shot">
-                <img src={g.shot.src} alt={g.shot.alt} loading="lazy" />
-                <figcaption className="landing-shot-cap">{g.shot.cap}</figcaption>
-              </figure>
-              <figure className="demo-window landing-shot phone-shot">
-                <img src={g.sideShot.src} alt={g.sideShot.alt} loading="lazy" />
-                <figcaption className="landing-shot-cap">{g.sideShot.cap}</figcaption>
-              </figure>
-            </div>
-          )}
-          {g.shot && !g.sideShot && (
+          {g.shot && (
             <figure className="demo-window landing-shot">
               <img src={g.shot.src} alt={g.shot.alt} loading="lazy" />
               <figcaption className="landing-shot-cap">{g.shot.cap}</figcaption>
