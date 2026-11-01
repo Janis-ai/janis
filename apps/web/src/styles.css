@@ -1355,7 +1355,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    only scroller, head stays up top, foot is a static block at the
    bottom of the column. No sticky, no bleeds, nothing can show
    through or stack beneath. */
-.layout.conv-open .main { display: flex; flex-direction: column; overflow: hidden; }
+.layout.conv-open .main { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
 .conv-open .conv-layout { flex: 1 1 auto; min-height: 0; }
 .conv-open .conv-main { min-height: 0; }
 .conv-open .transcript { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
