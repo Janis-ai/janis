@@ -7,7 +7,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { createHmac } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentMembers, agents, channelBindings, channels, contacts, conversations, formSubmissions, helpArticles, memberships, messages, sessions, slackInstallations, slackThreads, usageEvents, users, workspaces } from '../db/schema.js';
+import { agentMembers, agents, channelBindings, channels, contacts, conversations, formSubmissions, helpArticles, memberships, messages, rateLimits, sessions, slackInstallations, slackThreads, usageEvents, users, workspaces } from '../db/schema.js';
 import { generateApiKey, sha256 } from '../lib/crypto.js';
 import { markOperatorTyping } from '../lib/typingState.js';
 import { takeover, humanReply } from '../services/takeover.js';
@@ -2600,17 +2600,17 @@ describe('collect-form submissions', () => {
 describe('inbound rate limiting', () => {
   it('throttles a single visitor at 20/min and isolates other visitors', async () => {
     const spammer = `spam_${Date.now().toString(36)}`;
-    const statuses: number[] = [];
-    for (let i = 0; i < 21; i++) {
-      const res = await app.request(`/chat/${channelId}/messages`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ visitor_id: spammer, text: `burst ${i}` }),
-      });
-      statuses.push(res.status);
-    }
-    expect(statuses.slice(0, 20).every((s) => s === 200)).toBe(true);
-    expect(statuses[20]).toBe(429);
+    // Seed the bucket two requests shy of the cap. takeDbAllowance's
+    // reset_at is the next clock-aligned minute boundary, so bursting 21
+    // real requests flaked whenever the loop straddled it.
+    await db.insert(rateLimits).values({
+      key: `chat-msg:${channelId}:${spammer}`,
+      count: 18,
+      resetAt: new Date(Date.now() + 60_000),
+    });
+    expect((await post('burst 19', spammer)).status).toBe(200);
+    expect((await post('burst 20', spammer)).status).toBe(200);
+    expect((await post('burst 21', spammer)).status).toBe(429);
     expect((await post('still fine')).status).toBe(200);
   });
 });
