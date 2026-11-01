@@ -1327,7 +1327,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    bottom line, leaving pills + funnel + agent picker together on top. */
 .filters .search-box { order: 9; }
 /* One row, one height — buttons, selects and inputs all 38px. */
-.filters .btn, .filters select, .filters .search-box { height: 38px; box-sizing: border-box; }
+.filters .btn, .filters select, .filters .search-box, .filters .scope-picker { height: 38px; box-sizing: border-box; }
 .filters .search-box { padding-top: 0; padding-bottom: 0; }
 /* Inbox list pages: the title+filters bar pins to the top of .main while
    the conversation list scrolls beneath it — -24px compensates .main's
@@ -1719,7 +1719,7 @@ details summary:hover { color: var(--text); }
   /* Search sorts last so tabs + funnel + picker pack into the first row. */
   .filters .search-box { order: 9; }
 /* One row, one height — buttons, selects and inputs all 38px. */
-.filters .btn, .filters select, .filters .search-box { height: 38px; box-sizing: border-box; }
+.filters .btn, .filters select, .filters .search-box, .filters .scope-picker { height: 38px; box-sizing: border-box; }
 .filters .search-box { padding-top: 0; padding-bottom: 0; }
   /* On phones the funnel sits right of centre — open leftward from the
      button's right edge so the sheet can never leave the viewport. */
