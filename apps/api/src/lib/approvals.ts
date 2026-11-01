@@ -9,7 +9,7 @@ import { toMessage } from './serializers.js';
 import { loadSecretsMap } from './secrets.js';
 import { freshShopifyToken } from './shopifyToken.js';
 import { connectionSecrets } from './connections.js';
-import { callTool, type ToolDef } from './toolExec.js';
+import { callTool, toolsFor, type ToolDef } from './toolExec.js';
 
 type PendingAction = typeof pendingActions.$inferSelect;
 type AgentRow = typeof agents.$inferSelect;
@@ -240,7 +240,14 @@ export async function decidePendingAction(
       const tool = action.tool as ToolDef;
       // Hand-seeded or older pending actions may carry a partial snapshot
       // (no url/method/headers/bodyTemplate) — callTool dies on undefined.
-      // Catalog is source of truth, same as toolsFor.
+      // The agent's live config resolves custom tools (not in the catalog);
+      // the catalog fills template fields for tools installed pre-snapshot.
+      if (!tool.url) {
+        const live = toolsFor(agent).find(
+          (x) => x.name === (tool.name ?? action.toolName),
+        );
+        if (live) Object.assign(tool, live);
+      }
       if (!tool.url || !tool.bodyTemplate) {
         const { TOOL_TEMPLATES } = await import('./toolTemplates.js');
         const cat = TOOL_TEMPLATES.flatMap((t) => t.tools).find(
@@ -248,11 +255,13 @@ export async function decidePendingAction(
         );
         if (cat) Object.assign(tool, cat);
       }
-      result = await callTool(
-        tool,
-        action.args as Record<string, unknown>,
-        secrets,
-      ).catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`);
+      result = tool.url
+        ? await callTool(
+            tool,
+            action.args as Record<string, unknown>,
+            secrets,
+          ).catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`)
+        : `error: tool ${action.toolName} has no endpoint configured — it may have been removed from the agent`;
     }
   } else {
     // Denial can itself be a provider mutation — a card carrying denyTemplate
@@ -267,15 +276,21 @@ export async function decidePendingAction(
       };
       const tool = { ...(action.tool as ToolDef), bodyTemplate: denyTpl };
       if (!tool.url) {
-        const { TOOL_TEMPLATES } = await import('./toolTemplates.js');
-        const cat = TOOL_TEMPLATES.flatMap((t) => t.tools).find((x) => x.name === tool.name);
-        if (cat) Object.assign(tool, cat);
+        const live = toolsFor(agent).find((x) => x.name === (tool.name ?? action.toolName));
+        if (live) Object.assign(tool, { ...live, bodyTemplate: denyTpl });
+        else {
+          const { TOOL_TEMPLATES } = await import('./toolTemplates.js');
+          const cat = TOOL_TEMPLATES.flatMap((t) => t.tools).find((x) => x.name === tool.name);
+          if (cat) Object.assign(tool, { ...cat, bodyTemplate: denyTpl });
+        }
       }
-      result = await callTool(
-        tool,
-        action.args as Record<string, unknown>,
-        secrets,
-      ).catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`);
+      result = tool.url
+        ? await callTool(
+            tool,
+            action.args as Record<string, unknown>,
+            secrets,
+          ).catch((err) => `error: ${err instanceof Error ? err.message : 'tool failed'}`)
+        : `error: tool ${action.toolName} has no endpoint configured — it may have been removed from the agent`;
     }
   }
 

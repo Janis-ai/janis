@@ -55,7 +55,27 @@ export function toolsFor(agent: AgentRow): ToolDef[] {
     // Retroactive catalog fields — tools installed before a flag/binding
     // existed serialize without it; the catalog is the source of truth.
     .map((t) => {
-      const out = { ...t };
+      const out = { ...t } as ToolDef & { body?: unknown };
+      // Operator-authored config JSON: params/headers arrive as JSON strings
+      // and a body template gets named "body" — normalize or the schema handed
+      // to the model fills with character-index keys.
+      for (const k of ['params', 'headers'] as const) {
+        const v = out[k] as unknown;
+        if (typeof v === 'string') {
+          let rec: unknown = null;
+          try {
+            rec = v.trim() ? JSON.parse(v) : null;
+          } catch {}
+          if (rec && typeof rec === 'object' && !Array.isArray(rec)) {
+            (out as unknown as Record<string, unknown>)[k] = rec;
+          } else {
+            delete out[k];
+          }
+        }
+      }
+      if (!out.bodyTemplate && typeof out.body === 'string' && out.body.trim()) {
+        out.bodyTemplate = out.body;
+      }
       if (IDENTITY_TOOL_NAMES.has(t.name)) out.identity = true;
       // The catalog is authoritative both ways — a catalog tool whose def
       // dropped identity (e.g. order_number+email became pair-verified)
@@ -272,12 +292,30 @@ export async function callTool(
   args: Record<string, unknown>,
   secrets: Record<string, string> = {},
 ): Promise<string> {
+  // A partial def (hand-edited config JSON, a stale pending-action snapshot)
+  // must degrade to a tool error, not a throw — callers surface the string.
+  if (typeof tool.url !== 'string' || !tool.url) {
+    return `error: tool ${tool.name ?? '(unnamed)'} has no url configured`;
+  }
+  // Config JSON is operator-authored — a string value ("{}") slips in where a
+  // record belongs; parse it rather than iterating characters as entries.
+  const toolHeaders: Record<string, string> = (() => {
+    const h = tool.headers as unknown;
+    if (h && typeof h === 'object') return h as Record<string, string>;
+    if (typeof h === 'string' && h.trim()) {
+      try {
+        const p = JSON.parse(h) as unknown;
+        if (p && typeof p === 'object' && !Array.isArray(p)) return p as Record<string, string>;
+      } catch {}
+    }
+    return {};
+  })();
   // Secrets expand first — LLM-supplied args can never inject {{secrets.*}}
   // placeholders, and arg values never get a second expansion pass.
   const missing = [
     ...new Set(
-      [tool.url, tool.bodyTemplate ?? '', ...Object.values(tool.headers ?? {})]
-        .flatMap((s) => [...s.matchAll(/\{\{secrets\.([A-Za-z0-9_]+)\}\}/g)].map((m) => m[1]))
+      [tool.url, tool.bodyTemplate ?? '', ...Object.values(toolHeaders)]
+        .flatMap((s) => [...String(s).matchAll(/\{\{secrets\.([A-Za-z0-9_]+)\}\}/g)].map((m) => m[1]))
         .filter((n) => !(n in secrets)),
     ),
   ];
@@ -285,9 +323,9 @@ export async function callTool(
     return `error: tool needs secrets not configured on this agent: ${missing.join(', ')}`;
   }
   let url = interpolateSecrets(tool.url, secrets);
-  const headers = tool.headers
+  const headers = Object.keys(toolHeaders).length
     ? Object.fromEntries(
-        Object.entries(tool.headers).map(([k, v]) => [k, interpolateSecrets(v, secrets)]),
+        Object.entries(toolHeaders).map(([k, v]) => [k, interpolateSecrets(String(v), secrets)]),
       )
     : undefined;
   const used = new Set<string>();

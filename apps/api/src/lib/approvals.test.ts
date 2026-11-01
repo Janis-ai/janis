@@ -141,6 +141,77 @@ describe('gated tool approvals', () => {
     expect(note).toBeDefined();
   });
 
+  it('approve resolves a partial snapshot from the live config — custom tool', async () => {
+    const fetchMock = vi.fn(async () => new Response('{"ok":true}'));
+    vi.stubGlobal('fetch', fetchMock);
+    // Parked rows can carry a thin {name, description} snapshot (hand-seeded
+    // rows, older writes); the agent's live config is the source of truth
+    // for custom tools, which aren't in TOOL_TEMPLATES.
+    const liveDef: ToolDef = {
+      name: 'issue_refund',
+      description: 'refund a deposit',
+      method: 'POST',
+      url: 'http://localhost:9/api/refund',
+      params: { amount: 'amt' },
+    };
+    await db
+      .update(agents)
+      .set({ config: { tools: [liveDef] } })
+      .where(eq(agents.id, agent.id));
+    const conv = await makeConv('c-approval-partial');
+    await requestToolApproval(
+      db,
+      agent,
+      conv.id,
+      { name: 'issue_refund', description: 'refund a deposit' } as ToolDef,
+      { amount: '5' },
+    );
+    const [action] = await db
+      .select()
+      .from(pendingActions)
+      .where(eq(pendingActions.conversationId, conv.id));
+
+    const decided = await decidePendingAction(db, action.id, admin, true);
+    expect(decided).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0][0]).toBe('http://localhost:9/api/refund');
+    const [row] = await db
+      .select()
+      .from(pendingActions)
+      .where(eq(pendingActions.id, action.id));
+    expect(row.status).toBe('approved');
+    expect(row.result).toBe('{"ok":true}');
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agent.id));
+  });
+
+  it('approve on an unresolvable tool stores an error result, not a crash', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}'));
+    vi.stubGlobal('fetch', fetchMock);
+    await db.update(agents).set({ config: {} }).where(eq(agents.id, agent.id));
+    const conv = await makeConv('c-approval-gone');
+    await requestToolApproval(
+      db,
+      agent,
+      conv.id,
+      { name: 'ghost_tool', description: 'gone' } as ToolDef,
+      {},
+    );
+    const [action] = await db
+      .select()
+      .from(pendingActions)
+      .where(eq(pendingActions.conversationId, conv.id));
+
+    const decided = await decidePendingAction(db, action.id, admin, true);
+    expect(decided).not.toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+    const [row] = await db
+      .select()
+      .from(pendingActions)
+      .where(eq(pendingActions.id, action.id));
+    expect(row.status).toBe('approved');
+    expect(row.result).toMatch(/no endpoint configured/);
+  });
+
   it('deny does not execute and marks the action denied', async () => {
     const fetchMock = vi.fn(async () => new Response('{}'));
     vi.stubGlobal('fetch', fetchMock);

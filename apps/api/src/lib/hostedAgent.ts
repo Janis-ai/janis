@@ -417,7 +417,7 @@ function widgetDigest(w: SavedWidgetDef & { name: string; toolDef?: ToolDef }): 
     ? [
         ...new Set([
           ...missingTemplateArgs(w.toolDef.bodyTemplate ?? '', {}),
-          ...[...w.toolDef.url.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]),
+          ...[...(w.toolDef.url ?? '').matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]),
         ]),
       ]
     : [];
