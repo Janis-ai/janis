@@ -104,11 +104,24 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   (StrictMode effect replay) → stacked bubbles/panels, dismiss toggled the
   hidden instance. `window.__janis_booted` guard at eval + reset in
   destroy(); landing ?v bumped to 4.
-- BUG FOUND (unfixed): decidePendingAction on a CUSTOM http tool crashes —
-  `Cannot read properties of undefined (reading 'matchAll')` — the identity
-  boundary scan hits a non-string arg value somewhere. Repro: approve the
-  staged pending action on the salon conv. Hero clip was cut before the
-  error lands; real fix still owed (toolExec boundary scan).
+- BUG FIXED 2026-11-01: decidePendingAction on a CUSTOM http tool crashed —
+  `Cannot read properties of undefined (reading 'matchAll')`. Root cause was
+  NOT the identity boundary scan: the parked action's stored tool snapshot
+  was a thin {name, description}, the TOOL_TEMPLATES backfill can't resolve
+  custom tools (not in the catalog), and callTool threw on
+  `undefined.matchAll` in the secrets scan. Fix: decidePendingAction resolves
+  the def from the agent's live config via toolsFor before the catalog
+  fallback and records a clean "no endpoint configured" error when nothing
+  resolves; callTool degrades malformed defs (missing url, string headers)
+  to error strings; toolsFor parses string params/headers + a "body" alias
+  for bodyTemplate (operator-authored config JSON); widgetDigest's
+  toolDef.url scan got the same guard. Regression tests in
+  approvals.test.ts (partial-snapshot resolve + unresolvable-tool error).
+  Verified e2e on janis_dev — fresh thin-snapshot approval on the salon
+  conv executes the live def. Also flipped the seeded issue_refund's method
+  to GET in janis_dev (it POSTed to the GET-only /health → 404; the seed's
+  params/headers/body fields were hand-written strings, now normalized by
+  toolsFor).
 - Deployed through janis-api-01265-jl4.
 
 
