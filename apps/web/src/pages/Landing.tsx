@@ -702,15 +702,6 @@ export default function Landing() {
           <Link className="btn primary lg" to={cta.to} onClick={ctaClick('hero')}>
             {data ? 'Open console' : 'Get started free'}
           </Link>
-          <button
-            className="btn lg"
-            onClick={() => {
-              track('widget_open', { location: 'hero' });
-              openWidget();
-            }}
-          >
-            Chat with our AI agent
-          </button>
         </div>
         <p className="landing-fine">Free plan available · No credit card required</p>
         <figure className="demo-window hero-shot">
