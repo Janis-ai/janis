@@ -2181,7 +2181,7 @@ details summary:hover { color: var(--text); }
 }
 .landing-cta { text-align: center; padding: 48px 16px 64px; }
 .landing-cta p { margin: 0 0 22px; }
-.landing-integrations { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; max-width: 720px; margin: 0 auto; }
+.landing-integrations { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; max-width: 720px; margin: 0 auto 56px; }
 .landing-integration {
   border: 1px solid var(--border); border-radius: 999px; padding: 7px 16px;
   font-size: 14px; font-weight: 600; color: var(--muted); background: var(--panel, transparent);
