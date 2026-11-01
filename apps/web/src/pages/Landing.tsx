@@ -228,6 +228,11 @@ const FEATURE_GROUPS: {
         title: 'Customers, not tickets',
         body: 'One contact per person across every channel — traits, full history, and CRM sync to HubSpot, Salesforce, and Zendesk.',
       },
+      {
+        icon: 'bot',
+        title: 'A copilot that knows your workspace',
+        body: 'Ask Janis sees the page you’re on — “tell me about this customer” pulls the unified record across every channel. It assigns, routes, and teaches the agent from the same chat.',
+      },
     ],
   },
   {
