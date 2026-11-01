@@ -146,9 +146,9 @@ const FEATURE_GROUPS: {
       cap: 'Web chat, WhatsApp, Instagram and email land in one queue — intent, owner and state on every row.',
     },
     sideShot: {
-      src: '/img/marketing-phone.png',
-      alt: 'The same conversation on a phone — approval card decided on the go',
-      cap: '…and on your phone. Approvals and takeover work wherever you are.',
+      src: '/img/marketing-copilot.png',
+      alt: 'Ask Janis — the copilot answers from the page and the customer record',
+      cap: 'Ask the copilot about the customer on screen — it answers with the unified record across every channel.',
     },
     items: [
       {
