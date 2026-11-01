@@ -1618,6 +1618,13 @@ details summary:hover { color: var(--text); }
    on desktop; on mobile it goes invisible and an icon is the button face. */
 .snooze-wrap, .sendas-wrap { position: relative; display: inline-flex; align-items: center; }
 .snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: none; position: absolute; pointer-events: none; }
+/* Bulk-bar snooze — same moon-over-select trick, sized to the row. */
+.bulk-snz {
+  width: 38px; height: 38px; justify-content: center;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--panel);
+}
+.bulk-snz .snz-ic { display: block; position: static; color: var(--muted); }
+.bulk-snz select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; cursor: pointer; }
 
 @media (max-width: 720px) {
   /* Slack-style shell — the sidebar leaves the flow entirely and becomes an

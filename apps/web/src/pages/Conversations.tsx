@@ -705,21 +705,23 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           >
             <Tag size={14} />
           </button>
-          <select
-            className="btn"
-            disabled={busy}
-            value=""
-            onChange={(e) => {
-              const m = Number(e.target.value);
-              e.target.value = '';
-              if (m === 0) void bulk('unsnooze');
-              else void bulk('snooze', { minutes: snoozeMinutes(m) });
-            }}
-          >
-            <option value="">Snooze…</option>
-            {SNOOZE_OPTIONS.map(([l, m]) => <option key={l} value={m}>{l}</option>)}
-            <option value="0">Unsnooze</option>
-          </select>
+          <span className="snooze-wrap bulk-snz" title="Snooze…" aria-label="Snooze">
+            <Moon size={14} className="snz-ic" />
+            <select
+              disabled={busy}
+              value=""
+              onChange={(e) => {
+                const m = Number(e.target.value);
+                e.target.value = '';
+                if (m === 0) void bulk('unsnooze');
+                else void bulk('snooze', { minutes: snoozeMinutes(m) });
+              }}
+            >
+              <option value="">Snooze…</option>
+              {SNOOZE_OPTIONS.map(([l, m]) => <option key={l} value={m}>{l}</option>)}
+              <option value="0">Unsnooze</option>
+            </select>
+          </span>
           <button className="btn" title="Clear selection" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>
       )}
