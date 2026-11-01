@@ -1626,6 +1626,55 @@ details summary:hover { color: var(--text); }
   .inbox-onboard { display: none; }
   .conv-select-all { display: none; }
   .kb-hints { display: none; }
+}
+
+/* Operator rows iconify whenever space gets tight — not just phones:
+   ≤1100px outright, and 721–1500px while the dock is open (it takes ~360px). */
+@media (max-width: 1100px) {
+  .conv-actions .btn-label, .conv-ops .btn-label, .composer-bar .btn-label, .filters .btn-label { display: none; }
+  .conv-actions .btn, .conv-ops.btn, .filters button.btn { padding: 7px 10px; }
+  .conv-actions, .conv-ops { flex-wrap: wrap; }
+  .snooze-wrap, .sendas-wrap {
+    width: 34px; height: 33px; justify-content: center;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .snooze-wrap:hover, .sendas-wrap:hover { border-color: var(--accent); }
+  .snooze-wrap select, .sendas-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
+  .snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: block; color: var(--muted); }
+  .snooze-wrap.on .snz-ic, .sendas-wrap.on .sendas-ic { color: var(--accent); }
+  .filter-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px; padding: 0 4px; margin-left: 2px;
+    border-radius: 8px; background: var(--accent); color: #06281f;
+    font-size: 10px; font-weight: 700; line-height: 1;
+  }
+  .attn-btn .filter-badge { background: var(--warn); color: #241a00; }
+  .attn-btn.primary .filter-badge { background: #06281f; color: var(--accent); }
+}
+@media (min-width: 721px) and (max-width: 1500px) {
+  .layout.dock-open .conv-actions .btn-label,
+  .layout.dock-open .conv-ops .btn-label,
+  .layout.dock-open .composer-bar .btn-label,
+  .layout.dock-open .filters .btn-label { display: none; }
+  .layout.dock-open .conv-actions .btn, .layout.dock-open .conv-ops.btn { padding: 7px 10px; }
+  .layout.dock-open .conv-actions, .layout.dock-open .conv-ops { flex-wrap: wrap; }
+  .layout.dock-open .snooze-wrap, .layout.dock-open .sendas-wrap {
+    width: 34px; height: 33px; justify-content: center;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .layout.dock-open .snooze-wrap:hover, .layout.dock-open .sendas-wrap:hover { border-color: var(--accent); }
+  .layout.dock-open .snooze-wrap select, .layout.dock-open .sendas-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
+  .layout.dock-open .snooze-wrap .snz-ic, .layout.dock-open .sendas-wrap .sendas-ic { display: block; color: var(--muted); }
+  .layout.dock-open .snooze-wrap.on .snz-ic, .layout.dock-open .sendas-wrap.on .sendas-ic { color: var(--accent); }
+  .layout.dock-open .filter-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 16px; height: 16px; padding: 0 4px; margin-left: 2px;
+    border-radius: 8px; background: var(--accent); color: #06281f;
+    font-size: 10px; font-weight: 700; line-height: 1;
+  }
+  .layout.dock-open .attn-btn .filter-badge { background: var(--warn); color: #241a00; }
+  .layout.dock-open .attn-btn.primary .filter-badge { background: #06281f; color: var(--accent); }
+}
   .filter-badge {
     display: inline-flex; align-items: center; justify-content: center;
     min-width: 16px; height: 16px; padding: 0 4px; margin-left: 2px;
