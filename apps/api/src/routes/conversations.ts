@@ -94,6 +94,7 @@ const bulkBody = z.object({
     'unstar',
     'snooze',
     'unsnooze',
+    'delete',
   ]),
   tag: z.string().trim().min(1).max(40).optional(),
   minutes: z.number().int().min(1).max(43_200).optional(), // snooze duration, ≤30d
@@ -281,6 +282,20 @@ export function conversationRoutes(db: Db) {
       : null;
 
     const ownedIds = rows.map((r) => r.conversations.id);
+    if (action === 'delete') {
+      // Same cascade as DELETE /:id — deps first, then the conversation.
+      await db.delete(messages).where(inArray(messages.conversationId, ownedIds));
+      await db.delete(alerts).where(inArray(alerts.conversationId, ownedIds));
+      await db.delete(suggestions).where(inArray(suggestions.conversationId, ownedIds));
+      await db.delete(slackThreads).where(inArray(slackThreads.conversationId, ownedIds));
+      await db.delete(channelBindings).where(inArray(channelBindings.conversationId, ownedIds));
+      await db
+        .update(usageEvents)
+        .set({ conversationId: null })
+        .where(inArray(usageEvents.conversationId, ownedIds));
+      await db.delete(conversations).where(inArray(conversations.id, ownedIds));
+      return c.json({ updated: ownedIds.length });
+    }
     if (set) {
       await db.update(conversations).set(set).where(inArray(conversations.id, ownedIds));
     } else {

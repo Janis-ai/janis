@@ -8,7 +8,7 @@ import { Avatar, displayName, Empty, Md, SearchInput, StateBadge, surfaceLabel, 
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
 import { Bot, Cog, Headset, ListFilter, Moon, Save, Star, User, X } from 'lucide-react';
-import { usePrompt } from '../components/Prompt';
+import { useConfirm, usePrompt } from '../components/Prompt';
 import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
 import { isEditableTarget } from '../lib/keys';
 import { usePageTitle } from '../lib/title';
@@ -315,6 +315,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   };
 
   const [promptEl, ask] = usePrompt();
+  const [confirmEl, confirm] = useConfirm();
   const [tagDlg, setTagDlg] = useState<{ tag: string } | null>(null);
 
   const saveView = async () => {
@@ -432,6 +433,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   return (
     <>
       {promptEl}
+      {confirmEl}
       {tagDlg && (
         <div className="modal-backdrop" onClick={() => setTagDlg(null)}>
           <div
@@ -678,6 +680,20 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           <button className="btn" disabled={busy} onClick={() => bulk('star')}>Star</button>
           <button className="btn" disabled={busy} onClick={() => bulk('assign_me')}>Assign to me</button>
           <button className="btn" disabled={busy} onClick={() => bulk('unassign')}>Unassign</button>
+          <button
+            className="btn danger"
+            disabled={busy}
+            onClick={async () => {
+              const ok = await confirm(
+                `Delete ${selected.size} conversation${selected.size === 1 ? '' : 's'} permanently? This can't be undone.`,
+                [{ key: 'delete', label: 'Delete', danger: true }],
+                true,
+              );
+              if (ok === 'delete') void bulk('delete');
+            }}
+          >
+            Delete
+          </button>
           <button
             className="btn"
             disabled={busy}
