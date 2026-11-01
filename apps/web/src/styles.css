@@ -1360,7 +1360,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-open .conv-main { min-height: 0; }
 .conv-open .transcript { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
-.conv-foot { flex-shrink: 0; padding: 10px 0 14px; }
+.conv-foot { flex-shrink: 0; padding: 10px 0 22px; }
 /* Stacked cards (alerts, suggestion) cap instead of squeezing the
    transcript out of the column — they scroll within themselves. */
 .conv-open .conv-main > .card { flex-shrink: 0; max-height: 34vh; overflow-y: auto; }
