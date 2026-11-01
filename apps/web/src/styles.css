@@ -1721,6 +1721,9 @@ details summary:hover { color: var(--text); }
 /* One row, one height — buttons, selects and inputs all 38px. */
 .filters .btn, .filters select, .filters .search-box { height: 38px; box-sizing: border-box; }
 .filters .search-box { padding-top: 0; padding-bottom: 0; }
+  /* On phones the funnel sits right of centre — open leftward from the
+     button's right edge so the sheet can never leave the viewport. */
+  .filters .menu-pop { left: auto; right: 0; }
   .attn-btn .filter-badge { background: var(--warn); color: #241a00; }
   .attn-btn.primary .filter-badge { background: #06281f; color: var(--accent); }
   /* Onboarding cards and the standalone select-all yield their rows. */
