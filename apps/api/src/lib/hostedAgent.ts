@@ -342,15 +342,29 @@ export function conversationContext(
   if (meta && typeof meta === 'object') {
     // janis_account marks the console context pack (workspaces, agents,
     // current page) — Janis-injected, not host-provided or self-reported.
-    // The agents inventory carries per-agent uuids + channel ids — the
-    // corpus console deep links verify against — so it can't be clipped at
-    // the self-reported-trait budget or every id past ~2 agents vanishes.
+    // The pack's ids (<agent-uuid> decorations, (kind:channel-uuid) groups,
+    // the page url's conv id) are a uuid-mesh the model transcribes badly —
+    // render names only. Real ids stay reachable through tool results:
+    // concierge tools return verbatim urls, and the visitor trait strings in
+    // read_conversation/lookup_contact keep their <uuid> form. Console links
+    // the model builds verify by DB row, not prompt-verbatim, so nothing
+    // linkable is lost.
     const janisCtx = meta.janis_account === 'yes';
     const valCap = janisCtx ? 6000 : 120;
+    const UUID_RE = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+    const hideIds = (v: string) =>
+      v
+        .replace(new RegExp(`\\s*<${UUID_RE}>`, 'gi'), '')
+        .replace(
+          new RegExp(`\\s*\\([a-z_]+:${UUID_RE}(?:\\s*,\\s*[a-z_]+:${UUID_RE})*\\)`, 'gi'),
+          '',
+        )
+        .replace(new RegExp(UUID_RE, 'gi'), '…')
+        .replace(/;\s*/g, ', ');
     const traitLines = Object.entries(meta)
       .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v) && String(v) !== '')
       .slice(0, 10)
-      .map(([k, v]) => `  - ${k}: ${String(v).slice(0, valCap)}`);
+      .map(([k, v]) => `  - ${k}: ${(janisCtx ? hideIds(String(v)) : String(v)).slice(0, valCap)}`);
     if (traitLines.length) {
       lines.push(
         janisCtx
@@ -987,7 +1001,7 @@ export function systemPrompt(
   } else {
     parts.push(
       (opts.operator
-        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When you link to a console page, link it (https://www.janis.ai/…) — never leave a destination as bare bold text; use a URL a tool returned verbatim, or build it from ids in your context: agents are listed as Name {agent-id} (kind:{channel-id}, …), and current_agent_id covers the selected agent. Agent pages live at /agents/{agent-id}/{section} — sections: behavior (?sub=instructions (covers greeting + quick replies too), components — sidebar label 'Behavior'), knowledge (?sub=sources, gaps — articles manage as a row inside Sources), channels (/{channel-id} for one channel), integrations ('Actions'), components, tests ('Test'), settings (?sub=general, csat, escalation, team) — plus /agents/{agent-id}/inbox (/{conv-id} for a thread), /contacts, /campaigns, /reports; workspace-wide: /conversations (/{conv-id}), /contacts (/{id}), /campaigns, /reports, /errors, /billing, /settings?section=workspace|me|csat|escalation|team, /docs, and setup steps at /agents/new/{agent-id}?step=teach|guide|abilities|try|deploy. Every {…} slot carries a real uuid from your context — substitute it, never emit the placeholder itself or a slug or a kind name in an id slot, and when the context names no specific agent never emit an agent-scoped URL at all (link to https://www.janis.ai/agents or describe where to click in words). The console is a single-page app but every route above is a real browser deep link — never claim deep links don't exist or that the address bar can't reach them, and emit the full https URL, not a relative path or a code span. When the operator asks for a link, give the deep link — do not reply with click-path instructions instead. Never point the operator at a Google search or external docs for console navigation — you are the product's help desk; if you truly cannot construct a URL, say so plainly rather than outsourcing the answer to a search engine. Pick tools by domain: questions about an agent's setup, knowledge, channels or settings are answered by inspect_agent — never by billing or catalogue tools; stripe_*/product/price lookups exist only for billing, plan and charge questions about the workspace's own subscription, and a 'show me the knowledge' ask is never a product list. Never call a tool just to have a widget or cards to show — widgets come only from tools whose data the question itself asked for." +
+        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When you link to a console page, link it (https://www.janis.ai/…) — never leave a destination as bare bold text; use a URL a tool returned verbatim, or build it from a real uuid — your context lists agents and workspaces by name only (ids hidden); resolve the id you need through a tool — select_agent/inspect_agent return the agent's id and urls, lookup_contact/read_conversation return the visitor's full trait strings, and current_agent names the selected agent. Agent pages live at /agents/{agent-id}/{section} — sections: behavior (?sub=instructions (covers greeting + quick replies too), components — sidebar label 'Behavior'), knowledge (?sub=sources, gaps — articles manage as a row inside Sources), channels (/{channel-id} for one channel), integrations ('Actions'), components, tests ('Test'), settings (?sub=general, csat, escalation, team) — plus /agents/{agent-id}/inbox (/{conv-id} for a thread), /contacts, /campaigns, /reports; workspace-wide: /conversations (/{conv-id}), /contacts (/{id}), /campaigns, /reports, /errors, /billing, /settings?section=workspace|me|csat|escalation|team, /docs, and setup steps at /agents/new/{agent-id}?step=teach|guide|abilities|try|deploy. Every {…} slot needs a real uuid — take it verbatim from a tool result, never emit the placeholder itself or a slug or a kind name in an id slot, and when the context names no specific agent never emit an agent-scoped URL at all (link to https://www.janis.ai/agents or describe where to click in words). The console is a single-page app but every route above is a real browser deep link — never claim deep links don't exist or that the address bar can't reach them, and emit the full https URL, not a relative path or a code span. When the operator asks for a link, give the deep link — do not reply with click-path instructions instead. Never point the operator at a Google search or external docs for console navigation — you are the product's help desk; if you truly cannot construct a URL, say so plainly rather than outsourcing the answer to a search engine. Pick tools by domain: questions about an agent's setup, knowledge, channels or settings are answered by inspect_agent — never by billing or catalogue tools; stripe_*/product/price lookups exist only for billing, plan and charge questions about the workspace's own subscription, and a 'show me the knowledge' ask is never a product list. Never call a tool just to have a widget or cards to show — widgets come only from tools whose data the question itself asked for." +
             slackSurfaceNote(conv)
         : '') +
         (handoffOff

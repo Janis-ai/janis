@@ -777,13 +777,20 @@ describe('lookup_contact + read_conversation builtins', () => {
       .insert(contactIdentities)
       .values({ contactId, channelId: chan.id, platformUserId: 'dana@acme.com' });
     // The thread's own profile is anonymous — the ONLY way to identify it is
-    // the contact link, which is the whole point of the feature.
+    // the contact link, which is the whole point of the feature. Its janis
+    // context traits still ride along for the visitor block.
     const [cv] = await db
       .insert(conversations)
       .values({
         agentId: agent2.id,
         externalId: 'anon:w1',
-        userProfile: {},
+        userProfile: {
+          metadata: {
+            janis_account: 'yes',
+            agents: 'Lara Concept Studio <d3d43e6b-cbe7-4206-92d6-45e8252ba4b1>',
+            workspaces: "Dana's workspace",
+          },
+        },
         contactId,
         lastMessageAt: new Date(),
         lastMessagePreview: 'refund status?',
@@ -811,14 +818,17 @@ describe('lookup_contact + read_conversation builtins', () => {
     expect(out.url).toContain(`/contacts/${contactId}`);
   });
 
-  it('lists matches when the search is ambiguous', async () => {
+  it('lists matches when the search is ambiguous — a result, not a failure', async () => {
     await db
       .insert(contacts)
       .values({ workspaceId: WS2, name: 'Dana Other', email: 'dana@other.com' });
     const out = JSON.parse(
       await lookup().run({ contact: 'dana', workspace: 'free' }, ctx(CONV2)),
     );
-    expect(out.error).toContain('multiple');
+    // {"error": …} marks the call failed and fires a Run-error alert — a
+    // disambiguation list is a successful lookup, so the shape is different.
+    expect(out.error).toBeUndefined();
+    expect(out.result).toBe('multiple_matches');
     expect(out.matches.length).toBe(2);
     expect(out.matches[0].url).toContain('/contacts/');
   });
@@ -830,7 +840,8 @@ describe('lookup_contact + read_conversation builtins', () => {
     const out = JSON.parse(
       await lookup().run({ contact: 'w1-only@x.com', workspace: 'free' }, ctx(CONV2)),
     );
-    expect(out.error).toContain('no contacts matching');
+    expect(out.result).toBe('not_found');
+    expect(out.hint).toContain('no contacts matching');
   });
 
   it('read_conversation finds the thread by contact and ties the record on', async () => {
@@ -863,6 +874,114 @@ describe('lookup_contact + read_conversation builtins', () => {
     );
     expect(out.conversation_id).toBe(cv.id);
     expect(out.contact).toBeNull();
+  });
+
+  it('exposes the visitor console context — traits answer "what are their agents"', async () => {
+    const out = JSON.parse(
+      await readConv().run({ conversation: contactConvId, workspace: 'free' }, ctx(CONV2)),
+    );
+    expect(out.visitor.identity_verified).toBe(false);
+    expect(out.visitor.traits.janis_account).toBe('yes');
+    expect(out.visitor.traits.agents).toContain('Lara Concept Studio');
+    // same context rides on the contact's conversation list
+    const lookupOut = JSON.parse(
+      await lookup().run({ contact: contactId, workspace: 'free' }, ctx(CONV2)),
+    );
+    const linked = lookupOut.conversations.find(
+      (v: { conversation_id: string }) => v.conversation_id === contactConvId,
+    );
+    expect(linked.visitor.traits.agents).toContain('Lara Concept Studio');
+    // …and the uuid stays — the prompt hides ids but tool results keep them.
+    expect(linked.visitor.traits.agents).toContain('d3d43e6b-cbe7-4206-92d6-45e8252ba4b1');
+  });
+
+  it('no-arg read_conversation reads the thread open on the operator\'s screen', async () => {
+    const [agent2] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.workspaceId, WS2))
+      .limit(1);
+    const [viewConv] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent2.id,
+        externalId: 'u:test:view',
+        userProfile: {
+          external_id: USER2,
+          email: 'a@x.com',
+          identity_verified: true,
+          metadata: { page: `/conversations/${contactConvId}?rail=ask` },
+        },
+      })
+      .returning();
+    const out = JSON.parse(await readConv().run({ workspace: 'free' }, ctx(viewConv.id)));
+    expect(out.conversation_id).toBe(contactConvId);
+    expect(out.contact.contact_id).toBe(contactId);
+  });
+
+  it('no-arg lookup_contact resolves the contact behind the viewed thread — or a /contacts page', async () => {
+    const [agent2] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.workspaceId, WS2))
+      .limit(1);
+    const [viewConv] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent2.id,
+        externalId: 'u:test:view2',
+        userProfile: {
+          external_id: USER2,
+          email: 'a@x.com',
+          identity_verified: true,
+          metadata: { page: `/conversations/${contactConvId}` },
+        },
+      })
+      .returning();
+    const out = JSON.parse(await lookup().run({ workspace: 'free' }, ctx(viewConv.id)));
+    expect(out.contact_id).toBe(contactId);
+    expect(out.name).toBe('Dana Person');
+
+    const [contactPageConv] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent2.id,
+        externalId: 'u:test:view3',
+        userProfile: {
+          external_id: USER2,
+          email: 'a@x.com',
+          identity_verified: true,
+          metadata: { page: `/contacts/${contactId}` },
+        },
+      })
+      .returning();
+    const out2 = JSON.parse(await lookup().run({ workspace: 'free' }, ctx(contactPageConv.id)));
+    expect(out2.contact_id).toBe(contactId);
+  });
+
+  it('no-arg with nothing in view tells the model to pass a target', async () => {
+    const [agent2] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.workspaceId, WS2))
+      .limit(1);
+    const [blankView] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent2.id,
+        externalId: 'u:test:view4',
+        userProfile: {
+          external_id: USER2,
+          email: 'a@x.com',
+          identity_verified: true,
+          metadata: { page: '/reports' },
+        },
+      })
+      .returning();
+    const out = JSON.parse(await readConv().run({ workspace: 'free' }, ctx(blankView.id)));
+    expect(out.error).toContain('no conversation in view');
+    const out2 = JSON.parse(await lookup().run({ workspace: 'free' }, ctx(blankView.id)));
+    expect(out2.error).toContain('no contact or conversation in view');
   });
 });
 

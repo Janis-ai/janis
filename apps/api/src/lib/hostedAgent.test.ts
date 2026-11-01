@@ -2741,10 +2741,10 @@ describe('conversationContext traits', () => {
       },
     } as never);
     expect(op).toContain('Janis console — verified');
-    // agents past the 120-char clip point are visible — their uuids are the
-    // corpus the link guard verifies console deep links against
-    expect(op).toContain('Agent11');
-    expect(op).toContain(uuid(11));
+    // agents past the 120-char clip point are visible — but as NAMES only:
+    // the uuid-mesh renders in tool results, not the prompt context block.
+    expect(op).toContain('Agent10, Agent11');
+    expect(op).not.toContain(uuid(11));
 
     const visitor = conversationContext({
       externalId: 'webchat:c1',

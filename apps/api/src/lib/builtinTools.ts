@@ -384,6 +384,61 @@ async function findVisitorConversation(
   return { conv: hits[0] };
 }
 
+/** The console page the operator is on right now — the concierge context
+ *  pack stamps userProfile.metadata.page with the URL they're viewing
+ *  ('/conversations/<uuid>', '/agents/<id>/inbox/<uuid>', '/contacts/<uuid>').
+ *  "This conversation" / "this user here" resolve through it instead of the
+ *  model transcribing a uuid from the prompt — it got it wrong twice in prod. */
+async function currentView(
+  ctx: BuiltinCtx,
+): Promise<{ conversationId?: string; contactId?: string }> {
+  const [conv] = await ctx.db
+    .select({ userProfile: conversations.userProfile })
+    .from(conversations)
+    .where(eq(conversations.id, ctx.convId))
+    .limit(1);
+  const meta = (((conv?.userProfile ?? {}) as UserProfile).metadata ?? {}) as Record<
+    string,
+    unknown
+  >;
+  const page = String(meta.page ?? '');
+  return {
+    conversationId:
+      page.match(/\/conversations\/([0-9a-f-]{36})\b/i)?.[1] ??
+      page.match(/\/inbox\/([0-9a-f-]{36})\b/i)?.[1],
+    contactId: page.match(/\/contacts\/([0-9a-f-]{36})\b/i)?.[1],
+  };
+}
+
+/** The visitor-context block a conversation's userProfile carries — for a
+ *  signed-in Janis user it's their console context (their agents, their
+ *  workspaces, the page they're on); for a customer it's whatever the host
+ *  site asserted. This is how "what are their agents" gets answered. */
+function visitorContext(
+  profile: unknown,
+  externalId: string,
+): Record<string, unknown> {
+  const p = (profile ?? {}) as UserProfile;
+  const meta = (p.metadata ?? {}) as Record<string, unknown>;
+  // Janis context traits carry their <uuid> decorations verbatim — the
+  // prompt renders names only, so this is where the concierge actually gets
+  // the ids when it needs to mint a link or pin a call to one agent.
+  const valCap = meta.janis_account === 'yes' ? 6000 : 300;
+  const traits = Object.fromEntries(
+    Object.entries(meta)
+      .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v) && String(v) !== '')
+      .map(([k, v]) => [k, String(v).slice(0, valCap)]),
+  );
+  return {
+    external_id: externalId,
+    name: p.name ?? null,
+    email: p.email ?? null,
+    identity_verified: p.identity_verified === true,
+    ...(p.identity_verified && p.external_id ? { janis_user_id: p.external_id } : {}),
+    ...(Object.keys(traits).length ? { traits } : {}),
+  };
+}
+
 /** The contact block shared by lookup_contact and read_conversation — the
  *  person's record plus every channel identity they're reachable on, so an
  *  answer can tie a conversation back to the human behind it. */
@@ -426,6 +481,8 @@ async function contactConversations(db: Db, contactId: string) {
       id: conversations.id,
       state: conversations.state,
       agentName: agents.name,
+      externalId: conversations.externalId,
+      userProfile: conversations.userProfile,
       lastMessageAt: conversations.lastMessageAt,
       lastMessagePreview: conversations.lastMessagePreview,
     })
@@ -440,6 +497,7 @@ async function contactConversations(db: Db, contactId: string) {
     state: v.state,
     last_message_at: v.lastMessageAt,
     last_message_preview: v.lastMessagePreview,
+    visitor: visitorContext(v.userProfile, v.externalId),
     url: `${env.webOrigin}/conversations/${v.id}`,
   }));
 }
@@ -1833,9 +1891,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'lookup_contact',
     description:
-      "Answer 'who is X / do we have a contact for X / what's this customer's info' — find a person in the visitor's workspace Contacts by name, email, phone, tag, or contact UUID, and return their full record: names and addresses, tags, notes, traits, external CRM ids, every channel identity they're reachable on, and their linked conversations across agents (each with a console link). Use it whenever a question is about a specific customer or person; to read the actual messages in one of the linked threads, call read_conversation. Read-only — any member.",
+      "Answer 'who is X / do we have a contact for X / what's this customer's info / tell me about this user here' — find a person in the visitor's workspace Contacts by name, email, phone, tag, or contact UUID. Omit `contact` to look up the person on the page the operator is currently viewing (a Contacts page or the conversation open in their inbox). Returns their full record: names and addresses, tags, notes, traits, external CRM ids, every channel identity they're reachable on, and their linked conversations across agents — each with who the visitor is (signed-in Janis users carry their console context: their agents, workspaces, and the page they're on) plus a console link. Use it whenever a question is about a specific customer or person; to read the actual messages in one of the linked threads, call read_conversation. Read-only — any member.",
     params: {
-      contact: 'name, email, phone, tag, or contact UUID (required)',
+      contact:
+        'name, email, phone, tag, or contact UUID — omit to use the contact behind the page the operator is viewing',
       workspace: 'workspace name — only needed when ambiguous',
     },
     available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
@@ -1848,8 +1907,40 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const resolved = await visitorWorkspace(ctx, user, args.workspace);
       if ('error' in resolved) return JSON.stringify(resolved);
       const ws = resolved.ws;
-      const q = (args.contact ?? '').trim();
-      if (!q) return JSON.stringify({ error: 'pass a name, email, phone, tag, or contact id to search for' });
+      let q = (args.contact ?? '').trim();
+      if (!q) {
+        const view = await currentView(ctx);
+        if (view.contactId) {
+          q = view.contactId;
+        } else if (view.conversationId) {
+          // "this user here" — the contact behind the thread they're viewing.
+          const [vc] = await ctx.db
+            .select({ contactId: conversations.contactId, wsId: agents.workspaceId })
+            .from(conversations)
+            .innerJoin(agents, eq(conversations.agentId, agents.id))
+            .where(eq(conversations.id, view.conversationId))
+            .limit(1);
+          if (!vc) {
+            return JSON.stringify({ error: 'the conversation in view no longer exists — pass a name, email, phone, or contact id' });
+          }
+          if (vc.wsId !== ws.id) {
+            return JSON.stringify({
+              error: `the conversation in view isn't in ${ws.name} — pass the workspace name it's in`,
+            });
+          }
+          if (!vc.contactId) {
+            return JSON.stringify({
+              result: 'not_found',
+              hint: 'the conversation in view has no linked contact yet — pass a name or email to search instead',
+            });
+          }
+          q = vc.contactId;
+        } else {
+          return JSON.stringify({
+            error: 'no contact or conversation in view — pass a name, email, phone, tag, or contact id to search for',
+          });
+        }
+      }
 
       if (UUID.test(q)) {
         const [contact] = await ctx.db
@@ -1857,7 +1948,12 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           .from(contacts)
           .where(and(eq(contacts.id, q), eq(contacts.workspaceId, ws.id)))
           .limit(1);
-        if (!contact) return JSON.stringify({ error: `no contact ${q} in ${ws.name}` });
+        if (!contact) {
+          return JSON.stringify({
+            result: 'not_found',
+            hint: `no contact ${q} in ${ws.name} — if it lives in another workspace, pass the workspace name`,
+          });
+        }
         return JSON.stringify({
           ...(await contactSummary(ctx.db, contact)),
           conversations: await contactConversations(ctx.db, contact.id),
@@ -1885,13 +1981,15 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         .limit(9);
       if (!hits.length) {
         return JSON.stringify({
-          error: `no contacts matching "${q}" in ${ws.name}`,
+          result: 'not_found',
+          hint: `no contacts matching "${q}" in ${ws.name}`,
           contacts_url: `${env.webOrigin}/contacts`,
         });
       }
       if (hits.length > 1) {
         return JSON.stringify({
-          error: 'multiple contacts match — be more specific or pass the contact id',
+          result: 'multiple_matches',
+          hint: 'multiple contacts match — be more specific or pass the contact id',
           matches: hits.slice(0, 8).map((h) => ({
             contact_id: h.id,
             name: h.name,
@@ -1912,9 +2010,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'read_conversation',
     description:
-      "Read what happened in a conversation — 'what did Sam ask about', 'show me the last chat with ann@acme.com', 'what was decided in that thread'. Resolves one conversation in the visitor's workspace by UUID, customer name/email/phone, or linked contact, and returns its state, agent, channels, assignee, intent/sentiment, the linked contact record (who this person is across channels), and the latest transcript. To diagnose a stuck or missing reply use debug_conversation; to save what a human resolved as knowledge use teach_from_conversation. Read-only — any member.",
+      "Read what happened in a conversation — 'what did Sam ask about', 'show me the last chat with ann@acme.com', 'what was decided in that thread', 'look at the conversation I'm viewing'. Omit `conversation` to read the thread open on the operator's screen right now. Otherwise resolves one conversation in the visitor's workspace by UUID, customer name/email/phone, or linked contact, and returns its state, agent, channels, assignee, intent/sentiment, who the visitor is (a signed-in Janis user carries their console context: their agents, workspaces, current page), the linked contact record (who this person is across channels), and the latest transcript. To diagnose a stuck or missing reply use debug_conversation; to save what a human resolved as knowledge use teach_from_conversation. Read-only — any member.",
     params: {
-      conversation: 'conversation UUID or customer name/email/phone (required)',
+      conversation:
+        'conversation UUID or customer name/email/phone — omit to read the thread the operator is viewing',
       workspace: 'workspace name — only needed when ambiguous',
       limit: 'max transcript messages to return, default 20 (max 50)',
     },
@@ -1928,10 +2027,27 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const resolved = await visitorWorkspace(ctx, user, args.workspace);
       if ('error' in resolved) return JSON.stringify(resolved);
       const ws = resolved.ws;
-      const q = (args.conversation ?? '').trim();
-      if (!q) return JSON.stringify({ error: 'pass a conversation id or a name/email/phone to search for' });
+      let q = (args.conversation ?? '').trim();
+      if (!q) {
+        const view = await currentView(ctx);
+        if (!view.conversationId) {
+          return JSON.stringify({
+            error: 'no conversation in view — pass a conversation id or a customer name/email/phone',
+          });
+        }
+        q = view.conversationId;
+      }
       const found = await findVisitorConversation(ctx.db, ws, q);
-      if ('error' in found) return JSON.stringify(found);
+      if ('error' in found) {
+        // A miss is a search outcome, not a tool failure — keep the {"error"}
+        // shape (marks the call failed + fires a Run-error alert) for real
+        // breakage only.
+        return JSON.stringify(
+          found.matches?.length
+            ? { result: 'multiple_matches', hint: found.error, matches: found.matches }
+            : { result: 'not_found', hint: found.error },
+        );
+      }
       const conv = found.conv;
 
       const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 50);
@@ -1992,6 +2108,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           (conv.userProfile as { name?: string; email?: string })?.name ??
           (conv.userProfile as { email?: string })?.email ??
           conv.externalId,
+        visitor: visitorContext(conv.userProfile, conv.externalId),
         state: conv.state,
         agent: agent?.name,
         channels: bindings.map((b) => `${b.kind} (${b.name})`),

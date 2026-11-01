@@ -106,6 +106,26 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   Unanchored alerts render a synthetic warn box sorted in at created_at.
 - Dismiss unwraps the box; the blurb stays (and the API's alert_status
   note records who resolved it). ALERT_LABELS exported from Layout.tsx.
+## 2026-11-01b — Copilot full context: view-resolution + visitor traits + clean context block
+- lookup_contact/read_conversation args now OPTIONAL: omitted, they resolve
+  the operator's current page (`userProfile.metadata.page` — /conversations/
+  <id>, /agents/<id>/inbox/<id>, /contacts/<id> parsed by currentView()).
+  "this conversation / this user here" works instead of the model
+  transcribing a uuid — it guessed wrong twice in prod (conv 79391949 was
+  in the page trait the whole time).
+- visitorContext(): both tools return the conv's visitor block — name/email,
+  identity_verified + janis_user_id, and the full trait bag (signed-in Janis
+  users carry their console context: agents, workspaces, page). "What are
+  Loan's agents" answers from conversations[].visitor.traits.agents.
+- Disambiguation/not-found are RESULTS, not failures: {"result":
+  "multiple_matches"|"not_found", hint, matches} — the {"error" shape marks
+  outcome 'failed' and fires a Run-error alert for a perfectly good search.
+- conversationContext() sanitizes the janis console pack for display:
+  <uuid> decorations + (kind:uuid) groups stripped, bare uuids → '…',
+  agent lists render comma-separated names. Ids are NOT lost — tool results
+  carry them verbatim (traits cap 6000 for janis packs), and the link guard
+  verifies console urls by DB row not prompt-verbatim. Copilot preamble
+  updated: "resolve the id you need through a tool".
 ## 2026-11-01 — Copilot can answer "who is this customer" — contact + transcript tools
 - Two new concierge builtins (builtinTools.ts): `lookup_contact` finds a
   person in the visitor's workspace by name/email/phone/tag/id and returns
