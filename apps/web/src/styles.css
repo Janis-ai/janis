@@ -1470,6 +1470,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .composer-bar .btn.icon { padding: 6px 8px; }
   .composer-bar .btn { font-size: 13px; }
   .composer-bar { gap: 6px; }
+  /* Icon-only here was ambiguous — a ⏸ could read as state or action
+     and they mean opposites. The word is the disambiguator; the icon goes. */
+  .composer-bar .takeover-toggle svg { display: none; }
 }
 @container conv (max-width: 780px) {
   .conv-actions .btn, .conv-ops.btn { padding: 7px 10px; }

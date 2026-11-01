@@ -247,7 +247,7 @@ export default function Composer({
           <span className="grow" />
           {(onResume || onTakeover) && (
             <button
-              className="btn"
+              className="btn takeover-toggle"
               type="button"
               onClick={onResume ?? onTakeover}
               title={onResume ? 'Resume — hand the thread back to the agent' : 'Pause — take over and reply yourself'}
