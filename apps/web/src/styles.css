@@ -510,8 +510,6 @@ button, input, select, textarea { font: inherit; }
    details rail under the transcript instead of crushing it — same move
    as the ≤900px layout. */
 @media (min-width: 721px) and (max-width: 1500px) {
-  .layout.dock-open .conv-layout { flex-direction: column; }
-  .layout.dock-open .conv-side { width: auto; }
 }
 .main { transition: margin-right .15s ease; }
 @media (max-width: 720px) {
@@ -1326,7 +1324,32 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .layout:has(.inbox-head) .main { display: flex; flex-direction: column; overflow: hidden; }
 .conv-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -24px; padding: 0 24px; }
 
-.conv-layout { display: flex; gap: 16px; height: 100%; min-height: 100%; }
+.conv-layout { display: flex; gap: 16px; height: 100%; min-height: 100%; container-type: inline-size; container-name: convl; }
+/* Details rail: beside the transcript when the column is wide enough,
+   otherwise the ⓘ slide-over — never stacked below the footer. */
+.info-btn { display: none; }
+.conv-side-scrim { display: none; }
+@container convl (max-width: 680px) {
+  .conv-side {
+    position: fixed; top: 0; right: 0; bottom: 0; z-index: 75;
+    width: min(88vw, 340px);
+    background: var(--bg); border-left: 1px solid var(--border);
+    transform: translateX(105%);
+    transition: transform .18s ease;
+    overflow-y: auto;
+  }
+  .conv-side.open {
+    transform: none;
+    box-shadow: -12px 0 32px rgba(0,0,0,.4);
+  }
+  .conv-side-scrim {
+    display: block;
+    position: fixed; inset: 0; z-index: 72; border: 0; padding: 0;
+    background: rgba(8,10,14,.45); cursor: default;
+  }
+  .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
+  .info-btn { display: inline-flex; }
+}
 .conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; container-name: conv; }
 /* Footer anchoring needs a definite-height chain: .main becomes a column
    flex so conv-layout's used height is definite, letting conv-main's
@@ -1401,8 +1424,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .layout.dock-open .transcript { max-height: none; min-height: 220px; }
 }
 @media (max-width: 900px) {
-  .conv-layout { flex-direction: column; height: auto; }
-  .conv-side { width: 100%; }
+  .conv-layout { height: auto; }
   .transcript { max-height: none; min-height: 220px; }
 }
 
@@ -1662,6 +1684,8 @@ details summary:hover { color: var(--text); }
   /* Search and the utility icons share one row; utilities go icon-only,
      snooze shows just the moon (accent when snoozed). */
   .conv-actions .conv-search { flex: 1 1 0; min-width: 0; }
+  /* The mobile head already carries ⓘ — the actions-row copy stays hidden. */
+  .conv-actions .info-btn { display: none; }
   .conv-actions .btn { padding: 7px 10px; }
   .conv-actions .btn-label, .conv-ops .btn-label, .filters .btn-label { display: none; }
   .filters button.btn { padding: 7px 10px; }

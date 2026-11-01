@@ -908,6 +908,16 @@ export default function ConversationPage() {
           </button>
         </div>
         <div className="row conv-actions">
+          {/* Details drawer trigger — only visible when the rail can't fit
+              beside the transcript (container query reveals it). */}
+          <button
+            className="btn info-btn"
+            title="Conversation details"
+            aria-label="Conversation details"
+            onClick={() => setSideOpen(true)}
+          >
+            <Info size={15} />
+          </button>
           <input
             className="conv-search"
             type="search"
