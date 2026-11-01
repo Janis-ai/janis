@@ -1417,7 +1417,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-layout { display: flex; gap: 16px; height: 100%; min-height: 100%; container-type: inline-size; container-name: convl; position: relative; overflow-x: hidden; overflow-x: clip; }
 /* Details rail: beside the transcript when the column is wide enough,
    otherwise the ⓘ slide-over — never stacked below the footer. */
-.info-btn { display: none; }
+.info-btn, .conv-actions .copilot-btn { display: none; }
 .conv-side-scrim { display: none; }
 @container convl (max-width: 680px) {
   .conv-side {
@@ -1442,7 +1442,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   }
   .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; order: -2; }
   .conv-side-status, .conv-side-assign { order: -1; }
-  .info-btn { display: inline-flex; }
+  .info-btn, .conv-actions .copilot-btn { display: inline-flex; }
 }
 .conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; container-name: conv; }
 /* Anchored conversation: .main never scrolls — the transcript is the
@@ -1492,6 +1492,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   /* Footer anchors to the viewport bottom whenever the column is narrow —
      opaque, and bled past .main's padding so nothing shows beneath it. */
 }
+.conv-actions .copilot-btn, .cmh-copilot { color: var(--copilot, #7c6cf0); }
 .conv-side { width: 280px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden; overflow-wrap: break-word; padding-top: 14px; }
 .card.suggestion { border-color: var(--accent); }
 /* The Ask Janis rail claims ~340px — on the conversation screen at mid widths
@@ -1538,7 +1539,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .layout.dock-open .conv-side.open { transform: none; box-shadow: -12px 0 32px rgba(0,0,0,.4); }
   .layout.dock-open .conv-side-scrim { display: block; position: absolute; inset: 0; z-index: 72; border: 0; padding: 0; background: rgba(8,10,14,.45); cursor: default; }
   .layout.dock-open .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
-  .layout.dock-open .conv-actions .info-btn { display: inline-flex; }
+  .layout.dock-open .conv-actions .info-btn, .layout.dock-open .conv-actions .copilot-btn { display: inline-flex; }
   /* stacked mode: keep the transcript internally scrollable so the composer
      stays adjacent instead of dropping below a page-length of messages */
   /* No inner cap: .main scrolls naturally at ≤900 — a capped transcript
@@ -1834,8 +1835,9 @@ details summary:hover { color: var(--text); }
   /* iOS auto-zooms on inputs under 16px — keep text fields at 16 so focus
      never triggers a page zoom. */
   .conv-search, .composer-inner textarea { font-size: 16px; }
-  /* The mobile head already carries ⓘ — the actions-row copy stays hidden. */
-  .conv-actions .info-btn { display: none; }
+  /* The mobile head already carries ⓘ and ✦ — the actions-row copies
+     stay hidden. Wins over the container-query reveal at ≤680px. */
+  .conv-actions .btn.info-btn, .conv-actions .btn.copilot-btn { display: none !important; }
   .conv-actions .btn { padding: 7px 10px; }
   .conv-actions .btn-label, .conv-ops .btn-label, .filters .btn-label { display: none; }
   .filters button.btn { padding: 7px 10px; }

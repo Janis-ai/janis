@@ -18,7 +18,7 @@ import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { Bot, Brain, ChevronLeft, FlaskConical, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
+import { Bot, Brain, ChevronLeft, FlaskConical, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -949,6 +949,14 @@ export default function ConversationPage() {
           </div>
           <span className="grow" />
           <button
+            className="cmh-info cmh-copilot"
+            aria-label="Ask Janis"
+            title="Ask Janis"
+            onClick={() => window.dispatchEvent(new CustomEvent('janis:open-copilot'))}
+          >
+            <Sparkles size={18} />
+          </button>
+          <button
             className="cmh-info"
             aria-label="Conversation details"
             title="Details — status, assignee, intent, tags"
@@ -967,6 +975,16 @@ export default function ConversationPage() {
             onClick={() => setSideOpen(true)}
           >
             <Info size={15} />
+          </button>
+          {/* Copilot trigger — the dock strip is hidden at these widths, so
+              the button rides with ⓘ when the rail collapses. */}
+          <button
+            className="btn copilot-btn"
+            title="Ask Janis"
+            aria-label="Ask Janis"
+            onClick={() => window.dispatchEvent(new CustomEvent('janis:open-copilot'))}
+          >
+            <Sparkles size={15} />
           </button>
           <SearchInput
             className="conv-search"

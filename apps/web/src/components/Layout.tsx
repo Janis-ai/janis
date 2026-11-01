@@ -322,6 +322,13 @@ export default function Layout() {
   // Layout owns the strip/panel chrome; a page (the builder) can portal a
   // fully-wired test panel into the Test slot, else a plain chat renders.
   const [railOpen, setRailOpen] = useState(false);
+  // Pages whose own chrome hides the dock strip (conversation page at
+  // narrow widths) ask for the copilot through a window event.
+  useEffect(() => {
+    const open = () => { setRailTab('ask'); setRailOpen(true); };
+    window.addEventListener('janis:open-copilot', open);
+    return () => window.removeEventListener('janis:open-copilot', open);
+  }, []);
   // Mobile (≤720px): the sidebar leaves the flow and becomes an off-canvas
   // drawer — the top bar's ☰ opens it, scrim/Esc/nav-click/route change close.
   const [navOpen, setNavOpen] = useState(false);
