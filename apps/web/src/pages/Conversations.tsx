@@ -502,9 +502,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       )}
       {/* Pinned under the mobile-bar on phones — the list scrolls beneath. */}
       <div className="inbox-head">
-      <h1 className="page-title">
-        {scopeAgent ? `${agents?.agents.find((a) => a.id === scopeAgent)?.name ?? 'Agent'} inbox` : 'Inbox'}
-      </h1>
       {/* Tour cards exist only as the empty-state — a working inbox has
           no room for them, and the re-open stub is gone entirely. */}
       {!convsPending && !searching && (convList?.length ?? 0) === 0 && (
