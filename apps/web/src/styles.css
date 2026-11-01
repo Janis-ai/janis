@@ -1929,10 +1929,9 @@ details summary:hover { color: var(--text); }
   .attn-btn.primary .filter-badge { background: #06281f; color: var(--accent); }
 }
 @media (min-width: 721px) and (max-width: 1500px) {
-  .layout.dock-open .conv-actions .btn-label,
-  .layout.dock-open .conv-ops .btn-label,
-  .layout.dock-open .composer-bar .btn-label,
-  .layout.dock-open .filters .btn-label { display: none; }
+  /* Labels stay whenever the conv column fits them — @container conv
+     (max-width: 780px) is the real narrow-column gate, so a dock-open
+     viewport doesn't strip words the column still has room for. */
   .layout.dock-open .conv-actions .btn, .layout.dock-open .conv-ops.btn { padding: 7px 10px; }
   .layout.dock-open .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
   .layout.dock-open .conv-ops { flex-wrap: wrap; }
