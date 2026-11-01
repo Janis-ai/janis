@@ -1353,7 +1353,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 }
 .docs-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .error { color: var(--danger); font-size: 13px; margin-top: 8px; }
-.filters { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; position: relative; }
+.filters { display: flex; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; position: relative; }
 /* Popover anchors under the funnel button (the wrap), capped to the
    viewport so narrow widths can't push it off either edge. */
 .filters .src-menu-wrap { position: relative; }
