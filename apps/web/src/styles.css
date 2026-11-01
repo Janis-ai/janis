@@ -1747,9 +1747,13 @@ details summary:hover { color: var(--text); }
   .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
   /* Phone padding for the static foot block. */
   .conv-foot {
-    margin: 0 -14px; padding: 8px 14px calc(18px + env(safe-area-inset-bottom));
+    margin: 0 -14px; padding: 6px 14px calc(10px + env(safe-area-inset-bottom));
     background: var(--bg);
   }
+  /* Dead air trimmed — the chrome hugs the content, not the padding. */
+  .conv-actions { margin-top: 6px; }
+  .transcript { margin-top: 8px; }
+  .composer { margin-top: 6px; }
   /* Search and the utility icons share one row; utilities go icon-only,
      snooze shows just the moon (accent when snoozed). */
   .conv-actions .conv-search { flex: 1 1 0; min-width: 0; }
