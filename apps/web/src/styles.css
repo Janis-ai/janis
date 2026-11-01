@@ -1305,6 +1305,15 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .docs-table td { padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .error { color: var(--danger); font-size: 13px; margin-top: 8px; }
 .filters { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+/* Inbox list pages: the title+filters bar pins to the top of .main while
+   the conversation list scrolls beneath it — -24px compensates .main's
+   top padding (same trick as .agent-head); the ≤720 block re-tunes the
+   offset to sit under the mobile-bar. */
+.inbox-head {
+  position: sticky; top: -24px; z-index: 25;
+  margin: 0 -24px; padding: 0 24px 8px;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+}
 
 .conv-layout { display: flex; gap: 16px; height: 100%; }
 .conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -1578,13 +1587,8 @@ details summary:hover { color: var(--text); }
      (the ≤900 rule caps it at 55vh) so the whole thread rides the page
      scroll; nothing scrolls within itself. */
   .conv-open .transcript { max-height: none; }
-  /* Inbox list pages: the title+filters bar pins under the mobile-bar
-     while the conversation list scrolls beneath it. */
-  .inbox-head {
-    position: sticky; top: 49px; z-index: 25;
-    margin: 0 -14px; padding: 0 14px 8px;
-    background: var(--bg); border-bottom: 1px solid var(--border);
-  }
+  /* Inbox head stays pinned under the mobile-bar instead of .main's top. */
+  .inbox-head { top: 49px; margin: 0 -14px; padding: 0 14px 8px; }
   /* Details slide-over — the side column leaves the flow and becomes a
      right drawer behind the header's ⓘ. */
   .conv-side {
