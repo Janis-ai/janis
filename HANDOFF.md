@@ -93,6 +93,27 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02 — Details drawer actually hides; conv column clips the rail
+- `.conv-layout` gained `overflow-x: clip` (hidden fallback): the closed
+  details drawer is `position:absolute; right:0; translateX(105%)` inside the
+  column — without clipping it still PAINTED over the Copilot dock, which is
+  what "details view can't be seen in full" was. Now closed = truly
+  invisible; the ⓘ button is the only way in. Drawer stays scoped to the
+  conversation column (never covers the dock), scrim dismisses. Same clip
+  covers the phone media drawer and the convl≤680 container-query drawer.
+- Preceded in the same push series: dock-open ≤1400 makes the rail the ⓘ
+  drawer (never stacked under the transcript), the drawer anchors to
+  `.conv-layout` not the viewport, `.info-btn` hides whenever the rail is in
+  flow (was losing specificity to `.conv-actions button.btn`), snooze-moon
+  icon fixed (base `display:none` sat AFTER the container query — container
+  queries add zero specificity, so later-same-specificity wins; base rules
+  for icon states must be declared BEFORE the query overrides).
+- Saved views folded into the filter sheet; funnel badge counts selected
+  filters; attention preset = needs_human+human OR has-open-alert (matches
+  the orange dot); negative_sentiment SIGNALS option; tag search;
+  handoff offers auto-dismiss on non-accept replies + a sla_minutes-aged
+  sweeper backstop; bulk bar = count/close row + 5×2 action grid + sticky
+  "Select all loaded"; bulk delete added (same cascade as single delete).
 ## 2026-10-31 — Landing wave 2 + video loop + widget double-mount fix
 - DemoStrip is scenario-switchable (Shopify/Stripe/Zendesk/Cal.com/HubSpot
   chips swap the played beat); hero + feature groups now carry REAL console
