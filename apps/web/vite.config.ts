@@ -33,6 +33,8 @@ export default defineConfig({
   ],
   server: {
     host: true, // bind 0.0.0.0 so phones on the LAN can reach the dev server
+    // tunnels for phone/off-LAN testing — Vite 6 host-checks the Host header
+    allowedHosts: ['.ngrok-free.app', '.ngrok.app', '.ngrok.io', '.trycloudflare.com', '.loca.lt'],
     watch: {
       // This repo sits in an iCloud-synced dir — fs events are unreliable, so
       // poll instead of trusting native watchers (stale module cache).
