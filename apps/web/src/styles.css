@@ -1380,7 +1380,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .layout:has(.inbox-head) .main { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
 .conv-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -24px; padding: 0 24px; }
 
-.conv-layout { display: flex; gap: 16px; height: 100%; min-height: 100%; container-type: inline-size; container-name: convl; position: relative; }
+.conv-layout { display: flex; gap: 16px; height: 100%; min-height: 100%; container-type: inline-size; container-name: convl; position: relative; overflow-x: hidden; overflow-x: clip; }
 /* Details rail: beside the transcript when the column is wide enough,
    otherwise the ⓘ slide-over — never stacked below the footer. */
 .info-btn { display: none; }
