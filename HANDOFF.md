@@ -93,6 +93,35 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-01e — Composer consolidation: always-up box, Pause ⇄ Resume toggle, send-as popover
+- The ops row (Take over / Reply as agent / Internal note / Teach / Archive /
+  Delete) is gone. The composer always renders for non-archived threads —
+  mode pick lives in its reply-as dropdown, Archive/Unarchive duplicates the
+  Status dropdown, and Delete moved to a card at the bottom of the details
+  rail. Archived threads show a muted "Archived" label only.
+- The toggle next to Send flips on `state === 'human'`: "Pause" (takeover —
+  pauses the agent immediately, pre-typing) ⇄ "Resume". Words stay visible
+  at every width (.btn-label.always beats the hide rules by specificity);
+  under conv≤560 the ICON drops so the word alone keeps it unambiguous —
+  icon-only ⏸ reads as state OR action, which are opposites.
+- API: humanReply no longer 409s "take over the conversation before
+  replying" — a human send IS an implicit takeover (takeover.ts runs the
+  same path: state→human, assignee, Meta thread control, transcript note).
+- Send-as picker: the invisible native <select> let the OS draw its menu
+  anywhere (mid-transcript on phones). Now a ModeIcon button + a custom
+  .emoji-pop-style popover (.sendas-pop, 240px) anchored above the
+  composer; Esc/outside-click close with the other pops. Labels are
+  verb-first and match the placeholders ("Reply as yourself", "Leave an
+  internal note", …) and placeholders now say what each mode does.
+- Ops-button labels: btn-label hiding moved from conv≤780 to conv≤560 —
+  780 was stripping words at exactly the widths dock-open leaves the
+  column. The viewport-proxy `.layout.dock-open` media rule that did the
+  same is gone; the conv container query is the real gate.
+- Why-this-reply inspector: the 20 knowledge snippets used to dump full
+  chunk bodies — now collapsed behind <details>, counts/tools/model
+  up front. (True per-chunk attribution isn't introspectable; the honest
+  view is "available context" + actual tool calls.)
+- All on janis-api-01323-fgj @ 100%.
 ## 2026-11-01d — Details card leads the rail again; controls lead only in drawers
 - d1e2c33 had moved Status/Assign above Details for phone triage but it
   reordered the desktop rail too. ConversationPage DOM is now Details →
