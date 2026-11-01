@@ -1415,6 +1415,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
     transform: translateX(105%);
     transition: transform .18s ease;
     overflow-y: auto;
+    /* Drawer = triage: the two control cards jump above the Details card
+       that leads the desktop rail. */
+    display: flex; flex-direction: column;
   }
   .conv-side.open {
     transform: none;
@@ -1425,7 +1428,8 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
     position: absolute; inset: 0; z-index: 72; border: 0; padding: 0;
     background: rgba(8,10,14,.45); cursor: default;
   }
-  .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
+  .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; order: -2; }
+  .conv-side-status, .conv-side-assign { order: -1; }
   .info-btn { display: inline-flex; }
 }
 .conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; container-name: conv; }
@@ -1780,6 +1784,7 @@ details summary:hover { color: var(--text); }
     transform: translateX(105%);
     transition: transform .18s ease;
     overflow-y: auto;
+    display: flex; flex-direction: column;
   }
   .conv-side.open {
     transform: none;
@@ -1789,7 +1794,9 @@ details summary:hover { color: var(--text); }
     position: fixed; inset: 0; z-index: 72; border: 0; padding: 0;
     background: rgba(8,10,14,.45); cursor: default;
   }
-  .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
+  .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; order: -2; }
+  /* Same drawer-triage order as the narrow-column slide-over. */
+  .conv-side-status, .conv-side-assign { order: -1; }
   /* Phone padding for the static foot block. */
   .conv-foot {
     margin: 0 -14px; padding: 6px 14px calc(10px + env(safe-area-inset-bottom));
