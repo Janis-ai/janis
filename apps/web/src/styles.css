@@ -1556,6 +1556,13 @@ details summary:hover { color: var(--text); }
     color: var(--muted); cursor: pointer;
   }
   .cmh-info:hover { background: var(--panel-2); color: var(--text); }
+  /* The state badge doubles as the details entry — a bare button so the
+     chip keeps its look inside the sub-line. */
+  .cmh-state {
+    display: inline-flex; align-items: center;
+    background: none; border: 0; padding: 0; margin: 0;
+    font: inherit; cursor: pointer;
+  }
   .cmh-id { min-width: 0; }
   .cmh-name {
     font-weight: 600; font-size: 15px;

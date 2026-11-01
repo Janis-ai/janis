@@ -887,7 +887,14 @@ export default function ConversationPage() {
             <div className="cmh-name">{name}</div>
             <div className="cmh-sub">
               {surfaceLabel(p)}{p.channel_name ? ` · ${p.channel_name}` : ''}{' · '}
-              <StateBadge state={c.state} />
+              <button
+                className="cmh-state"
+                aria-label="Conversation status — open details"
+                title="Status — open details"
+                onClick={() => setSideOpen(true)}
+              >
+                <StateBadge state={c.state} />
+              </button>
             </div>
           </div>
           <span className="grow" />
@@ -1677,6 +1684,39 @@ export default function ConversationPage() {
             <X size={18} />
           </button>
         </div>
+        {/* Operator controls lead on a phone — triage is claim/status first,
+            identity and metadata are the reference layer underneath. */}
+        <div className="card">
+          <strong>Status</strong>
+          <select
+            style={{ width: '100%', marginTop: 8 }}
+            value={c.state}
+            disabled={act.isPending || patch.isPending}
+            onChange={(e) => setState(e.target.value as ConversationState)}
+          >
+            <option value="active">Agent</option>
+            <option value="needs_human" disabled={c.state === 'archived'}>Needs human</option>
+            <option value="human" disabled={c.state === 'archived'}>Human</option>
+            <option value="archived">Archived</option>
+          </select>
+        </div>
+
+        <div className="card">
+          <strong>Assign to</strong>
+          <select
+            style={{ width: '100%', marginTop: 8 }}
+            value={c.assignee_id ?? ''}
+            onChange={(e) => patch.mutate({ assignee_id: e.target.value || null })}
+          >
+            <option value="">Unassigned</option>
+            {users?.users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}{u.id === me?.user.id ? ' (me)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <div className="card">
           <strong>Details</strong>
           <div className="profile-head">
@@ -1778,37 +1818,6 @@ export default function ConversationPage() {
               </div>
             </details>
           </div>
-        </div>
-
-        <div className="card">
-          <strong>Status</strong>
-          <select
-            style={{ width: '100%', marginTop: 8 }}
-            value={c.state}
-            disabled={act.isPending || patch.isPending}
-            onChange={(e) => setState(e.target.value as ConversationState)}
-          >
-            <option value="active">Agent</option>
-            <option value="needs_human" disabled={c.state === 'archived'}>Needs human</option>
-            <option value="human" disabled={c.state === 'archived'}>Human</option>
-            <option value="archived">Archived</option>
-          </select>
-        </div>
-
-        <div className="card">
-          <strong>Assign to</strong>
-          <select
-            style={{ width: '100%', marginTop: 8 }}
-            value={c.assignee_id ?? ''}
-            onChange={(e) => patch.mutate({ assignee_id: e.target.value || null })}
-          >
-            <option value="">Unassigned</option>
-            {users?.users.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.name}{u.id === me?.user.id ? ' (me)' : ''}
-              </option>
-            ))}
-          </select>
         </div>
 
         <div className="card">
