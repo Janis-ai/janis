@@ -93,6 +93,16 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-01d — Details card leads the rail again; controls lead only in drawers
+- d1e2c33 had moved Status/Assign above Details for phone triage but it
+  reordered the desktop rail too. ConversationPage DOM is now Details →
+  Status → Assign; the two slide-over contexts (convl≤680 container query
+  + phone media query) re-order .conv-side-status/.conv-side-assign above
+  Details via flex order — claim/status still leads on a phone.
+- Same push earlier: copilot prompt — the `page` trait is the operator's
+  live page (restamped every message) and no-arg read_conversation /
+  lookup_contact resolve it; janis pack relabelled "Operator context" so
+  the model stops calling the operator the viewed thread's customer.
 ## 2026-11-01c — Context switcher keeps the current surface across scope picks
 - Picking an agent / "All agents" used to always land on `/agents/:id`
   overview or `/conversations`. Now `contextSwitchTarget(pathname, agentId)`
