@@ -184,7 +184,7 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .ctx-top { font-size: 12px; color: var(--muted); line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ctx-cur { font-size: 13px; font-weight: 600; line-height: 1.3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ctx-btn .icon { color: var(--muted); flex-shrink: 0; }
-.ctx-pop {
+.ctx-pop { max-height: calc(100dvh - 16px); overflow-y: auto;
   /* fixed + top/left from the button rect — escapes the sidebar's scroll
      clip and stacks above .main (toasts 100, modals 200 sit above still) */
   position: fixed; z-index: 150;

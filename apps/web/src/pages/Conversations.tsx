@@ -9,7 +9,6 @@ import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
 import { Bot, Cog, Headset, ListFilter, Moon, Save, Star, User, X } from 'lucide-react';
 import { usePrompt } from '../components/Prompt';
-import { AgentScopePicker } from '../components/AgentScopePicker';
 import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
 import { isEditableTarget } from '../lib/keys';
 import { usePageTitle } from '../lib/title';
@@ -656,7 +655,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         {/* The agent dimension is whole-app context — this picker switches
             it everywhere (nav subsection, Copilot, the other shared pages),
             and "All agents" leaves context entirely. */}
-        <AgentScopePicker slug="inbox" value={agentId || undefined} />
       </div>
       </div>
 

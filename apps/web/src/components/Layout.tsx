@@ -267,6 +267,17 @@ function ContextSwitcher({
             </>
           )}
           <div className="ctx-label">Agents</div>
+          {agents.length > 1 && (
+            <button
+              type="button"
+              className="ctx-item"
+              onClick={() => go('/conversations')}
+            >
+              <Bot size={13} className="ctx-ic" />
+              <span className="grow">All agents</span>
+              {!currentAgentId && <Check size={14} />}
+            </button>
+          )}
           {agents.map((a) => (
             <button
               key={a.id}

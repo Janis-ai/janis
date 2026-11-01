@@ -4,7 +4,6 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { api } from '../api/client';
 import { Md, timeAgo } from '../components/bits';
 import { useConfirm } from '../components/Prompt';
-import { AgentScopePicker } from '../components/AgentScopePicker';
 import { useChannels, useMe } from '../api/hooks';
 import { useContextAgent } from '../lib/agentContext';
 import { usePageTitle } from '../lib/title';
@@ -148,7 +147,6 @@ export function Contacts({ agentId: routeAgent }: { agentId?: string } = {}) {
     <>
       <div className="page-head">
         <h1>Contacts</h1>
-        <AgentScopePicker slug="contacts" value={agentId} />
         <div className="row" style={{ gap: 0 }}>
           <button
             className={`btn ${tab === 'contacts' ? 'primary' : 'ghost'}`}

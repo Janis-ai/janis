@@ -5,7 +5,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { SlidersHorizontal } from 'lucide-react';
 import { api } from '../api/client';
 import { useConfirm } from '../components/Prompt';
-import { AgentScopePicker } from '../components/AgentScopePicker';
 import { CampaignSettingsModal } from '../components/CampaignSettings';
 import { useChannels, useMe } from '../api/hooks';
 import { useContextAgent } from '../lib/agentContext';
@@ -235,7 +234,6 @@ export default function Campaigns({ agentId: routeAgent }: { agentId?: string } 
       <h1>
         Campaigns
         <span style={{ marginLeft: 8 }}>
-          <AgentScopePicker slug="campaigns" value={agentId} />
         </span>
         {me?.user.role === 'admin' && (
           <button

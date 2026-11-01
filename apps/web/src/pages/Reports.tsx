@@ -4,7 +4,6 @@ import { Link } from 'react-router-dom';
 import { api } from '../api/client';
 import { useChannels, useDigests } from '../api/hooks';
 import { Empty, channelLabel } from '../components/bits';
-import { AgentScopePicker } from '../components/AgentScopePicker';
 import { UsageCard } from '../components/UsageCard';
 import { useContextAgent } from '../lib/agentContext';
 import { usePageTitle } from '../lib/title';
@@ -246,7 +245,6 @@ export default function Reports({ agentId: scopedAgentId }: { agentId?: string }
         )}
         {/* Context control — same picker as the other shared pages; picking
             an agent moves the whole app into that agent's context. */}
-        <AgentScopePicker slug="reports" value={agentId || undefined} />
         <select value={channelId} onChange={(e) => setChannelId(e.target.value)}>
           <option value="">All channels</option>
           {(chans?.channels ?? [])
