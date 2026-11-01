@@ -32,6 +32,7 @@ export default defineConfig({
     }),
   ],
   server: {
+    host: true, // bind 0.0.0.0 so phones on the LAN can reach the dev server
     watch: {
       // This repo sits in an iCloud-synced dir — fs events are unreliable, so
       // poll instead of trusting native watchers (stale module cache).
