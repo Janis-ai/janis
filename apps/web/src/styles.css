@@ -1462,7 +1462,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 @container conv (max-width: 780px) {
   .conv-actions .btn, .conv-ops.btn { padding: 7px 10px; }
   .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
-  .conv-ops { flex-wrap: wrap; }
+  .conv-ops { flex-wrap: nowrap; }
   .snooze-wrap, .sendas-wrap {
     width: 34px; height: 33px; justify-content: center;
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
@@ -1914,7 +1914,7 @@ details summary:hover { color: var(--text); }
   .conv-actions .btn-label, .conv-ops .btn-label, .composer-bar .btn-label, .filters .btn-label { display: none; }
   .conv-actions .btn, .conv-ops.btn, .filters button.btn { padding: 7px 10px; }
   .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
-  .conv-ops { flex-wrap: wrap; }
+  .conv-ops { flex-wrap: nowrap; }
   .snooze-wrap, .sendas-wrap {
     width: 34px; height: 33px; justify-content: center;
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
@@ -1938,7 +1938,7 @@ details summary:hover { color: var(--text); }
      viewport doesn't strip words the column still has room for. */
   .layout.dock-open .conv-actions .btn, .layout.dock-open .conv-ops.btn { padding: 7px 10px; }
   .layout.dock-open .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
-  .layout.dock-open .conv-ops { flex-wrap: wrap; }
+  .layout.dock-open .conv-ops { flex-wrap: nowrap; }
   .layout.dock-open .snooze-wrap, .layout.dock-open .sendas-wrap {
     width: 34px; height: 33px; justify-content: center;
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;

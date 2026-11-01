@@ -18,7 +18,7 @@ import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { Archive, ArchiveRestore, Bot, Brain, ChevronLeft, FlaskConical, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
+import { Bot, Brain, ChevronLeft, FlaskConical, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -453,16 +453,6 @@ export default function ConversationPage() {
       patch.mutate({ is_unread: false });
     }
   }, [data?.conversation.is_unread, id]);
-
-  const archive = useMutation({
-    mutationFn: (archived: boolean) =>
-      api(`/api/conversations/${id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ state: archived ? 'archived' : 'active' }),
-      }),
-    onSuccess: refresh,
-    onError: (e) => setError(e.message),
-  });
 
   const [confirmEl, confirm] = useConfirm();
   const del = useMutation({
@@ -1748,34 +1738,9 @@ export default function ConversationPage() {
                     <Brain size={15} /><span className="btn-label">Teach agent</span>
                   </button>
                 )}
-                <button className="btn danger" onClick={() => act.mutate('archive')} title="Archive conversation" aria-label="Archive conversation">
-                  <Archive size={15} /><span className="btn-label">Archive</span>
-                </button>
               </>
             )}
-            {c.state === 'archived' && (
-              <>
-                <span className="muted">Archived</span>
-                <button className="btn" disabled={archive.isPending} onClick={() => archive.mutate(false)} title="Unarchive" aria-label="Unarchive">
-                  <ArchiveRestore size={15} /><span className="btn-label">{archive.isPending ? 'Working…' : 'Unarchive'}</span>
-                </button>
-              </>
-            )}
-            {canTeach && (
-              <button
-                className="btn danger"
-                title="Permanently delete this conversation and its transcript — archive keeps it searchable"
-                aria-label="Delete conversation"
-                disabled={del.isPending}
-                onClick={async () => {
-                  if (await confirm('Permanently delete this conversation and its entire transcript? This cannot be undone — archive keeps it out of the inbox but searchable.', [{ key: 'ok', label: 'Delete', danger: true }])) {
-                    del.mutate();
-                  }
-                }}
-              >
-                <Trash2 size={15} /><span className="btn-label">{del.isPending ? 'Deleting…' : 'Delete'}</span>
-              </button>
-            )}
+            {c.state === 'archived' && <span className="muted">Archived</span>}
           </div>
         )}
         </div>
@@ -1981,6 +1946,27 @@ export default function ConversationPage() {
             </div>
             <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
               Unified across channels — all this person's conversations live there.
+            </div>
+          </div>
+        )}
+
+        {canTeach && (
+          <div className="card">
+            <button
+              className="btn danger"
+              title="Permanently delete this conversation and its transcript — archive keeps it searchable"
+              aria-label="Delete conversation"
+              disabled={del.isPending}
+              onClick={async () => {
+                if (await confirm('Permanently delete this conversation and its entire transcript? This cannot be undone — archive keeps it out of the inbox but searchable.', [{ key: 'ok', label: 'Delete', danger: true }])) {
+                  del.mutate();
+                }
+              }}
+            >
+              <Trash2 size={15} /><span className="btn-label">{del.isPending ? 'Deleting…' : 'Delete conversation'}</span>
+            </button>
+            <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+              Removes the transcript for good — archiving keeps it searchable instead.
             </div>
           </div>
         )}
