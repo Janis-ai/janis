@@ -93,6 +93,23 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-01 — Copilot can answer "who is this customer" — contact + transcript tools
+- Two new concierge builtins (builtinTools.ts): `lookup_contact` finds a
+  person in the visitor's workspace by name/email/phone/tag/id and returns
+  the full contact record — channel identities, tags, notes, traits,
+  external CRM ids, plus every linked conversation with console links;
+  `read_conversation` resolves a thread by UUID or customer name/email/
+  phone and returns state/agent/channels/assignee/intent/sentiment, the
+  linked contact card, and the latest transcript. Both read-only,
+  member-level, same signedInUser + visitorWorkspace gating as the other
+  copilot tools; merchant-Ask picks them up via copilotBuiltins().
+- `findVisitorConversation` now also resolves through the contact record —
+  a name/email/phone search finds conversations whose own userProfile is
+  anonymous (the contact_id link is the only attribution), so
+  debug/teach_from/assign_conversation got the tie for free.
+- DRIFT WARNING honored: `scripts/tmp/enable-contact-tools.ts` appended
+  both names to the concierge agent's config.builtin_tools in dev AND prod
+  (idempotent — re-runnable after future concierge-tool additions).
 ## 2026-11-02 — Details drawer actually hides; conv column clips the rail
 - `.conv-layout` gained `overflow-x: clip` (hidden fallback): the closed
   details drawer is `position:absolute; right:0; translateX(105%)` inside the

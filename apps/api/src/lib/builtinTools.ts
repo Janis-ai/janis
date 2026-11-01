@@ -10,6 +10,8 @@ import {
   alertRules,
   channelBindings,
   channels,
+  contactIdentities,
+  contacts,
   conversations,
   errorReports,
   helpArticles,
@@ -333,6 +335,25 @@ async function findVisitorConversation(
     return { conv };
   }
   const pat = `%${q}%`;
+  // A name/email/phone search should also match the unified contact — the
+  // person often has a real record even when a thread's own userProfile is
+  // thin (anonymous webchat, a PSID-only Messenger visitor).
+  const contactIds = (
+    await db
+      .select({ id: contacts.id })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.workspaceId, ws.id),
+          or(
+            ilike(contacts.name, pat),
+            ilike(contacts.email, pat),
+            ilike(contacts.phone, pat),
+          ),
+        ),
+      )
+      .limit(25)
+  ).map((c) => c.id);
   const hits = await db
     .select()
     .from(conversations)
@@ -343,6 +364,7 @@ async function findVisitorConversation(
           ilike(conversations.externalId, pat),
           ilike(sql`${conversations.userProfile}->>'email'`, pat),
           ilike(sql`${conversations.userProfile}->>'name'`, pat),
+          ...(contactIds.length ? [inArray(conversations.contactId, contactIds)] : []),
         ),
       ),
     )
@@ -360,6 +382,66 @@ async function findVisitorConversation(
     };
   }
   return { conv: hits[0] };
+}
+
+/** The contact block shared by lookup_contact and read_conversation — the
+ *  person's record plus every channel identity they're reachable on, so an
+ *  answer can tie a conversation back to the human behind it. */
+async function contactSummary(db: Db, contact: typeof contacts.$inferSelect) {
+  const identities = await db
+    .select({
+      kind: channels.kind,
+      channelName: channels.name,
+      platformUserId: contactIdentities.platformUserId,
+      optedOutAt: contactIdentities.optedOutAt,
+    })
+    .from(contactIdentities)
+    .innerJoin(channels, eq(contactIdentities.channelId, channels.id))
+    .where(eq(contactIdentities.contactId, contact.id));
+  return {
+    contact_id: contact.id,
+    name: contact.name,
+    email: contact.email,
+    phone: contact.phone,
+    alt_emails: contact.altEmails,
+    alt_phones: contact.altPhones,
+    tags: contact.tags,
+    notes: contact.notes,
+    traits: contact.metadata,
+    external_ids: contact.externalIds,
+    reachable_via: identities.map((i) => ({
+      channel: `${i.kind} (${i.channelName})`,
+      platform_user_id: i.platformUserId,
+      ...(i.optedOutAt ? { opted_out: true } : {}),
+    })),
+    url: `${env.webOrigin}/contacts/${contact.id}`,
+  };
+}
+
+/** A contact's linked conversations, newest first — the "has this person
+ *  talked to us before" half of the record. */
+async function contactConversations(db: Db, contactId: string) {
+  const convs = await db
+    .select({
+      id: conversations.id,
+      state: conversations.state,
+      agentName: agents.name,
+      lastMessageAt: conversations.lastMessageAt,
+      lastMessagePreview: conversations.lastMessagePreview,
+    })
+    .from(conversations)
+    .innerJoin(agents, eq(conversations.agentId, agents.id))
+    .where(eq(conversations.contactId, contactId))
+    .orderBy(desc(conversations.lastMessageAt))
+    .limit(10);
+  return convs.map((v) => ({
+    conversation_id: v.id,
+    agent: v.agentName,
+    state: v.state,
+    last_message_at: v.lastMessageAt,
+    last_message_preview: v.lastMessagePreview,
+    url: `${env.webOrigin}/conversations/${v.id}`,
+  }));
 }
 
 /** Stable stringify for flat exec-args — jsonb sorts keys on read. */
@@ -1745,6 +1827,185 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           findings[0] ??
           'nothing blocking — the conversation looks healthy; if the customer still reports silence it may be a channel delivery issue',
         findings,
+      });
+    },
+  },
+  {
+    name: 'lookup_contact',
+    description:
+      "Answer 'who is X / do we have a contact for X / what's this customer's info' — find a person in the visitor's workspace Contacts by name, email, phone, tag, or contact UUID, and return their full record: names and addresses, tags, notes, traits, external CRM ids, every channel identity they're reachable on, and their linked conversations across agents (each with a console link). Use it whenever a question is about a specific customer or person; to read the actual messages in one of the linked threads, call read_conversation. Read-only — any member.",
+    params: {
+      contact: 'name, email, phone, tag, or contact UUID (required)',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace);
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const q = (args.contact ?? '').trim();
+      if (!q) return JSON.stringify({ error: 'pass a name, email, phone, tag, or contact id to search for' });
+
+      if (UUID.test(q)) {
+        const [contact] = await ctx.db
+          .select()
+          .from(contacts)
+          .where(and(eq(contacts.id, q), eq(contacts.workspaceId, ws.id)))
+          .limit(1);
+        if (!contact) return JSON.stringify({ error: `no contact ${q} in ${ws.name}` });
+        return JSON.stringify({
+          ...(await contactSummary(ctx.db, contact)),
+          conversations: await contactConversations(ctx.db, contact.id),
+        });
+      }
+
+      const pat = `%${q}%`;
+      const hits = await ctx.db
+        .select()
+        .from(contacts)
+        .where(
+          and(
+            eq(contacts.workspaceId, ws.id),
+            or(
+              ilike(contacts.name, pat),
+              ilike(contacts.email, pat),
+              ilike(contacts.phone, pat),
+              sql`exists (select 1 from unnest(${contacts.altEmails}) e where e ilike ${pat})`,
+              sql`exists (select 1 from unnest(${contacts.altPhones}) p where p ilike ${pat})`,
+              sql`exists (select 1 from unnest(${contacts.tags}) t where t ilike ${pat})`,
+            ),
+          ),
+        )
+        .orderBy(desc(contacts.updatedAt))
+        .limit(9);
+      if (!hits.length) {
+        return JSON.stringify({
+          error: `no contacts matching "${q}" in ${ws.name}`,
+          contacts_url: `${env.webOrigin}/contacts`,
+        });
+      }
+      if (hits.length > 1) {
+        return JSON.stringify({
+          error: 'multiple contacts match — be more specific or pass the contact id',
+          matches: hits.slice(0, 8).map((h) => ({
+            contact_id: h.id,
+            name: h.name,
+            email: h.email,
+            phone: h.phone,
+            tags: h.tags,
+            url: `${env.webOrigin}/contacts/${h.id}`,
+          })),
+        });
+      }
+      const contact = hits[0];
+      return JSON.stringify({
+        ...(await contactSummary(ctx.db, contact)),
+        conversations: await contactConversations(ctx.db, contact.id),
+      });
+    },
+  },
+  {
+    name: 'read_conversation',
+    description:
+      "Read what happened in a conversation — 'what did Sam ask about', 'show me the last chat with ann@acme.com', 'what was decided in that thread'. Resolves one conversation in the visitor's workspace by UUID, customer name/email/phone, or linked contact, and returns its state, agent, channels, assignee, intent/sentiment, the linked contact record (who this person is across channels), and the latest transcript. To diagnose a stuck or missing reply use debug_conversation; to save what a human resolved as knowledge use teach_from_conversation. Read-only — any member.",
+    params: {
+      conversation: 'conversation UUID or customer name/email/phone (required)',
+      workspace: 'workspace name — only needed when ambiguous',
+      limit: 'max transcript messages to return, default 20 (max 50)',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace);
+      if ('error' in resolved) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+      const q = (args.conversation ?? '').trim();
+      if (!q) return JSON.stringify({ error: 'pass a conversation id or a name/email/phone to search for' });
+      const found = await findVisitorConversation(ctx.db, ws, q);
+      if ('error' in found) return JSON.stringify(found);
+      const conv = found.conv;
+
+      const limit = Math.min(Math.max(Number(args.limit) || 20, 1), 50);
+      const [agent, bindings, assignee, contact] = await Promise.all([
+        ctx.db
+          .select({ name: agents.name })
+          .from(agents)
+          .where(eq(agents.id, conv.agentId))
+          .limit(1)
+          .then((r) => r[0]),
+        ctx.db
+          .select({ kind: channels.kind, name: channels.name })
+          .from(channelBindings)
+          .innerJoin(channels, eq(channelBindings.channelId, channels.id))
+          .where(eq(channelBindings.conversationId, conv.id)),
+        conv.assigneeId
+          ? ctx.db
+              .select({ name: users.name })
+              .from(users)
+              .where(eq(users.id, conv.assigneeId))
+              .limit(1)
+              .then((r) => r[0])
+          : Promise.resolve(undefined),
+        conv.contactId
+          ? ctx.db
+              .select()
+              .from(contacts)
+              .where(eq(contacts.id, conv.contactId))
+              .limit(1)
+              .then((r) => r[0])
+          : Promise.resolve(undefined),
+      ]);
+
+      const recent = await ctx.db
+        .select({
+          direction: messages.direction,
+          text: messages.text,
+          payload: messages.payload,
+          createdAt: messages.createdAt,
+        })
+        .from(messages)
+        .where(eq(messages.conversationId, conv.id))
+        .orderBy(desc(messages.createdAt))
+        .limit(limit * 2);
+      const transcript = recent
+        .filter((m) => !(m.payload as { internal?: boolean } | null)?.internal)
+        .slice(0, limit)
+        .reverse()
+        .map((m) => ({
+          dir: m.direction === 'in' ? 'customer' : m.direction === 'out' ? 'agent' : 'human',
+          text: m.text,
+          at: m.createdAt,
+        }));
+
+      return JSON.stringify({
+        conversation_id: conv.id,
+        customer:
+          (conv.userProfile as { name?: string; email?: string })?.name ??
+          (conv.userProfile as { email?: string })?.email ??
+          conv.externalId,
+        state: conv.state,
+        agent: agent?.name,
+        channels: bindings.map((b) => `${b.kind} (${b.name})`),
+        assignee: assignee?.name ?? null,
+        intent: conv.intent,
+        sentiment: conv.sentiment,
+        csat_score: conv.csatScore,
+        created_at: conv.createdAt,
+        last_message_at: conv.lastMessageAt,
+        url: `${env.webOrigin}/conversations/${conv.id}`,
+        contact: contact
+          ? await contactSummary(ctx.db, contact)
+          : null,
+        transcript,
       });
     },
   },

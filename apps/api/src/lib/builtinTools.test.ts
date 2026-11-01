@@ -13,6 +13,8 @@ import {
   channelBindings,
   alertRules,
   channels,
+  contactIdentities,
+  contacts,
   conversations,
   memberships,
   messages,
@@ -718,6 +720,149 @@ describe('debug_conversation builtin', () => {
     );
     expect(out.conversation_id).toBe(DBG_CONV);
     expect(out.verdict).toContain('human took over');
+  });
+});
+
+describe('lookup_contact + read_conversation builtins', () => {
+  const lookup = () => BUILTIN_TOOLS.find((b) => b.name === 'lookup_contact')!;
+  const readConv = () => BUILTIN_TOOLS.find((b) => b.name === 'read_conversation')!;
+  let contactId: string;
+  let contactConvId: string;
+
+  it('are gated to the operator workspace', () => {
+    expect(lookup().available(WS)).toBe(true);
+    expect(lookup().available('other-ws')).toBe(false);
+    expect(readConv().available(WS)).toBe(true);
+    expect(readConv().available('other-ws')).toBe(false);
+  });
+
+  it('rejects visitors who are not signed in', async () => {
+    const [agent2] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.workspaceId, WS2))
+      .limit(1);
+    const [anon] = await db
+      .insert(conversations)
+      .values({ agentId: agent2.id, externalId: 'anon:unsigned' })
+      .returning();
+    const out = JSON.parse(await lookup().run({ contact: 'x' }, ctx(anon.id)));
+    expect(out.error).toContain('signed-in');
+  });
+
+  it('lookup returns the record, channel identities and linked conversations', async () => {
+    const [agent2] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.workspaceId, WS2))
+      .limit(1);
+    const [chan] = await db
+      .insert(channels)
+      .values({ workspaceId: WS2, agentId: agent2.id, kind: 'email', name: 'Support inbox', credentials: {} })
+      .returning();
+    const [c] = await db
+      .insert(contacts)
+      .values({
+        workspaceId: WS2,
+        name: 'Dana Person',
+        email: 'dana@acme.com',
+        phone: '+15551234',
+        tags: ['vip'],
+        notes: 'met at SaaStr',
+        externalIds: { shopify: '42' },
+      })
+      .returning();
+    contactId = c.id;
+    await db
+      .insert(contactIdentities)
+      .values({ contactId, channelId: chan.id, platformUserId: 'dana@acme.com' });
+    // The thread's own profile is anonymous — the ONLY way to identify it is
+    // the contact link, which is the whole point of the feature.
+    const [cv] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent2.id,
+        externalId: 'anon:w1',
+        userProfile: {},
+        contactId,
+        lastMessageAt: new Date(),
+        lastMessagePreview: 'refund status?',
+      })
+      .returning();
+    contactConvId = cv.id;
+    await db.insert(messages).values([
+      { conversationId: cv.id, direction: 'in', text: 'where is my refund?', createdAt: new Date(Date.now() - 120_000) },
+      { conversationId: cv.id, direction: 'out', text: 'It ships tomorrow.', createdAt: new Date(Date.now() - 60_000) },
+      { conversationId: cv.id, direction: 'human', text: 'internal note', payload: { internal: true }, createdAt: new Date() },
+    ]);
+
+    const out = JSON.parse(
+      await lookup().run({ contact: 'dana@acme.com', workspace: 'free' }, ctx(CONV2)),
+    );
+    expect(out.contact_id).toBe(contactId);
+    expect(out.name).toBe('Dana Person');
+    expect(out.tags).toContain('vip');
+    expect(out.external_ids.shopify).toBe('42');
+    expect(out.reachable_via[0].channel).toContain('email');
+    expect(out.reachable_via[0].platform_user_id).toBe('dana@acme.com');
+    expect(out.conversations.map((v: { conversation_id: string }) => v.conversation_id)).toContain(
+      contactConvId,
+    );
+    expect(out.url).toContain(`/contacts/${contactId}`);
+  });
+
+  it('lists matches when the search is ambiguous', async () => {
+    await db
+      .insert(contacts)
+      .values({ workspaceId: WS2, name: 'Dana Other', email: 'dana@other.com' });
+    const out = JSON.parse(
+      await lookup().run({ contact: 'dana', workspace: 'free' }, ctx(CONV2)),
+    );
+    expect(out.error).toContain('multiple');
+    expect(out.matches.length).toBe(2);
+    expect(out.matches[0].url).toContain('/contacts/');
+  });
+
+  it('scopes to the visitor workspace — a contact elsewhere is invisible', async () => {
+    await db
+      .insert(contacts)
+      .values({ workspaceId: WS, name: 'W1 Only', email: 'w1-only@x.com' });
+    const out = JSON.parse(
+      await lookup().run({ contact: 'w1-only@x.com', workspace: 'free' }, ctx(CONV2)),
+    );
+    expect(out.error).toContain('no contacts matching');
+  });
+
+  it('read_conversation finds the thread by contact and ties the record on', async () => {
+    const out = JSON.parse(
+      await readConv().run({ conversation: 'dana@acme.com', workspace: 'free' }, ctx(CONV2)),
+    );
+    expect(out.conversation_id).toBe(contactConvId);
+    expect(out.contact.contact_id).toBe(contactId);
+    expect(out.contact.email).toBe('dana@acme.com');
+    expect(out.transcript.map((m: { text: string }) => m.text)).toEqual([
+      'where is my refund?',
+      'It ships tomorrow.',
+    ]);
+    // Internal annotations stay console-side even for the operator copilot.
+    expect(out.transcript.map((m: { text: string }) => m.text)).not.toContain('internal note');
+  });
+
+  it('read_conversation reports no linked contact for unattributed threads', async () => {
+    const [a2] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.workspaceId, WS2))
+      .limit(1);
+    const [cv] = await db
+      .insert(conversations)
+      .values({ agentId: a2.id, externalId: 'cust:no-contact@x.com', userProfile: { email: 'no-contact@x.com' } })
+      .returning();
+    const out = JSON.parse(
+      await readConv().run({ conversation: cv.id, workspace: 'free' }, ctx(CONV2)),
+    );
+    expect(out.conversation_id).toBe(cv.id);
+    expect(out.contact).toBeNull();
   });
 });
 
