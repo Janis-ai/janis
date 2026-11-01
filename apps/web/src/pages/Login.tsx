@@ -93,7 +93,23 @@ export default function Login() {
         return;
       }
       await qc.invalidateQueries({ queryKey: ['me'] });
-      navigate('/conversations');
+      // Empty inbox → the agent the user last had selected; nothing
+      // selected → the welcome page. A populated inbox goes straight there.
+      try {
+        const list = await api<{ conversations: unknown[] }>('/api/conversations?limit=1');
+        if (list.conversations.length > 0) {
+          navigate('/conversations');
+          return;
+        }
+      } catch {
+        /* fall through — an unreadable inbox shouldn't trap sign-in */
+      }
+      let last: string | undefined;
+      try {
+        const m = JSON.parse(localStorage.getItem('janis:last-agents') ?? '{}') as Record<string, string>;
+        last = Object.values(m)[0];
+      } catch { /* malformed storage — treat as no selection */ }
+      navigate(last ? `/agents/${last}` : '/welcome');
     } catch (err) {
       if (err instanceof ApiError && err.status === 403 && err.message === 'unverified') {
         setUnverified(true);

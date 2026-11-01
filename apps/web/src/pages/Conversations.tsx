@@ -502,14 +502,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       )}
       {/* Pinned under the mobile-bar on phones — the list scrolls beneath. */}
       <div className="inbox-head">
-      {/* Tour cards exist only as the empty-state — a working inbox has
-          no room for them, and the re-open stub is gone entirely. */}
-      {!convsPending && !searching && (convList?.length ?? 0) === 0 && (
-        <div className="inbox-onboard">
-          <DiscoveryCards force />
-          <Onboarding />
-        </div>
-      )}
       {drill && (
         <div className="row" style={{ marginBottom: 8 }}>
           <span className="chip">

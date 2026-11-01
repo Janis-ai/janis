@@ -1332,7 +1332,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .inbox-head {
   position: sticky; top: -24px; z-index: 25;
   margin: 0 -24px; padding: 0 24px 8px;
-  background: var(--bg); border-bottom: 1px solid var(--border);
+  background: var(--bg);
 }
 /* The rows are the scroller on inbox pages — .main locks (flex column +
    hidden) so a scroll anywhere on the list moves the list, not the page. */

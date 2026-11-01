@@ -1,9 +1,10 @@
-import { Navigate, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { Bot, Sparkles } from 'lucide-react';
 import { api } from '../api/client';
 import { useAgents, useMe } from '../api/hooks';
 import { BrandImg } from '../components/bits';
 import { DISCOVERY_CARDS } from '../components/DiscoveryCards';
+import Onboarding from '../components/Onboarding';
 import { railBus } from '../lib/railBus';
 import { usePageTitle } from '../lib/title';
 
@@ -19,9 +20,7 @@ export default function Welcome() {
   const channelId = me?.support_channel_id;
 
   if (agentsPending) return <div className="login-wrap muted">Loading…</div>;
-  if (agents && agents.agents.length > 0) {
-    return <Navigate to="/conversations" replace />;
-  }
+  const hasAgents = (agents?.agents.length ?? 0) > 0;
 
   const ask = (seed: string, card?: string) => {
     void api('/api/track', {
@@ -55,6 +54,7 @@ export default function Welcome() {
           )}
         </div>
       </div>
+      {hasAgents && <Onboarding />}
       <div className="muted" style={{ margin: '18px 0 2px', fontSize: 13 }}>
         What Janis can do — tap one and the copilot explains:
       </div>
