@@ -116,6 +116,22 @@ backdrops, and `snapToBottom` on image load no longer calls
 were being yanked to the top of the last message (top-anchor survives
 only on explicit jump-to-latest).
 
+**Landing wave 2 — demos + real screenshots (Oct 31):** per Josh Barkin's
+feedback (shared via iMessage — taken as direction, not gospel): DemoStrip
+is now data-driven — a `.demo-chip` row (Shopify, Stripe, Zendesk,
+Cal.com, HubSpot) replays the approval flow with that stack's tool call,
+args, and outcome copy (`SCENARIOS` + `beatsFor()`; `demo_scenario`
+analytics event). Hero is no longer text-only: a real console screenshot
+(`marketing-console.png`) sits framed like the demo windows. Each feature
+group now shows a real product screenshot above its cards —
+`marketing-inbox.png` (Hair Salon inbox, pseudonymous visitors),
+`marketing-tests.png` (scenario suite w/ EXPECTED/REPLIED/WHY-IT-FAILED),
+`marketing-reports.png` (AI-vs-human split). Shots captured from janis_dev
+clipped to `.main` via playwright (temp admin membership added+removed —
+that workspace isn't admin's). Comparison table gained 'Integrations:
+read-only lookups → read and write'. Still owed: testimonials, logo wall
+(#36), real brand logos on the demo chips if we want them.
+
 **Landing page revision pass (Oct 31):** `Landing.tsx` rewritten to match
 the shipped product — the flat 8-card feature grid became four themed
 sections: "One front line, every channel" (inbox now lists Gmail/Outlook

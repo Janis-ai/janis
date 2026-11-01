@@ -1835,6 +1835,24 @@ details summary:hover { color: var(--text); }
   font-style: italic; max-width: 380px; animation: demo-in .5s ease; margin-top: 4px;
 }
 @keyframes demo-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+/* Scenario switcher — the demo replays per integration. */
+.demo-scenes { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin: 0 0 18px; }
+.demo-chip {
+  border: 1px solid var(--border); border-radius: 999px; padding: 6px 15px;
+  background: var(--panel-2); color: var(--muted); font: inherit; font-size: 13px;
+  cursor: pointer; transition: border-color .15s, color .15s;
+}
+.demo-chip:hover { border-color: var(--accent); color: var(--text); }
+.demo-chip.on { border-color: var(--accent); color: var(--accent); background: rgba(94,234,212,.07); }
+/* Real-console imagery — framed like the demo windows. */
+.hero-shot { max-width: 880px; margin: 42px auto 0; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
+.hero-shot img { display: block; width: 100%; }
+.landing-shot { max-width: 880px; margin: 0 auto 20px; }
+.landing-shot img { display: block; width: 100%; }
+.landing-shot-cap {
+  padding: 10px 14px; font-size: 13px; color: var(--muted); text-align: center;
+  border-top: 1px solid var(--border);
+}
 .landing-steps[id], .landing-pricing[id] { scroll-margin-top: 24px; }
 .btn.lg { padding: 12px 22px; font-size: 15px; }
 .landing-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 14px 0 56px; }

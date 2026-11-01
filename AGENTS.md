@@ -576,7 +576,14 @@ drizzle-kit/workbox-build, nothing to drop directly).
     Chatfuel/ManyChat — and LLM key). Hero now gives hosted and BYO equal
     billing; channel list gained Gmail/Outlook; integrations + FAQ +
     comparison table refreshed; Scale pricing notes SSO/SCIM+GDPR.
-    Still owed from #36: screenshots, testimonials, logo wall.
+    Same-day wave 2 (Josh Barkin feedback via Mike): DemoStrip is now
+    scenario-switchable — chips for Shopify/Stripe/Zendesk/Cal.com/HubSpot
+    replay the approval flow with that stack's tool call; hero gained a
+    real console screenshot (framed like the demo windows); each feature
+    group shows a real product screenshot (inbox / scenario suite /
+    reports — captured from janis_dev, pseudonymous data); comparison
+    table gained a read-AND-write integrations row. Still owed from #36:
+    testimonials, logo wall.
 
 *G. Gated/deferred (correctly parked)*
 38. Per-agent member scope — agent_members scoping/'hidden' role exists;

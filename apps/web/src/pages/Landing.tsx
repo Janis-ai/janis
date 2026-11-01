@@ -133,11 +133,17 @@ function Icon({ name }: { name: keyof typeof GLYPHS }) {
 const FEATURE_GROUPS: {
   heading: string;
   sub: string;
+  shot?: { src: string; alt: string; cap: string };
   items: { icon: keyof typeof GLYPHS; title: string; body: string }[];
 }[] = [
   {
     heading: 'One front line, every channel',
     sub: 'Every conversation in one inbox — with the same AI-first, human-on-tap flow on all of them.',
+    shot: {
+      src: '/img/marketing-inbox.png',
+      alt: 'The Janis inbox — conversations across channels with agent, intent, and state labels',
+      cap: 'One inbox across channels — agent badges, auto-classified intents, and per-thread state built in.',
+    },
     items: [
       {
         icon: 'inbox',
@@ -164,6 +170,11 @@ const FEATURE_GROUPS: {
   {
     heading: 'An agent that gets safer every week',
     sub: 'The improvement loop is built in — every fix ships against evidence, not vibes.',
+    shot: {
+      src: '/img/marketing-tests.png',
+      alt: 'The scenario suite — saved conversations replayed against the current agent, with expected vs actual replies and the judge’s reasoning',
+      cap: 'The scenario suite — real conversations replayed against your current setup, judged per expectation.',
+    },
     items: [
       {
         icon: 'flag',
@@ -190,6 +201,11 @@ const FEATURE_GROUPS: {
   {
     heading: 'Run support like a system',
     sub: 'Outbound, measurement, and customer records — not just a queue.',
+    shot: {
+      src: '/img/marketing-reports.png',
+      alt: 'The reports view — AI-versus-human workload split, approvals, resolution speed, volume, and CSAT',
+      cap: 'AI-vs-human workload, approval turnaround, resolution speed, and CSAT — per agent, per channel.',
+    },
     items: [
       {
         icon: 'send',
@@ -237,6 +253,7 @@ const DIFFERENT: [string, string, string][] = [
   ['The handoff', 'A bolted-on escape hatch', 'The core of the product'],
   ['When the AI fails', 'A dashboard shows you where', 'Janis drafts the fix for you'],
   ['Changing the rules', 'Publish and pray', 'Replay real conversations before it ships'],
+  ['Integrations', 'Read-only lookups', 'Read and write — refunds, tickets, bookings'],
   ['Pricing', 'Per seat, per teammate', 'Per message + metered tokens'],
 ];
 
@@ -304,48 +321,120 @@ type Beat = {
   customer?: boolean; // also visible in the customer pane
 };
 
-/** Beats up to the pending card — the demo pauses there for the visitor. */
-const PRE: Beat[] = [
-  { kind: 'in', text: 'My order #1042 arrived damaged — can I get a refund?', wait: 350, customer: true },
-  { kind: 'typing', wait: 1400, customer: true },
-  {
-    kind: 'out',
-    text: 'I can help with that — I just need a teammate to approve the refund.',
-    wait: 2400,
-    customer: true,
-  },
-  { kind: 'sys', text: 'Operator \u26a1 approval requested — propose_refund', wait: 900 },
-  { kind: 'card' },
-];
-
-/** Endings branch on what the visitor did. */
-const POST = {
-  approved: (you: boolean): Beat[] => [
-    { kind: 'sys', text: `${you ? 'You' : 'Mike'} \u26a1 action approved`, wait: 800 },
-    { kind: 'typing', wait: 1300, customer: true },
-    {
-      kind: 'out',
-      text: 'Done \u2014 your refund for $49.00 is on its way. Anything else?',
-      wait: 2400,
-      customer: true,
-    },
-    { kind: 'sys', text: 'Janis \u26a1 agent resumed', wait: 900 },
-  ],
-  denied: (): Beat[] => [
-    { kind: 'sys', text: 'You \u26a1 action denied', wait: 800 },
-    { kind: 'typing', wait: 1300, customer: true },
-    {
-      kind: 'out',
-      text: 'I wasn\u2019t able to approve that refund — the team will follow up with you directly.',
-      wait: 2400,
-      customer: true,
-    },
-    { kind: 'sys', text: 'Janis \u26a1 agent resumed', wait: 900 },
-  ],
+type Scenario = {
+  key: string;
+  label: string;
+  who: string;   // name over the customer's inbound bubble
+  ask: string;   // customer's opening line
+  ack: string;   // agent's "needs a teammate" reply
+  tool: string;  // tool named in the system note
+  title: string; // approval card title
+  desc: string;  // approval card description
+  args: string;  // approval card args line
+  ok: string;    // agent reply after approval
+  no: string;    // agent reply after denial
+  done: string;  // completion headline
 };
 
+const SCENARIOS: Scenario[] = [
+  {
+    key: 'shopify',
+    label: 'Shopify',
+    who: 'Jordan Lee',
+    ask: 'My order #1042 arrived damaged — can I get a refund?',
+    ack: 'I can help with that — I just need a teammate to approve the refund.',
+    tool: 'propose_refund',
+    title: 'Refund approval',
+    desc: 'Janis needs your approval to refund order #1042.',
+    args: 'propose_refund · { "order": "#1042", "amount": "49.00" }',
+    ok: 'Done \u2014 your refund for $49.00 is on its way. Anything else?',
+    no: 'I wasn\u2019t able to approve that refund — the team will follow up with you directly.',
+    done: 'Refund approved. Customer notified.',
+  },
+  {
+    key: 'stripe',
+    label: 'Stripe',
+    who: 'Sam Chen',
+    ask: 'I think you charged me twice for my subscription this month.',
+    ack: 'I can see the duplicate charge — let me get a teammate to approve refunding it.',
+    tool: 'stripe_create_refund',
+    title: 'Duplicate-charge refund',
+    desc: 'Janis needs your approval to refund the duplicate charge.',
+    args: 'stripe_create_refund · { "charge": "ch_8Kq2…", "amount": "29.00" }',
+    ok: 'Refunded — the $29.00 duplicate charge is on its way back to your card.',
+    no: 'I wasn\u2019t able to refund it automatically — the team will reach out shortly.',
+    done: 'Duplicate charge refunded.',
+  },
+  {
+    key: 'zendesk',
+    label: 'Zendesk',
+    who: 'Priya Rao',
+    ask: 'Your export feature crashes every time I run it — this is blocking our quarter-end.',
+    ack: 'That sounds urgent — I\u2019d like to file it as a high-priority bug, pending a teammate\u2019s OK.',
+    tool: 'zendesk_create_ticket',
+    title: 'File urgent ticket',
+    desc: 'Janis needs your approval to file an urgent bug ticket.',
+    args: 'zendesk_create_ticket · { "subject": "Export crash", "priority": "urgent" }',
+    ok: 'Done — ticket #4821 is filed as urgent and the engineering team is on it.',
+    no: 'I\u2019ve flagged this for the team — someone will follow up with you directly.',
+    done: 'Urgent ticket filed in Zendesk.',
+  },
+  {
+    key: 'calcom',
+    label: 'Cal.com',
+    who: 'Tom Alvarez',
+    ask: 'Something came up — can I move tomorrow\u2019s onboarding call to next Tuesday?',
+    ack: 'I can reschedule that for you — it just needs a teammate\u2019s approval first.',
+    tool: 'calcom_reschedule',
+    title: 'Reschedule booking',
+    desc: 'Janis needs your approval to move the booking.',
+    args: 'calcom_reschedule · { "booking": "onboarding", "to": "Tue 10:00" }',
+    ok: 'Moved — your onboarding call is now Tuesday at 10:00. Updated invite sent.',
+    no: 'I couldn\u2019t reschedule it automatically — the team will confirm a new time.',
+    done: 'Booking rescheduled.',
+  },
+  {
+    key: 'hubspot',
+    label: 'HubSpot',
+    who: 'Dana Kim',
+    ask: 'I\u2019m the new ops admin at Acme — please update the account contact to dana@acme.com.',
+    ack: 'Happy to — contact changes need a teammate\u2019s approval, one moment.',
+    tool: 'hubspot_update_contact',
+    title: 'Update contact',
+    desc: 'Janis needs your approval to change the account email.',
+    args: 'hubspot_update_contact · { "contact": "Acme Inc", "email": "dana@acme.com" }',
+    ok: 'Done — the account contact is now dana@acme.com.',
+    no: 'I wasn\u2019t able to update it automatically — the team will verify and follow up.',
+    done: 'Contact updated in HubSpot.',
+  },
+];
+
+/** The demo pauses on the pending card until the visitor acts, then plays
+ * the ending that matches their call. */
+function beatsFor(s: Scenario, decision: Decision | null): Beat[] {
+  const pre: Beat[] = [
+    { kind: 'in', text: s.ask, wait: 350, customer: true },
+    { kind: 'typing', wait: 1400, customer: true },
+    { kind: 'out', text: s.ack, wait: 2400, customer: true },
+    { kind: 'sys', text: `Operator \u26a1 approval requested — ${s.tool}`, wait: 900 },
+    { kind: 'card' },
+  ];
+  if (!decision) return pre;
+  return [
+    ...pre,
+    {
+      kind: 'sys',
+      text: `${decision.you ? 'You' : 'Mike'} \u26a1 action ${decision.ok ? 'approved' : 'denied'}`,
+      wait: 800,
+    },
+    { kind: 'typing', wait: 1300, customer: true },
+    { kind: 'out', text: decision.ok ? s.ok : s.no, wait: 2400, customer: true },
+    { kind: 'sys', text: 'Janis \u26a1 agent resumed', wait: 900 },
+  ];
+}
+
 const STEP_MS = 1700;
-const CARD_STEP = PRE.length; // card is the last PRE beat — visible when step reaches this
+const CARD_STEP = 5; // card is the last pre-decision beat
 
 type Decision = { ok: boolean; you: boolean };
 
@@ -362,6 +451,7 @@ function openWidget() {
  * completed state — the ending is the evidence. */
 function DemoStrip() {
   const [step, setStep] = useState(0);
+  const [scen, setScen] = useState<Scenario>(SCENARIOS[0]);
   const [decision, setDecision] = useState<Decision | null>(null);
   const [visible, setVisible] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -385,8 +475,7 @@ function DemoStrip() {
     return () => io.disconnect();
   }, [visible]);
 
-  const post = decision ? (decision.ok ? POST.approved(decision.you) : POST.denied()) : [];
-  const beats = [...PRE, ...post];
+  const beats = beatsFor(scen, decision);
   const shown = beats.slice(0, step);
   const done = step >= beats.length && !!decision;
 
@@ -420,11 +509,11 @@ function DemoStrip() {
           className={`demo-card${decision ? (decision.ok ? ' approved' : ' denied') : ' waiting'}`}
         >
           <div className="demo-card-head">
-            <span className="demo-card-title">Refund approval</span>
+            <span className="demo-card-title">{scen.title}</span>
             {!decision && <span className="demo-card-turn">Your turn</span>}
           </div>
-          <div className="demo-card-desc">Janis needs your approval to refund order #1042.</div>
-          <div className="demo-card-args">propose_refund · {'{ "order": "#1042", "amount": "49.00" }'}</div>
+          <div className="demo-card-desc">{scen.desc}</div>
+          <div className="demo-card-args">{scen.args}</div>
           {decision ? (
             <div className={`demo-card-done${decision.ok ? '' : ' denied'}`}>
               {decision.ok
@@ -474,7 +563,7 @@ function DemoStrip() {
     const cls = customer ? (b.kind === 'in' ? 'cust-in' : 'cust-out') : b.kind;
     return (
       <div key={i} className={`demo-msg ${cls}`}>
-        {!customer && <div className="demo-who">{b.kind === 'in' ? 'Jordan Lee' : 'AI Agent'}</div>}
+        {!customer && <div className="demo-who">{b.kind === 'in' ? scen.who : 'AI Agent'}</div>}
         {b.text}
       </div>
     );
@@ -482,6 +571,22 @@ function DemoStrip() {
 
   return (
     <>
+      <div className="demo-scenes">
+        {SCENARIOS.map((s) => (
+          <button
+            key={s.key}
+            className={`demo-chip${s.key === scen.key ? ' on' : ''}`}
+            onClick={() => {
+              track('demo_scenario', { scenario: s.key });
+              setScen(s);
+              setStep(0);
+              setDecision(null);
+            }}
+          >
+            {s.label}
+          </button>
+        ))}
+      </div>
       <div className="demo-split" ref={ref}>
         <div className="demo-window">
           <div className="demo-header">
@@ -502,9 +607,7 @@ function DemoStrip() {
         <div className="demo-complete">
           <span className="demo-complete-pill">Handoff complete</span>
           <strong>
-            {decision.ok
-              ? 'Refund approved. Customer notified.'
-              : 'Action denied. Nothing ran without a human.'}
+            {decision.ok ? scen.done : 'Action denied. Nothing ran without a human.'}
           </strong>
           <p className="muted">Janis picked up right where it left off.</p>
           <div className="row" style={{ justifyContent: 'center', gap: 14, alignItems: 'center' }}>
@@ -610,13 +713,23 @@ export default function Landing() {
           </button>
         </div>
         <p className="landing-fine">Free plan available · No credit card required</p>
+        <figure className="demo-window hero-shot">
+          <div className="demo-header">
+            <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
+            <span className="demo-title">The console your team lives in</span>
+          </div>
+          <img
+            src="/img/marketing-console.png"
+            alt="A Janis conversation in the console — the agent's card-based reply, customer context in the side panel, and one-click operator controls"
+          />
+        </figure>
       </section>
 
-      <section className="landing-steps landing-demo">
+      <section className="landing-steps landing-demo" id="demo">
         <h2>Watch the handoff happen</h2>
         <p className="landing-sub">
-          See how Janis asks for help. You’re the human — approve or deny the
-          request yourself.
+          Pick a stack — the same flow plays out in your world. You’re the
+          human: approve or deny the request yourself.
         </p>
         <DemoStrip />
       </section>
@@ -625,6 +738,12 @@ export default function Landing() {
         <section className="landing-steps" key={g.heading}>
           <h2>{g.heading}</h2>
           <p className="landing-sub">{g.sub}</p>
+          {g.shot && (
+            <figure className="demo-window landing-shot">
+              <img src={g.shot.src} alt={g.shot.alt} loading="lazy" />
+              <figcaption className="landing-shot-cap">{g.shot.cap}</figcaption>
+            </figure>
+          )}
           <div className={`landing-grid${g.items.length === 4 ? ' four' : ''}`}>
             {g.items.map((f) => (
               <div key={f.title} className="card landing-card">
