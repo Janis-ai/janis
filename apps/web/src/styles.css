@@ -1773,6 +1773,8 @@ details summary:hover { color: var(--text); }
   .grow, .asset-row > *, .row > * { min-width: 0; }
   .asset-row .grow { overflow-wrap: anywhere; }
   .search-box { min-width: 0; flex-basis: 100%; }
+  /* Inbox row stays single-line: funnel + search share it. */
+  .filters .search-box { flex-basis: auto; flex: 1 1 0; min-width: 0; }
   input, select, textarea { max-width: 100%; }
   /* the title must claim its own line — with min-width:0 + anywhere
      wrapping it can otherwise be squeezed to one character per line */
