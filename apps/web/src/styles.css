@@ -1946,7 +1946,7 @@ details summary:hover { color: var(--text); }
 .demo-chip.on { border-color: var(--accent); color: var(--accent); background: rgba(94,234,212,.07); }
 /* Real-console imagery — framed like the demo windows. */
 .hero-shot { max-width: 880px; margin: 42px auto 0; box-shadow: 0 30px 80px rgba(0,0,0,.5); }
-.hero-shot img { display: block; width: 100%; }
+.hero-shot img, .hero-shot video { display: block; width: 100%; }
 .landing-shot { max-width: 880px; margin: 0 auto 20px; }
 .landing-shot img { display: block; width: 100%; }
 .landing-shot-cap {

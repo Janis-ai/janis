@@ -718,9 +718,11 @@ export default function Landing() {
             <span className="demo-dot" /><span className="demo-dot" /><span className="demo-dot" />
             <span className="demo-title">The console your team lives in</span>
           </div>
-          <img
-            src="/img/marketing-console.png"
-            alt="A Janis conversation in the console — the agent's card-based reply, customer context in the side panel, and one-click operator controls"
+          <video
+            src="/img/marketing-approval.mp4"
+            poster="/img/marketing-console.png"
+            autoPlay muted loop playsInline
+            aria-label="A Janis conversation in the console — the agent's card-based reply, customer context in the side panel, and one-click operator controls"
           />
         </figure>
       </section>
