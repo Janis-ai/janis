@@ -153,7 +153,7 @@ function ContextSwitcher({
   // The popover is position:fixed — the sidebar's overflow-y:auto would clip
   // an absolutely-positioned menu, and .main paints after the sidebar in DOM
   // order. Fixed escapes both; anchored to the button's rect on open.
-  const [popPos, setPopPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [popPos, setPopPos] = useState<{ top: number; left: number; maxH: number }>({ top: 0, left: 0, maxH: 400 });
   useEffect(() => {
     if (!open) return;
     const down = (e: MouseEvent) => {
@@ -172,7 +172,7 @@ function ContextSwitcher({
   const toggle = () => {
     if (!open && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect();
-      setPopPos({ top: r.bottom + 4, left: r.left });
+      setPopPos({ top: r.bottom + 4, left: r.left, maxH: window.innerHeight - r.bottom - 12 });
     }
     setOpen((o) => !o);
   };
@@ -201,7 +201,7 @@ function ContextSwitcher({
         <ChevronsUpDown size={14} className="icon" />
       </button>
       {open && (
-        <div className="ctx-pop" role="menu" style={{ top: popPos.top, left: popPos.left }}>
+        <div className="ctx-pop" role="menu" style={{ top: popPos.top, left: popPos.left, maxHeight: popPos.maxH }}>
           {ws && (
             <>
               <button
