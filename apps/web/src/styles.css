@@ -1320,7 +1320,23 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -24px; padding: 0 24px; }
 
 .conv-layout { display: flex; gap: 16px; height: 100%; }
-.conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; container-name: conv; }
+/* Button fit is a column question, not a viewport one — when the
+   conversation column can't hold labeled buttons they go icon-only,
+   whether the squeeze comes from a phone, the dock, or the details rail. */
+@container conv (max-width: 780px) {
+  .conv-actions .btn-label, .conv-ops .btn-label, .composer-bar .btn-label { display: none; }
+  .conv-actions .btn, .conv-ops.btn { padding: 7px 10px; }
+  .conv-actions, .conv-ops { flex-wrap: wrap; }
+  .snooze-wrap, .sendas-wrap {
+    width: 34px; height: 33px; justify-content: center;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .snooze-wrap:hover, .sendas-wrap:hover { border-color: var(--accent); }
+  .snooze-wrap select, .sendas-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
+  .snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: block; color: var(--muted); }
+  .snooze-wrap.on .snz-ic, .sendas-wrap.on .sendas-ic { color: var(--accent); }
+}
 .conv-side { width: 280px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden; overflow-wrap: break-word; }
 .card.suggestion { border-color: var(--accent); }
 /* The Ask Janis rail claims ~340px — on the conversation screen at mid widths
