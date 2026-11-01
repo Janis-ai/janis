@@ -93,6 +93,16 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-01c — Context switcher keeps the current surface across scope picks
+- Picking an agent / "All agents" used to always land on `/agents/:id`
+  overview or `/conversations`. Now `contextSwitchTarget(pathname, agentId)`
+  in agentContext.ts maps the landing: shared pages (Inbox/Contacts/
+  Campaigns/Reports) re-scope to the same section, agent sub-pages swap
+  the id (`/agents/A/settings` → `/agents/B/settings`), and entity detail
+  (a selected conversation/contact/channel) drops to the section root —
+  the id can't cross into another agent's scope. Scoping OUT to
+  all-agents keeps the open entity. Layout's onGo clears last-agent on
+  any non-/agents/* landing, not just /conversations.
 ## 2026-11-01 — Open alerts render inline in the transcript as dismissible warn boxes
 - ConversationPage: the stacked top alert card (⚠ type — detail + Dismiss
   per row, duplicated the flagged blurbs it summarized) is now a compact
