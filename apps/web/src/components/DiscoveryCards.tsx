@@ -55,7 +55,7 @@ const DISMISS_KEY = 'janis_discovery_dismissed';
 
 /** Feature tour cards on the inbox — each opens Ask Janis with a seeded
  *  question so the answer is the concierge's, not a static blurb. */
-export default function DiscoveryCards() {
+export default function DiscoveryCards({ force = false }: { force?: boolean }) {
   const { data: me } = useMe();
   const [dismissed, setDismissed] = useState(
     () => localStorage.getItem(DISMISS_KEY) === '1',
@@ -63,7 +63,7 @@ export default function DiscoveryCards() {
   const channelId = me?.support_channel_id;
   if (!channelId) return null;
 
-  if (dismissed) {
+  if (dismissed && !force) {
     return (
       <button
         className="btn"

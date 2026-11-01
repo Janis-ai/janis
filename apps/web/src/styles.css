@@ -1314,6 +1314,10 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   margin: 0 -24px; padding: 0 24px 8px;
   background: var(--bg); border-bottom: 1px solid var(--border);
 }
+/* The rows are the scroller on inbox pages — .main locks (flex column +
+   hidden) so a scroll anywhere on the list moves the list, not the page. */
+.layout:has(.inbox-head) .main { display: flex; flex-direction: column; overflow: hidden; }
+.conv-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -24px; padding: 0 24px; }
 
 .conv-layout { display: flex; gap: 16px; height: 100%; }
 .conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
@@ -1589,6 +1593,7 @@ details summary:hover { color: var(--text); }
   .conv-open .transcript { max-height: none; }
   /* Inbox head stays pinned under the mobile-bar instead of .main's top. */
   .inbox-head { top: 49px; margin: 0 -14px; padding: 0 14px 8px; }
+  .conv-list { margin: 0 -14px; padding: 0 14px; }
   /* Details slide-over — the side column leaves the flow and becomes a
      right drawer behind the header's ⓘ. */
   .conv-side {
@@ -1627,7 +1632,6 @@ details summary:hover { color: var(--text); }
   .attn-btn .filter-badge { background: var(--warn); color: #241a00; }
   .attn-btn.primary .filter-badge { background: #06281f; color: var(--accent); }
   /* Onboarding cards and the standalone select-all yield their rows. */
-  .inbox-onboard { display: none; }
   .conv-select-all { display: none; }
   .kb-hints { display: none; }
   .filter-badge {

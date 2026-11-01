@@ -505,12 +505,14 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       <h1 className="page-title">
         {scopeAgent ? `${agents?.agents.find((a) => a.id === scopeAgent)?.name ?? 'Agent'} inbox` : 'Inbox'}
       </h1>
-      {/* Onboarding cards earn their space on desktop; on a phone they're
-          a screenful of chrome between the header and the list. */}
-      <div className="inbox-onboard">
-        <DiscoveryCards />
-        <Onboarding />
-      </div>
+      {/* Tour cards exist only as the empty-state — a working inbox has
+          no room for them, and the re-open stub is gone entirely. */}
+      {!convsPending && !searching && (convList?.length ?? 0) === 0 && (
+        <div className="inbox-onboard">
+          <DiscoveryCards force />
+          <Onboarding />
+        </div>
+      )}
       {drill && (
         <div className="row" style={{ marginBottom: 8 }}>
           <span className="chip">
@@ -711,6 +713,9 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         </div>
       )}
 
+      {/* The list is the scroll region — .main locks when .inbox-head is
+          present, so only rows move. */}
+      <div className="conv-list">
       {searching ? (
         searchPending ? (
           <div className="row" style={{ justifyContent: 'center', marginTop: 24 }}>
@@ -796,6 +801,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           </div>
         </>
       )}
+      </div>
     </>
   );
 }
