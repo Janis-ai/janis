@@ -1,17 +1,17 @@
 // Records the approval-gate flow for the landing hero: open the staged
-// Willa Frost conversation (live pending issue_refund card), approve it,
+// Dana Whitfield conversation (live pending issue_refund card), approve it,
 // and hold while the tool executes + the agent resumes. Playwright video
-// → /tmp/janis-vid/approve.webm, then ffmpeg converts to mp4.
+// → /tmp/janis-vid2/approve.webm, then ffmpeg converts to mp4.
 import { chromium } from 'playwright';
 import { BASE, EMAIL, PASSWORD } from './lib.mjs';
 
-const WS = '69df0b23-a37f-429e-92db-d1a384782f7a'; // Luxe Salon
-const CONV = 'eeeb4277-d056-4f0c-8a93-19392fd0fbe0'; // Willa Frost
+const WS = '83ca6ae2-d76d-42e3-8f03-46b97405dfb2'; // Meridian Airways
+const CONV = 'eeeb4277-d056-4f0c-8a93-19392fd0fbe1'; // Dana Whitfield
 
 const browser = await chromium.launch({ headless: true });
 const ctx = await browser.newContext({
   viewport: { width: 1440, height: 900 },
-  recordVideo: { dir: '/tmp/janis-vid', size: { width: 1440, height: 900 } },
+  recordVideo: { dir: '/tmp/janis-vid2', size: { width: 1440, height: 900 } },
 });
 const req = ctx.request;
 const login = await req.post(`${BASE}/auth/login`, { data: { email: EMAIL, password: PASSWORD } });
@@ -39,4 +39,4 @@ await page.waitForTimeout(2000);
 
 await ctx.close();
 await browser.close();
-console.log('video in /tmp/janis-vid');
+console.log('video in /tmp/janis-vid2');
