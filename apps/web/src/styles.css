@@ -1454,8 +1454,12 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    overrides so the same-specificity icon rules can win when they match. */
 .snooze-wrap, .sendas-wrap { position: relative; display: inline-flex; align-items: center; }
 .snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: none; position: absolute; pointer-events: none; }
-@container conv (max-width: 780px) {
+/* Labels hold until the column is truly tight — past ~560px six labeled
+   * ops buttons can't sit on one row even wrapped, so icons take over. */
+@container conv (max-width: 560px) {
   .conv-actions .btn-label, .conv-ops .btn-label, .composer-bar .btn-label { display: none; }
+}
+@container conv (max-width: 780px) {
   .conv-actions .btn, .conv-ops.btn { padding: 7px 10px; }
   .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
   .conv-ops { flex-wrap: wrap; }
