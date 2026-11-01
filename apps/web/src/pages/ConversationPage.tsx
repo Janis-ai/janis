@@ -17,7 +17,7 @@ import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { Archive, ArchiveRestore, Bot, Brain, ChevronLeft, FlaskConical, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Bot, Brain, ChevronLeft, FlaskConical, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -97,8 +97,13 @@ export default function ConversationPage() {
       el.scrollTop = el.scrollHeight;
     }
   };
+  // Late-loading media grows the transcript while pinned — stick to the
+  // literal bottom. NOT snapToLatest: its tall-inbound top-anchor is for
+  // arrivals (jump-to-latest); firing it on image load yanks a reader at
+  // the bottom back to the top of the last message.
   const snapToBottom = () => {
-    if (stickRef.current) snapToLatest();
+    const el = transcriptRef.current;
+    if (el && stickRef.current) el.scrollTop = el.scrollHeight;
   };
 
   // Optimistic outbound entries + which one currently owns the receipt.
@@ -1572,14 +1577,6 @@ export default function ConversationPage() {
           </div>
         )}
 
-        {canSend && !suggestOpen && !(suggestions?.length > 0) && (
-          <div className="row conv-ops" style={{ marginBottom: 10 }}>
-            <button className="btn" onClick={askSuggestion} disabled={suggest.isPending} title="Suggest a reply" aria-label="Suggest a reply">
-              <Sparkles size={15} /><span className="btn-label">Suggest reply</span>
-            </button>
-          </div>
-        )}
-
         {canSend ? (
           <>
             <Composer
@@ -1590,6 +1587,7 @@ export default function ConversationPage() {
                 pingTyping();
               }}
               onSend={send}
+              onSuggest={suggestOpen || suggestions?.length > 0 ? undefined : askSuggestion}
               onResume={c.state === 'human' ? () => act.mutate('resume') : undefined}
               sendAs={sendAs}
               setSendAs={setSendAs}

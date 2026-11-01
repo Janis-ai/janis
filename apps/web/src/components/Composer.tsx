@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Attachment } from '@janis/shared';
 import { useSavedReplies } from '../api/hooks';
-import { FileText, Image, Paperclip, Smile, X } from 'lucide-react';
+import { Bot, Brain, FileText, Headset, Image, Lock, Paperclip, Smile, Sparkles, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 
 export default function Composer({
@@ -10,6 +10,7 @@ export default function Composer({
   onChange,
   onSend,
   onResume,
+  onSuggest,
   sendAs,
   setSendAs,
   showModeSelect,
@@ -24,6 +25,8 @@ export default function Composer({
   agentId?: string;
   onSend: (attachments: Attachment[]) => void;
   onResume?: () => void;
+  /** AI draft suggestion — lives in the bar as a sparkles icon. */
+  onSuggest?: () => void;
   sendAs: 'human' | 'agent' | 'note' | 'teach';
   setSendAs: (m: 'human' | 'agent' | 'note' | 'teach') => void;
   showModeSelect: boolean;
@@ -41,6 +44,18 @@ export default function Composer({
   const boxRef = useRef<HTMLDivElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [repliesOpen, setRepliesOpen] = useState(false);
+  // Phone width gets terse placeholders + an icon-face mode picker —
+  // the verbose "(Enter sends…)" hint means nothing on a touch keyboard
+  // anyway.
+  const [narrow, setNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 720px)').matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 720px)');
+    const on = (e: MediaQueryListEvent) => setNarrow(e.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const { data: savedReplies } = useSavedReplies(agentId);
@@ -135,6 +150,10 @@ export default function Composer({
     setAttachments([]);
   };
 
+  // Icon face for the mode picker on narrow screens — shows the CURRENT
+  // mode, so a note/teach selection can't hide behind a generic glyph.
+  const ModeIcon = sendAs === 'agent' ? Bot : sendAs === 'note' ? Lock : sendAs === 'teach' ? Brain : Headset;
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -181,12 +200,12 @@ export default function Composer({
           placeholder={
             placeholder ??
             (sendAs === 'agent'
-              ? 'Message the agent will deliver…'
+              ? narrow ? 'As the agent…' : 'Message the agent will deliver…'
               : sendAs === 'note'
-                ? 'Internal note — teammates only…'
+                ? narrow ? 'Internal note…' : 'Internal note — teammates only…'
                 : sendAs === 'teach'
-                  ? 'Teach the agent a fact it should always know…'
-                  : 'Reply as a human… (Enter sends, Shift+Enter for newline)')
+                  ? narrow ? 'Teach the agent…' : 'Teach the agent a fact it should always know…'
+                  : narrow ? 'Reply…' : 'Reply as a human… (Enter sends, Shift+Enter for newline)')
           }
         />
 
@@ -196,6 +215,9 @@ export default function Composer({
           {(savedReplies?.saved_replies.length ?? 0) > 0 && (
             <button type="button" className="btn icon" title="Saved replies" aria-label="Saved replies" onClick={() => setRepliesOpen((o) => !o)}><FileText size={16} /></button>
           )}
+          {onSuggest && (
+            <button type="button" className="btn icon" title="Suggest a reply" aria-label="Suggest a reply" onClick={onSuggest}><Sparkles size={16} /></button>
+          )}
           <input
             ref={fileRef}
             type="file"
@@ -204,16 +226,25 @@ export default function Composer({
             onChange={(e) => e.target.files && void uploadFiles(e.target.files)}
           />
           {showModeSelect && (
-            <select value={sendAs} onChange={(e) => setSendAs(e.target.value as 'human' | 'agent' | 'note' | 'teach')}>
-              <option value="human">as yourself (human)</option>
-              <option value="agent">as the agent</option>
-              <option value="note">🔒 internal note</option>
-              {canTeach && <option value="teach">🧠 teach agent</option>}
-            </select>
+            <div className={`sendas-wrap${sendAs !== 'human' ? ' on' : ''}`}>
+              <ModeIcon size={15} className="sendas-ic" />
+              <select
+                aria-label="Reply as"
+                value={sendAs}
+                onChange={(e) => setSendAs(e.target.value as 'human' | 'agent' | 'note' | 'teach')}
+              >
+                <option value="human">as yourself (human)</option>
+                <option value="agent">as the agent</option>
+                <option value="note">🔒 internal note</option>
+                {canTeach && <option value="teach">🧠 teach agent</option>}
+              </select>
+            </div>
           )}
           <span className="grow" />
           {onResume && (
-            <button className="btn" type="button" onClick={onResume}>Resume agent</button>
+            <button className="btn" type="button" onClick={onResume} title="Resume agent" aria-label="Resume agent">
+              <Bot size={14} /><span className="btn-label">Resume agent</span>
+            </button>
           )}
           <button
             className="btn primary"

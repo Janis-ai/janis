@@ -1482,10 +1482,10 @@ details summary:hover { color: var(--text); }
 /* Filter button's active count — the label carries it on desktop, the
    badge carries it on mobile where the label is gone. */
 .filter-badge { display: none; }
-/* Snooze wraps its select — the select is the visible dropdown on desktop;
-   on mobile it goes invisible and the moon icon is the button face. */
-.snooze-wrap { position: relative; display: inline-flex; align-items: center; }
-.snooze-wrap .snz-ic { display: none; position: absolute; pointer-events: none; }
+/* Snooze + send-as wrap their selects — the select is the visible dropdown
+   on desktop; on mobile it goes invisible and an icon is the button face. */
+.snooze-wrap, .sendas-wrap { position: relative; display: inline-flex; align-items: center; }
+.snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: none; position: absolute; pointer-events: none; }
 
 @media (max-width: 720px) {
   /* Slack-style shell — the sidebar leaves the flow entirely and becomes an
@@ -1567,10 +1567,15 @@ details summary:hover { color: var(--text); }
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   /* Anchored conversation — only the transcript scrolls; the head, action
-     row and composer stay put, and .main never pages. */
-  .layout.conv-open .main { overflow: hidden; }
+     row and composer stay put, and .main never pages. Stacked cards cap at
+     a third of the view and scroll internally so a giant alert can't push
+     the transcript + composer off the screen entirely. */
+  .layout.conv-open .main { overflow: hidden; overscroll-behavior: none; }
   .conv-open .conv-layout { height: 100%; }
   .conv-open .transcript { max-height: none; min-height: 0; }
+  .conv-open .conv-main > * { flex-shrink: 0; }
+  .conv-open .conv-main > .transcript { flex-shrink: 1; flex-grow: 1; min-height: 0; }
+  .conv-open .conv-main > .card { max-height: 32vh; overflow-y: auto; overscroll-behavior: contain; }
   /* Details slide-over — the side column leaves the flow and becomes a
      right drawer behind the header's ⓘ. */
   .conv-side {
@@ -1604,14 +1609,15 @@ details summary:hover { color: var(--text); }
   }
   .conv-ops { gap: 6px; }
   .conv-ops.btn { padding: 7px 10px; }
-  .snooze-wrap {
+  .snooze-wrap, .sendas-wrap {
     width: 34px; height: 33px; justify-content: center;
     background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
   }
-  .snooze-wrap:hover { border-color: var(--accent); }
-  .snooze-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
-  .snooze-wrap .snz-ic { display: block; color: var(--muted); }
-  .snooze-wrap.on .snz-ic { color: var(--accent); }
+  .snooze-wrap:hover, .sendas-wrap:hover { border-color: var(--accent); }
+  .snooze-wrap select, .sendas-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
+  .snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: block; color: var(--muted); }
+  .snooze-wrap.on .snz-ic, .sendas-wrap.on .sendas-ic { color: var(--accent); }
+  .composer-bar .btn-label { display: none; }
   /* Sheets dismiss on outside scroll — the backdrop doesn't consume the
      gesture, it chains to .main while the sheet folds (Layout listens for
      touchmove/wheel over backdrops). Only true modals lock the page. */
