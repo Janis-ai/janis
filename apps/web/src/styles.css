@@ -1423,6 +1423,11 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 /* Button fit is a column question, not a viewport one — when the
    conversation column can't hold labeled buttons they go icon-only,
    whether the squeeze comes from a phone, the dock, or the details rail. */
+/* Base state — the select is the visible control; the icon stays hidden
+   until a narrower context swaps it in. Declared BEFORE the container/media
+   overrides so the same-specificity icon rules can win when they match. */
+.snooze-wrap, .sendas-wrap { position: relative; display: inline-flex; align-items: center; }
+.snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: none; position: absolute; pointer-events: none; }
 @container conv (max-width: 780px) {
   .conv-actions .btn-label, .conv-ops .btn-label, .composer-bar .btn-label { display: none; }
   .conv-actions .btn, .conv-ops.btn { padding: 7px 10px; }
@@ -1616,8 +1621,6 @@ details summary:hover { color: var(--text); }
 .filter-badge { display: none; }
 /* Snooze + send-as wrap their selects — the select is the visible dropdown
    on desktop; on mobile it goes invisible and an icon is the button face. */
-.snooze-wrap, .sendas-wrap { position: relative; display: inline-flex; align-items: center; }
-.snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: none; position: absolute; pointer-events: none; }
 /* Bulk-bar snooze — same moon-over-select trick, sized to the row. */
 .bulk-snz {
   width: 38px; height: 38px; justify-content: center;
@@ -1881,7 +1884,7 @@ details summary:hover { color: var(--text); }
   }
   .layout.dock-open .snooze-wrap:hover, .layout.dock-open .sendas-wrap:hover { border-color: var(--accent); }
   .layout.dock-open .snooze-wrap select, .layout.dock-open .sendas-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
-  .layout.dock-open .snooze-wrap .snz-ic, .layout.dock-open .sendas-wrap .sendas-ic { display: block; color: var(--muted); }
+  .layout.dock-open .snooze-wrap .snz-ic, .layout.dock-open .sendas-wrap .sendas-ic { display: block; position: static; color: var(--muted); }
   .layout.dock-open .snooze-wrap.on .snz-ic, .layout.dock-open .sendas-wrap.on .sendas-ic { color: var(--accent); }
   .layout.dock-open .filter-badge {
     display: inline-flex; align-items: center; justify-content: center;
