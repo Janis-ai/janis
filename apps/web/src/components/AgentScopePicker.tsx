@@ -1,14 +1,9 @@
 import { Bot } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useAgents, useMe } from '../api/hooks';
-import { clearLastAgent, setLastAgent } from '../lib/agentContext';
+import { clearLastAgent, SECTION_TO_WS, setLastAgent } from '../lib/agentContext';
 
-const WS_PATH: Record<string, string> = {
-  inbox: 'conversations',
-  contacts: 'contacts',
-  campaigns: 'campaigns',
-  reports: 'reports',
-};
+const WS_PATH = SECTION_TO_WS;
 
 /** The agent-context control on the shared pages (Inbox, Contacts,
  *  Campaigns, Reports). This is not a local filter — picking an agent puts

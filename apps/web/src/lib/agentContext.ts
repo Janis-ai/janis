@@ -165,6 +165,46 @@ export function agentUnscoped(workspaceId: string): boolean {
   return readAgentMap()[workspaceId] === UNSCOPED;
 }
 
+/** The four shared pages exist in both scopes — workspace path ↔ the
+ *  agent-context section name used in /agents/:id/<section> URLs. */
+const WS_TO_SECTION: Record<string, string> = {
+  conversations: 'inbox',
+  contacts: 'contacts',
+  campaigns: 'campaigns',
+  reports: 'reports',
+};
+export const SECTION_TO_WS = {
+  inbox: 'conversations',
+  contacts: 'contacts',
+  campaigns: 'campaigns',
+  reports: 'reports',
+} as const;
+
+/** Where a context-switcher pick should land so the surface survives the
+ *  re-scope: a shared page maps to the same section on the new scope, an
+ *  agent sub-page swaps the agent id. Entity detail paths (a selected
+ *  conversation, contact or channel) can't follow INTO an agent's scope —
+ *  the id may not belong to it — so agent picks get the section root;
+ *  scoping OUT to all-agents keeps the entity (it's still visible there).
+ *  Everything else falls back to the agent overview / workspace inbox. */
+export function contextSwitchTarget(pathname: string, agentId: string | null): string {
+  const ws = pathname.match(/^\/(conversations|contacts|campaigns|reports)(\/.*)?$/);
+  if (ws) {
+    return agentId ? `/agents/${agentId}/${WS_TO_SECTION[ws[1]]}` : `/${ws[1]}${ws[2] ?? ''}`;
+  }
+  const scoped = pathname.match(/^\/agents\/([^/]+)\/(.+)$/);
+  if (scoped) {
+    const [, id, sub] = scoped;
+    if (id === 'new') return agentId ? `/agents/new/${agentId}` : '/conversations';
+    const section = sub.split('/')[0];
+    const rest = sub.slice(section.length);
+    if (agentId) return `/agents/${agentId}/${section}`;
+    const wsPath = (SECTION_TO_WS as Record<string, string>)[section];
+    return wsPath ? `/${wsPath}${rest}` : '/conversations';
+  }
+  return agentId ? `/agents/${agentId}` : '/conversations';
+}
+
 export function setLastAgent(id: string, workspaceId: string) {
   const map = readAgentMap();
   map[workspaceId] = id;

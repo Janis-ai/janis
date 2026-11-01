@@ -5,7 +5,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { useAgents, useBuildStatus, useMe } from '../api/hooks';
 import { useStream, type StreamAlert } from '../lib/useStream';
-import { clearLastAgent, janisBrain, useContextAgent } from '../lib/agentContext';
+import { clearLastAgent, contextSwitchTarget, janisBrain, useContextAgent } from '../lib/agentContext';
 import { trackOnce } from '../lib/analytics';
 import { playAlertSound } from '../lib/alertSound';
 import { setTabBadge } from '../lib/tabBadge';
@@ -150,6 +150,10 @@ function ContextSwitcher({
   const [wsList, setWsList] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
+  // Scope picks keep the surface — on the Inbox, another agent's row lands
+  // on that agent's inbox; entity detail pages drop to their section root
+  // since the selected item can't cross scope.
+  const { pathname } = useLocation();
   // The popover is position:fixed — the sidebar's overflow-y:auto would clip
   // an absolutely-positioned menu, and .main paints after the sidebar in DOM
   // order. Fixed escapes both; anchored to the button's rect on open.
@@ -207,7 +211,7 @@ function ContextSwitcher({
               <button
                 type="button"
                 className="ctx-item ctx-ws"
-                onClick={() => go('/conversations')}
+                onClick={() => go(contextSwitchTarget(pathname, null))}
               >
                 <span className="ctx-avatar">{(ws.name || '?').slice(0, 1).toUpperCase()}</span>
                 <span className="grow ctx-ws-name">{ws.name}</span>
@@ -271,7 +275,7 @@ function ContextSwitcher({
             <button
               type="button"
               className="ctx-item"
-              onClick={() => go('/conversations')}
+              onClick={() => go(contextSwitchTarget(pathname, null))}
             >
               <Bot size={13} className="ctx-ic" />
               <span className="grow">All agents</span>
@@ -283,7 +287,7 @@ function ContextSwitcher({
               key={a.id}
               type="button"
               className="ctx-item"
-              onClick={() => go(`/agents/${a.id}`)}
+              onClick={() => go(contextSwitchTarget(pathname, a.id))}
             >
               <Bot size={13} className="ctx-ic" />
               <span className="grow">{a.name}</span>
@@ -1208,9 +1212,10 @@ export default function Layout() {
             currentAgentId={ctxAgent ?? undefined}
             planName={billingStatus?.plan_name}
             onGo={(path) => {
-              // The switcher's workspace-header button goes to /conversations —
-              // choosing the workspace means leaving the agent's context.
-              if (path === '/conversations' && data.workspace) clearLastAgent(data.workspace.id);
+              // Workspace picks land outside /agents/* — choosing the
+              // workspace header or "All agents" means leaving the
+              // agent's context wherever the switch lands.
+              if (!path.startsWith('/agents/') && data.workspace) clearLastAgent(data.workspace.id);
               navigate(path);
             }}
             onSwitchWorkspace={(id) => void switchWorkspace(id)}

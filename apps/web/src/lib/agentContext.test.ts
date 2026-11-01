@@ -5,6 +5,7 @@ import {
   agentUnscoped,
   clearLastAgent,
   contextAgentStale,
+  contextSwitchTarget,
   forgetLastAgent,
   janisBrain,
   lastAgentId,
@@ -83,6 +84,49 @@ describe('janisBrain', () => {
     expect(janisBrain(agent(false, 'monitor'))).toBe(false);
     expect(janisBrain(null)).toBe(false);
     expect(janisBrain(undefined)).toBe(false);
+  });
+});
+
+describe('contextSwitchTarget', () => {
+  const a = '7b90d58b-2253-495e-bc61-a575bf958c5b';
+  const b = 'a4b7f9cf-90b8-4e47-8d9f-d5ea4b6f1f9f';
+
+  it('keeps the shared section across a scope switch', () => {
+    expect(contextSwitchTarget('/conversations', a)).toBe(`/agents/${a}/inbox`);
+    expect(contextSwitchTarget(`/agents/${a}/inbox`, b)).toBe(`/agents/${b}/inbox`);
+    expect(contextSwitchTarget(`/agents/${a}/inbox`, null)).toBe('/conversations');
+    expect(contextSwitchTarget('/contacts', a)).toBe(`/agents/${a}/contacts`);
+    expect(contextSwitchTarget(`/agents/${a}/contacts`, null)).toBe('/contacts');
+    expect(contextSwitchTarget('/campaigns', a)).toBe(`/agents/${a}/campaigns`);
+    expect(contextSwitchTarget(`/agents/${a}/reports`, null)).toBe('/reports');
+  });
+
+  it('drops entity detail to the section root — ids can\'t cross into an agent scope', () => {
+    expect(contextSwitchTarget('/conversations/conv-1', a)).toBe(`/agents/${a}/inbox`);
+    expect(contextSwitchTarget(`/agents/${a}/inbox/conv-1`, b)).toBe(`/agents/${b}/inbox`);
+    expect(contextSwitchTarget('/contacts/c-1', a)).toBe(`/agents/${a}/contacts`);
+    expect(contextSwitchTarget(`/agents/${a}/channels/ch-1`, b)).toBe(`/agents/${b}/channels`);
+  });
+
+  it('keeps an open entity when scoping OUT to all-agents — it stays visible there', () => {
+    expect(contextSwitchTarget(`/agents/${a}/inbox/conv-1`, null)).toBe('/conversations/conv-1');
+    expect(contextSwitchTarget(`/agents/${a}/contacts/c-1`, null)).toBe('/contacts/c-1');
+  });
+
+  it('swaps the agent id on agent-only surfaces', () => {
+    expect(contextSwitchTarget(`/agents/${a}/settings`, b)).toBe(`/agents/${b}/settings`);
+    expect(contextSwitchTarget(`/agents/${a}/knowledge`, b)).toBe(`/agents/${b}/knowledge`);
+    expect(contextSwitchTarget(`/agents/${a}`, b)).toBe(`/agents/${b}`);
+  });
+
+  it('stays in the builder for the new agent; agent-only surfaces unscope to the inbox', () => {
+    expect(contextSwitchTarget(`/agents/new/${a}`, b)).toBe(`/agents/new/${b}`);
+    expect(contextSwitchTarget(`/agents/${a}/settings`, null)).toBe('/conversations');
+  });
+
+  it('falls back to overview / inbox off the scoped surfaces', () => {
+    expect(contextSwitchTarget('/billing', a)).toBe(`/agents/${a}`);
+    expect(contextSwitchTarget('/settings', null)).toBe('/conversations');
   });
 });
 
