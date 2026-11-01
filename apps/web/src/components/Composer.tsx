@@ -10,6 +10,7 @@ export default function Composer({
   onChange,
   onSend,
   onResume,
+  onTakeover,
   onSuggest,
   sendAs,
   setSendAs,
@@ -25,6 +26,9 @@ export default function Composer({
   agentId?: string;
   onSend: (attachments: Attachment[]) => void;
   onResume?: () => void;
+  /** Hand the thread to the human — pauses the agent; the button next to
+   *  Send toggles Take over ⇄ Resume agent off `state === 'human'`. */
+  onTakeover?: () => void;
   /** AI draft suggestion — lives in the bar as a sparkles icon. */
   onSuggest?: () => void;
   sendAs: 'human' | 'agent' | 'note' | 'teach';
@@ -241,9 +245,16 @@ export default function Composer({
             </div>
           )}
           <span className="grow" />
-          {onResume && (
-            <button className="btn" type="button" onClick={onResume} title="Resume agent" aria-label="Resume agent">
-              <Bot size={14} /><span className="btn-label">Resume agent</span>
+          {(onResume || onTakeover) && (
+            <button
+              className="btn"
+              type="button"
+              onClick={onResume ?? onTakeover}
+              title={onResume ? 'Resume agent — hand the thread back to the AI' : 'Take over — pause the agent and reply yourself'}
+              aria-label={onResume ? 'Resume agent' : 'Take over'}
+            >
+              {onResume ? <Bot size={14} /> : <Headset size={14} />}
+              <span className="btn-label">{onResume ? 'Resume agent' : 'Take over'}</span>
             </button>
           )}
           <button

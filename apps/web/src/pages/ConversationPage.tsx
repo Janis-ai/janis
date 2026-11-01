@@ -1691,57 +1691,36 @@ export default function ConversationPage() {
         {/* Footer pins to the viewport bottom on phones while the page
             scrolls above it — composer or the ops row, whichever renders. */}
         <div className="conv-foot">
-        {canSend ? (
-          <>
-            <Composer
-              agentId={c.agent_id}
-              value={draft}
-              onChange={(v) => {
-                setDraft(v);
-                pingTyping();
-              }}
-              onSend={send}
-              onSuggest={suggestOpen || suggestions?.length > 0 ? undefined : askSuggestion}
-              onResume={c.state === 'human' ? () => act.mutate('resume') : undefined}
-              sendAs={sendAs}
-              setSendAs={setSendAs}
-              showModeSelect={true}
-              canTeach={canTeach}
-              sending={outbox.some((o) => o.status === 'pending')}
-            />
-            {c.state !== 'human' && (
-              <button className="btn conv-ops" style={{ marginTop: 8 }} onClick={() => setSendAs('human')} title="Cancel" aria-label="Cancel">
-                <X size={15} /><span className="btn-label">Cancel</span>
-              </button>
-            )}
-          </>
+        {/* Composer is always up for non-archived threads — the reply-as
+            dropdown inside it covers agent/note/teach modes, and the Take
+            over ⇄ Resume toggle lives next to Send. Ops row is gone. */}
+        {c.state !== 'archived' ? (
+          <Composer
+            agentId={c.agent_id}
+            value={draft}
+            onChange={(v) => {
+              setDraft(v);
+              pingTyping();
+            }}
+            onSend={send}
+            onSuggest={suggestOpen || suggestions?.length > 0 ? undefined : askSuggestion}
+            onResume={c.state === 'human' ? () => act.mutate('resume') : undefined}
+            onTakeover={
+              c.state !== 'human'
+                ? () => {
+                    setSendAs('human');
+                    act.mutate('takeover');
+                  }
+                : undefined
+            }
+            sendAs={sendAs}
+            setSendAs={setSendAs}
+            showModeSelect={true}
+            canTeach={canTeach}
+            sending={outbox.some((o) => o.status === 'pending')}
+          />
         ) : (
-          <div className="row conv-ops">
-            {c.state !== 'archived' && (
-              <>
-                <button className="btn primary" onClick={() => act.mutate('takeover')} title="Take over — reply as yourself" aria-label="Take over">
-                  <Headset size={15} /><span className="btn-label">Take over</span>
-                </button>
-                <button
-                  className="btn"
-                  title="Reply as the agent — the customer sees no human takeover"
-                  aria-label="Reply as the agent"
-                  onClick={() => { setSendAs('agent'); }}
-                >
-                  <Bot size={15} /><span className="btn-label">Reply as the agent</span>
-                </button>
-                <button className="btn" onClick={() => { setSendAs('note'); }} title="Internal note — only your team sees it" aria-label="Internal note">
-                  <Lock size={15} /><span className="btn-label">Internal note</span>
-                </button>
-                {canTeach && (
-                  <button className="btn" onClick={() => { setSendAs('teach'); }} title="Teach the agent — store guidance for future replies" aria-label="Teach the agent">
-                    <Brain size={15} /><span className="btn-label">Teach agent</span>
-                  </button>
-                )}
-              </>
-            )}
-            {c.state === 'archived' && <span className="muted">Archived</span>}
-          </div>
+          <div className="row conv-ops"><span className="muted">Archived</span></div>
         )}
         </div>
       </div>
