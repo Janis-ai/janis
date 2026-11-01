@@ -170,7 +170,18 @@ export function convListConditions(
   }
   if (q.assignee === 'me') conditions.push(eq(conversations.assigneeId, userId));
   if (q.attention) {
-    conditions.push(inArray(conversations.state, ['needs_human', 'human']));
+    // Anything asking for a human: needs_human/human threads OR any thread
+    // carrying an open alert (same set the inbox's orange dot draws).
+    conditions.push(
+      or(
+        inArray(conversations.state, ['needs_human', 'human']),
+        sql`exists (
+          select 1 from ${alerts}
+          where ${alerts.conversationId} = ${conversations.id}
+            and ${alerts.status} = 'open'
+        )`,
+      )!,
+    );
   }
   return conditions;
 }

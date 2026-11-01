@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
-import { useAttentionCount, useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
+import { useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
 import { Avatar, displayName, Empty, Md, SearchInput, StateBadge, surfaceLabel, timeAgo } from '../components/bits';
 import Onboarding from '../components/Onboarding';
@@ -278,7 +278,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const knownTags = [...new Set((convList ?? []).flatMap((c) => c.tags ?? []))].sort();
   const { data: agents, isPending: agentsPending } = useAgents();
   const { data: views } = useViews();
-  const { data: attn } = useAttentionCount();
   const { data: hits, isPending: searchPending } = useSearch(query, {
     attention: tab === 'attention' || undefined,
     ...filterParams,
@@ -583,9 +582,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
                       onChange={() => setTab(tab === 'attention' ? 'all' : 'attention')}
                     />
                     Needs attention
-                    {(attn?.count ?? 0) > 0 && (
-                      <span className="filter-badge">{attn!.count}</span>
-                    )}
                   </label>
                 </div>
                 {FILTER_GROUPS.map((g) => {

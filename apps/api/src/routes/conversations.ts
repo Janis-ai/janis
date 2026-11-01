@@ -188,7 +188,14 @@ export function conversationRoutes(db: Db) {
           and(
             ...scope,
             ...agentCond,
-            inArray(conversations.state, ['needs_human', 'human']),
+            or(
+              inArray(conversations.state, ['needs_human', 'human']),
+              sql`exists (
+                select 1 from ${alerts}
+                where ${alerts.conversationId} = ${conversations.id}
+                  and ${alerts.status} = 'open'
+              )`,
+            ),
             // a test chat flipping needs_human is the suite working, not a
             // customer waiting — the badge must not cry wolf
             sql`not ${TEST_CONV}`,
@@ -227,6 +234,11 @@ export function conversationRoutes(db: Db) {
             or(
               inArray(conversations.state, ['needs_human', 'human']),
               eq(conversations.isUnread, true),
+              sql`exists (
+                select 1 from ${alerts}
+                where ${alerts.conversationId} = ${conversations.id}
+                  and ${alerts.status} = 'open'
+              )`,
             ),
             sql`not ${TEST_CONV}`,
             sql`not ${MERCHANT_CONV}`,
