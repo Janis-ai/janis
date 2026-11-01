@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode 
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_INTENTS } from '@janis/shared';
-import type { Attachment, Conversation, ConversationState, Message } from '@janis/shared';
+import type { Alert, Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
 import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, StateBadge, surfaceLabel } from '../components/bits';
@@ -12,6 +12,7 @@ import { CorrectThisCard } from '../components/CorrectThis';
 import { type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 import { useScenarioMatch } from '../lib/scenarioMatch';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
+import { ALERT_LABELS } from '../components/Layout';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
@@ -24,6 +25,17 @@ const WHO: Record<Message['direction'], string> = {
   out: 'Agent',
   human: 'Operator',
 };
+
+/** Alert type -> the transcript flag the same event writes. Anchored alerts
+ *  wrap that row in the warn box; dismissing just unwraps it. */
+const ALERT_FLAG: Partial<Record<Alert['type'], keyof Message['flags']>> = {
+  failure: 'failure',
+  help_request: 'help_requested',
+  handoff_offer: 'handoff_offer',
+  custom: 'custom_alert',
+};
+
+const alertLabel = (a: Alert) => ALERT_LABELS[a.type] ?? a.type.replaceAll('_', ' ');
 
 /** Canonical transcript renderer lives in components/bits (mdSpans) — shared
  *  with the embedded Shopify inbox. */
@@ -769,6 +781,41 @@ export default function ConversationPage() {
   const extraProfile = Object.entries(p).filter(([k]) => !KNOWN.has(k));
   const agent = agents?.agents.find((a) => a.id === c.agent_id);
   const openAlerts = alerts.filter((a) => a.status === 'open');
+  // Anchor each open alert to the transcript row its event wrote — flagged
+  // system lines (handoffs, failures, offers, custom alert text), the
+  // internal rule_trigger note rule/sweeper alerts stamp with the same
+  // detail, or the pending-approval card. Anything left over renders as a
+  // synthetic warn box sorted in at the alert's timestamp.
+  const loadedMsgs = win ? win.msgs : [...older, ...messages];
+  const alertAnchor = new Map<string, string>(); // alert id -> message id
+  const orphanAlerts: Alert[] = [];
+  for (const a of openAlerts) {
+    const at = Date.parse(a.created_at);
+    const flag = ALERT_FLAG[a.type];
+    const cands = flag
+      ? loadedMsgs.filter((m) => m.flags[flag])
+      : a.type === 'approval_request'
+        ? loadedMsgs.filter(
+            (m) => (m.payload.action as { status?: string } | undefined)?.status === 'pending',
+          )
+        : loadedMsgs.filter(
+            (m) =>
+              m.payload.internal === true &&
+              m.payload.event === 'rule_trigger' &&
+              !!a.detail &&
+              (m.text ?? '').includes(a.detail),
+          );
+    const anchor = cands.sort(
+      (x, y) => Math.abs(Date.parse(x.created_at) - at) - Math.abs(Date.parse(y.created_at) - at),
+    )[0];
+    if (anchor) alertAnchor.set(a.id, anchor.id);
+    else orphanAlerts.push(a);
+  }
+  const msgAlert = new Map<string, Alert>();
+  for (const a of openAlerts) {
+    const mid = alertAnchor.get(a.id);
+    if (mid) msgAlert.set(mid, a);
+  }
   const canSend = c.state === 'human' || sendAs === 'agent' || sendAs === 'note' || sendAs === 'teach';
   const canTeach = me?.user.role === 'admin';
 
@@ -795,8 +842,9 @@ export default function ConversationPage() {
   }
   const visibleOutbox = outbox.filter((o) => !echoFor.has(o.localId));
   const items = [
-    ...(win ? win.msgs : [...older, ...messages]).map((m) => ({ key: m.id, ts: Date.parse(m.created_at), kind: 'msg' as const, m })),
+    ...loadedMsgs.map((m) => ({ key: m.id, ts: Date.parse(m.created_at), kind: 'msg' as const, m })),
     ...visibleOutbox.map((o) => ({ key: o.localId, ts: o.ts, kind: 'out' as const, o })),
+    ...orphanAlerts.map((a) => ({ key: `alert:${a.id}`, ts: Date.parse(a.created_at), kind: 'alert' as const, a })),
   ].sort((a, b) => a.ts - b.ts);
 
   // A .who label opens each run of consecutive same-sender messages;
@@ -804,6 +852,7 @@ export default function ConversationPage() {
   // re-introduces its author. Outbox entries key like the stored rows they
   // become so a pending send groups with its own stack.
   const senderKey = (it: (typeof items)[number]): string => {
+    if (it.kind === 'alert') return `sys:${it.a.id}`;
     if (it.kind === 'out') {
       if (it.o.mode === 'note' || it.o.mode === 'teach') return `sys:${it.o.localId}`;
       return `m:${it.o.mode === 'agent' ? 'out' : 'human'}:${me?.user.id ?? ''}`;
@@ -829,7 +878,9 @@ export default function ConversationPage() {
         ? it.m.direction !== 'in' &&
           (it.m.payload.delivered === true ||
             (receiptFor.current !== null && echoFor.get(receiptFor.current)?.id === it.m.id))
-        : (it.o.mode === 'human' || it.o.mode === 'agent') && it.o.status === 'delivered';
+        : it.kind === 'out' &&
+          (it.o.mode === 'human' || it.o.mode === 'agent') &&
+          it.o.status === 'delivered';
     if (delivered) lastDeliveredIdx = i;
   });
 
@@ -852,6 +903,15 @@ export default function ConversationPage() {
     const p = new URLSearchParams(searchParams);
     p.set('msg', mid);
     setSearchParams(p, { replace: true });
+  };
+  // Chip click: anchored alerts ride the ?msg= deep link (loads history if
+  // the row is outside the window); synthetic boxes always render, so just
+  // center + flash them.
+  const jumpToAlert = (a: Alert) => {
+    const mid = alertAnchor.get(a.id);
+    if (mid) return jumpToHit(mid);
+    stickRef.current = false;
+    setHighlight(`alert:${a.id}`);
   };
   const markHit = (text: string | null): ReactNode => {
     const t = text ?? '';
@@ -1096,21 +1156,16 @@ export default function ConversationPage() {
         )}
 
         {openAlerts.length > 0 && (
-          <div className="card" style={{ borderColor: 'var(--warn)', marginTop: 8 }}>
+          <div className="alert-strip">
             {openAlerts.map((a) => (
-              <div key={a.id} className="row muted">
-                <span className="grow">
-                  ⚠ {a.type.replace('_', ' ')}{a.detail ? ` — ${a.detail}` : ''}
-                </span>
-                <button
-                  className="btn sm"
-                  aria-label={`Dismiss ${a.type.replace('_', ' ')} alert`}
-                  disabled={resolveAlert.isPending}
-                  onClick={() => resolveAlert.mutate(a.id)}
-                >
-                  Dismiss
-                </button>
-              </div>
+              <button
+                key={a.id}
+                className="alert-chip"
+                title={a.detail ?? alertLabel(a)}
+                onClick={() => jumpToAlert(a)}
+              >
+                ⚠ {alertLabel(a)}
+              </button>
             ))}
           </div>
         )}
@@ -1186,6 +1241,36 @@ export default function ConversationPage() {
                 </Fragment>
               );
             }
+            if (item.kind === 'alert') {
+              const a = item.a;
+              const aid = `alert:${a.id}`;
+              return (
+                <div
+                  key={aid}
+                  data-mid={aid}
+                  className={`msg system alert-open${highlight === aid ? ' msg-hit' : ''}`}
+                >
+                  <div>
+                    ⚠ {alertLabel(a)}
+                    {a.detail ? ` — ${a.detail}` : ''}
+                    <span className="time" title={new Date(a.created_at).toLocaleString()}>
+                      {' '}· {fmtTime(a.created_at)}
+                    </span>
+                  </div>
+                  <div className="alert-open-foot">
+                    <span className="alert-open-tag">needs review</span>
+                    <button
+                      className="btn sm"
+                      aria-label={`Dismiss ${alertLabel(a)} alert`}
+                      disabled={resolveAlert.isPending}
+                      onClick={() => resolveAlert.mutate(a.id)}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                </div>
+              );
+            }
             const m = item.m;
             // The customer's message this reply answers — pairs Correct
             // this and Save as scenario the same way the test chat does.
@@ -1226,7 +1311,7 @@ export default function ConversationPage() {
             <div
               key={m.id}
               data-mid={m.id}
-              className={`msg ${isSystem ? 'system' : m.direction}${highlight === m.id ? ' msg-hit' : ''}`}
+              className={`msg ${isSystem ? 'system' : m.direction}${msgAlert.has(m.id) ? ' alert-open' : ''}${highlight === m.id ? ' msg-hit' : ''}`}
             >
               {(!isSystem || isInternal) && showWho && (
                 <div className="who">
@@ -1458,6 +1543,25 @@ export default function ConversationPage() {
                   </>
                 );
               })() : null}
+              {(() => {
+                const a = msgAlert.get(m.id);
+                // The pending-action card's own Approve/Deny resolves this
+                // alert — a third button would just be noise.
+                if (!a || a.type === 'approval_request') return null;
+                return (
+                  <div className="alert-open-foot">
+                    <span className="alert-open-tag">needs review</span>
+                    <button
+                      className="btn sm"
+                      aria-label={`Dismiss ${alertLabel(a)} alert`}
+                      disabled={resolveAlert.isPending}
+                      onClick={() => resolveAlert.mutate(a.id)}
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                );
+              })()}
             </div>
             {m.direction === 'out' && !isSystem && !!m.payload.inspector && (
               <div className="inspector-wrap">

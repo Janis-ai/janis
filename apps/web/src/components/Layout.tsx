@@ -40,7 +40,7 @@ interface Toast {
   url: string;
 }
 
-const ALERT_LABELS: Record<string, string> = {
+export const ALERT_LABELS: Record<string, string> = {
   failure: 'Agent failure',
   help_request: 'Handoff requested',
   handoff_offer: 'Agent offered a human',

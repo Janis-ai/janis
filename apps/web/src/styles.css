@@ -1009,6 +1009,24 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   align-self: center; background: none; border: none; padding: 2px 12px;
   max-width: 90%; color: var(--muted); font-style: italic; font-size: 13px; text-align: center;
 }
+/* Open alerts wear the warn box inline, on the transcript row the event
+   wrote — dismissing unwraps it and leaves the line. The strip above the
+   transcript is just type chips that scroll here. */
+.alert-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.alert-chip {
+  font-size: 12px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--warn); color: var(--warn); background: none;
+}
+.alert-chip:hover { background: var(--panel-2); }
+.msg.alert-open {
+  border: 1px solid var(--warn); border-radius: 12px; padding: 8px 14px;
+}
+.alert-open-foot {
+  display: flex; align-items: center; gap: 8px; margin-top: 6px;
+  font-style: normal; text-align: left;
+}
+.alert-open-tag { font-size: 11px; color: var(--warn); }
+.alert-open-foot .btn { margin-left: auto; }
 .md-code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em;
   background: rgba(127, 127, 127, 0.16); padding: 0 4px; border-radius: 4px;
