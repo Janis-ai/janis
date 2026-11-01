@@ -1319,8 +1319,14 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .layout:has(.inbox-head) .main { display: flex; flex-direction: column; overflow: hidden; }
 .conv-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -24px; padding: 0 24px; }
 
-.conv-layout { display: flex; gap: 16px; height: 100%; }
+.conv-layout { display: flex; gap: 16px; height: 100%; min-height: 100%; }
 .conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; container-name: conv; }
+/* Footer anchoring needs a definite-height chain: .main becomes a column
+   flex so conv-layout's used height is definite, letting conv-main's
+   min-height:100% resolve and margin-top:auto push the foot down. */
+.layout.conv-open .main { display: flex; flex-direction: column; }
+.conv-open .conv-layout { flex: 1 0 auto; }
+.conv-open .conv-main { min-height: 100%; }
 /* Button fit is a column question, not a viewport one — when the
    conversation column can't hold labeled buttons they go icon-only,
    whether the squeeze comes from a phone, the dock, or the details rail. */
@@ -1339,8 +1345,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   /* Footer anchors to the viewport bottom whenever the column is narrow —
      opaque, and bled past .main's padding so nothing shows beneath it. */
   .conv-foot {
-    position: sticky; bottom: 0; z-index: 20;
-    margin: 0 -24px -24px; padding: 8px 24px calc(24px + env(safe-area-inset-bottom));
+    position: sticky; bottom: 0; z-index: 20; margin-top: auto;
+    margin-left: -24px; margin-right: -24px;
+    padding: 8px 24px calc(24px + env(safe-area-inset-bottom));
     background: var(--bg); border-top: 1px solid var(--border);
   }
 }
@@ -1638,8 +1645,9 @@ details summary:hover { color: var(--text); }
   .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
   /* Same bottom anchor at phone widths, sized to .main's 14px padding. */
   .conv-foot {
-    position: sticky; bottom: 0; z-index: 20;
-    margin: 0 -14px -14px; padding: 8px 14px calc(14px + env(safe-area-inset-bottom));
+    position: sticky; bottom: 0; z-index: 20; margin-top: auto;
+    margin-left: -14px; margin-right: -14px;
+    padding: 8px 14px calc(14px + env(safe-area-inset-bottom));
     background: var(--bg); border-top: 1px solid var(--border);
   }
   /* Search and the utility icons share one row; utilities go icon-only,
