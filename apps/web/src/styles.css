@@ -1355,12 +1355,12 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    only scroller, head stays up top, foot is a static block at the
    bottom of the column. No sticky, no bleeds, nothing can show
    through or stack beneath. */
-.layout.conv-open .main { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+.layout.conv-open .main { display: flex; flex-direction: column; overflow: hidden; padding-top: 0; padding-bottom: 0; }
 .conv-open .conv-layout { flex: 1 1 auto; min-height: 0; }
 .conv-open .conv-main { min-height: 0; }
 .conv-open .transcript { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-.conv-actions { flex-wrap: nowrap; }
-.conv-foot { flex-shrink: 0; padding-bottom: 14px; }
+.conv-actions { flex-wrap: nowrap; margin-top: 12px; }
+.conv-foot { flex-shrink: 0; padding: 10px 0 14px; }
 /* Stacked cards (alerts, suggestion) cap instead of squeezing the
    transcript out of the column — they scroll within themselves. */
 .conv-open .conv-main > .card { flex-shrink: 0; max-height: 34vh; overflow-y: auto; }
@@ -1370,7 +1370,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 @container conv (max-width: 780px) {
   .conv-actions .btn-label, .conv-ops .btn-label, .composer-bar .btn-label { display: none; }
   .conv-actions .btn, .conv-ops.btn { padding: 7px 10px; }
-  .conv-actions { flex-wrap: nowrap; }
+  .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
   .conv-ops { flex-wrap: wrap; }
   .snooze-wrap, .sendas-wrap {
     width: 34px; height: 33px; justify-content: center;
@@ -1774,7 +1774,7 @@ details summary:hover { color: var(--text); }
 @media (max-width: 1100px) {
   .conv-actions .btn-label, .conv-ops .btn-label, .composer-bar .btn-label, .filters .btn-label { display: none; }
   .conv-actions .btn, .conv-ops.btn, .filters button.btn { padding: 7px 10px; }
-  .conv-actions { flex-wrap: nowrap; }
+  .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
   .conv-ops { flex-wrap: wrap; }
   .snooze-wrap, .sendas-wrap {
     width: 34px; height: 33px; justify-content: center;
@@ -1799,7 +1799,7 @@ details summary:hover { color: var(--text); }
   .layout.dock-open .composer-bar .btn-label,
   .layout.dock-open .filters .btn-label { display: none; }
   .layout.dock-open .conv-actions .btn, .layout.dock-open .conv-ops.btn { padding: 7px 10px; }
-  .layout.dock-open .conv-actions { flex-wrap: nowrap; }
+  .layout.dock-open .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
   .layout.dock-open .conv-ops { flex-wrap: wrap; }
   .layout.dock-open .snooze-wrap, .layout.dock-open .sendas-wrap {
     width: 34px; height: 33px; justify-content: center;
