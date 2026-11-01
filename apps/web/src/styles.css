@@ -1790,7 +1790,7 @@ details summary:hover { color: var(--text); }
   }
   .snooze-wrap:hover, .sendas-wrap:hover { border-color: var(--accent); }
   .snooze-wrap select, .sendas-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
-  .snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: block; color: var(--muted); }
+  .snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: block; position: static; color: var(--muted); }
   .snooze-wrap.on .snz-ic, .sendas-wrap.on .sendas-ic { color: var(--accent); }
   .composer-bar .btn-label { display: none; }
   /* Sheets dismiss on outside scroll — the backdrop doesn't consume the
@@ -1856,7 +1856,7 @@ details summary:hover { color: var(--text); }
   }
   .snooze-wrap:hover, .sendas-wrap:hover { border-color: var(--accent); }
   .snooze-wrap select, .sendas-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; }
-  .snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: block; color: var(--muted); }
+  .snooze-wrap .snz-ic, .sendas-wrap .sendas-ic { display: block; position: static; color: var(--muted); }
   .snooze-wrap.on .snz-ic, .sendas-wrap.on .sendas-ic { color: var(--accent); }
   .filter-badge {
     display: inline-flex; align-items: center; justify-content: center;
