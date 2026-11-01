@@ -94,6 +94,28 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 
 ## Recently shipped (Oct 29–30, 2026)
 
+**Mobile conversation + inbox pass (Oct 31):** second wave on the phone
+surface. `.conv-open` is truly anchored — `.main` locks, the head/actions/
+composer can't shrink, and stacked cards cap at 32vh so a giant alert
+can't push the transcript + composer off-screen (was: page clipped,
+nothing reachable). Details live in a ⓘ-opened right drawer ordered
+Status → Assign → Details → Intent/Tags → Customer; the header's state
+badge opens it. Operator actions and inbox chrome are icon-first
+(`.btn-label` spans hide ≤720): snooze + reply-as selects get icon faces
+(`.snooze-wrap`/`.sendas-wrap` — invisible select over a glyph showing
+the CURRENT value), suggest-reply moved into the composer bar, and
+composer placeholders go terse via matchMedia. Inbox header collapsed to
+one row: All / attention-icon(+count via useAttentionCount) / funnel /
+AgentScopePicker, search last via flex `order`; onboarding cards,
+select-all row and keyboard hints hide on mobile. Sheet dismissal model:
+a scroll landing on a sheet backdrop folds it while the gesture keeps
+scrolling the page (document-level touchmove/wheel → el.click(); modals
+still lock `.main`). Two scroll bugs fixed: scroll-chaining under
+backdrops, and `snapToBottom` on image load no longer calls
+`snapToLatest`'s tall-inbound top-anchor — pinned readers at the bottom
+were being yanked to the top of the last message (top-anchor survives
+only on explicit jump-to-latest).
+
 **Landing page revision pass (Oct 31):** `Landing.tsx` rewritten to match
 the shipped product — the flat 8-card feature grid became four themed
 sections: "One front line, every channel" (inbox now lists Gmail/Outlook
