@@ -1678,7 +1678,7 @@ details summary:hover { color: var(--text); }
   .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
   /* Phone padding for the static foot block. */
   .conv-foot {
-    margin: 0 -14px -14px; padding: 8px 14px calc(14px + env(safe-area-inset-bottom));
+    margin: 0 -14px; padding: 8px 14px calc(18px + env(safe-area-inset-bottom));
     background: var(--bg);
   }
   /* Search and the utility icons share one row; utilities go icon-only,
