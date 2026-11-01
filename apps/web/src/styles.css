@@ -554,6 +554,26 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 }
 .filter-opt:hover { background: var(--panel-2); }
 .filter-pop input[type="checkbox"] { accent-color: var(--accent); margin: 0; }
+.filter-view-row { display: flex; align-items: center; gap: 4px; }
+.filter-view-name {
+  flex: 1; min-width: 0; padding: 4px 10px 4px 24px; font-size: 13px;
+  color: var(--text); text-align: left; background: none; border: 0;
+  border-radius: 6px; cursor: pointer;
+}
+.filter-view-name:hover { background: var(--panel-2); }
+.filter-view-del {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%;
+  background: none; color: var(--muted); cursor: pointer;
+}
+.filter-view-del:hover { color: var(--text); background: var(--panel-2); }
+.filter-save-view {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 7px 10px; font-size: 12px; font-weight: 600;
+  color: var(--accent); background: none; border: 0; cursor: pointer;
+  border-top: 1px solid var(--border); text-align: left;
+}
+.filter-save-view:hover { background: var(--panel-2); }
 .filter-foot {
   display: flex; align-items: center; justify-content: space-between;
   gap: 8px; padding: 8px 10px 2px; border-top: 1px solid var(--border);
@@ -1343,8 +1363,6 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 /* Reading order is filter→views→save→search: the funnel leads, the
    view picker and save action follow, search anchors the far end. */
 .filters .src-menu-wrap { order: 1; }
-.filters > select { order: 2; }
-.filters .save-view-btn { order: 3; }
 /* One row, one height — buttons, selects and inputs all 38px. */
 .filters .btn, .filters select, .filters .search-box, .filters .scope-picker { height: 38px; box-sizing: border-box; }
 .filters .search-box { padding-top: 0; padding-bottom: 0; }
@@ -1740,8 +1758,6 @@ details summary:hover { color: var(--text); }
 /* Reading order is filter→views→save→search: the funnel leads, the
    view picker and save action follow, search anchors the far end. */
 .filters .src-menu-wrap { order: 1; }
-.filters > select { order: 2; }
-.filters .save-view-btn { order: 3; }
 /* One row, one height — buttons, selects and inputs all 38px. */
 .filters .btn, .filters select, .filters .search-box, .filters .scope-picker { height: 38px; box-sizing: border-box; }
 .filters .search-box { padding-top: 0; padding-bottom: 0; }

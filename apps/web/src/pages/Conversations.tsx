@@ -338,10 +338,11 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     void qc.invalidateQueries({ queryKey: ['views'] });
   };
 
-  const deleteView = async () => {
-    if (!activeView) return;
-    await api(`/api/views/${activeView}`, { method: 'DELETE' });
-    setActiveView('');
+  const deleteView = async (id?: string) => {
+    const vid = id ?? activeView;
+    if (!vid) return;
+    await api(`/api/views/${vid}`, { method: 'DELETE' });
+    if (vid === activeView) setActiveView('');
     void qc.invalidateQueries({ queryKey: ['views'] });
   };
 
@@ -513,35 +514,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         </div>
       )}
       <div className="filters">
-        {(views?.views.length ?? 0) > 0 && (
-          <>
-            <select
-              value={activeView}
-              onChange={(e) => {
-                const v = views!.views.find((x) => x.id === e.target.value);
-                if (v) applyView(v);
-                else setActiveView('');
-              }}
-              title="Saved views"
-            >
-              <option value="">Views…</option>
-              {views!.views.map((v) => (
-                <option key={v.id} value={v.id}>{v.name}</option>
-              ))}
-            </select>
-            {activeView && (
-              <button className="btn" title="Delete this view" aria-label="Delete this view" onClick={deleteView}>
-                <X size={14} style={{ verticalAlign: '-2px' }} />
-              </button>
-            )}
-          </>
-        )}
-        {dirtyForView && (
-          <button className="btn save-view-btn" title="Save current filters as a view" aria-label="Save current filters as a view" onClick={saveView}>
-            <Save size={14} style={{ verticalAlign: '-2px' }} />
-            <span className="btn-label">Save view</span>
-          </button>
-        )}
         <SearchInput
           className="search-box"
           placeholder="Search transcripts, users, ids…"
@@ -584,6 +556,37 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
                     Needs attention
                   </label>
                 </div>
+                {(views?.views.length ?? 0) > 0 && (
+                  <div className="filter-group">
+                    <div className="filter-group-head muted">Saved views</div>
+                    {views!.views.map((v) => (
+                      <div key={v.id} className="check filter-opt filter-view-row">
+                        <button
+                          className="filter-view-name"
+                          onClick={() => {
+                            applyView(v);
+                            setFilterOpen(false);
+                          }}
+                        >
+                          {v.name}
+                        </button>
+                        <button
+                          className="filter-view-del"
+                          title="Delete this view"
+                          aria-label={`Delete view ${v.name}`}
+                          onClick={() => deleteView(v.id)}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {dirtyForView && (
+                  <button className="filter-save-view" onClick={saveView}>
+                    <Save size={13} style={{ verticalAlign: '-2px' }} /> Save current filters as a view
+                  </button>
+                )}
                 {FILTER_GROUPS.map((g) => {
                   const sel = filters[g.key];
                   const values = g.options.map(([v]) => v);
