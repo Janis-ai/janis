@@ -2,7 +2,7 @@ import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, ne, or, sql } from '
 import type { Db } from '../db/client.js';
 import { agents, alertRules, alerts, busEvents, channelBindings, channels, conversations, knowledgeFiles, messages, pendingActions, rateLimits, slackThreads, suggestions, sweeperLocks, typingState, usageEvents, webhookDeliveries, workspaces } from '../db/schema.js';
 import { bus, INSTANCE_ID } from '../lib/bus.js';
-import { dispatchAlert, openAlertOnce } from '../lib/alerts.js';
+import { dispatchAlert, openAlertOnce, resolveOpenAlerts } from '../lib/alerts.js';
 import { opsAlert } from '../lib/opsAlert.js';
 import { inactivityActions, inactivityThresholds } from '../lib/rules.js';
 import { advanceRuleCursor, groupsForRules } from '../lib/ruleAlerts.js';
@@ -85,6 +85,7 @@ export function startSweeper(db: Db, intervalMs = 60_000): () => void {
         console.error('sweepContactConsolidation error:', err),
       );
       void sweepSnoozes(db).catch((err) => console.error('sweepSnoozes error:', err));
+      void sweepStaleOffers(db).catch((err) => console.error('sweepStaleOffers error:', err));
       void sweepWebhookRetries(db).catch((err) => console.error('sweepWebhookRetries error:', err));
       void sweepHostedStalls(db).catch((err) => console.error('sweepHostedStalls error:', err));
       void sweepDeliveryFailures(db).catch((err) => console.error('sweepDeliveryFailures error:', err));
@@ -185,6 +186,35 @@ export async function sweepSnoozes(db: Db): Promise<number> {
     });
   }
   return due.length;
+}
+
+/** Stale offers die on their own — a customer who never engaged with an
+ *  open handoff_offer past the agent's SLA window isn't coming back to
+ *  it (implicit declines on reply are handled in the reply path; this is
+ *  the never-replied backstop). */
+export async function sweepStaleOffers(db: Db): Promise<number> {
+  const stale = await db
+    .select({
+      id: alerts.id,
+      convId: alerts.conversationId,
+      workspaceId: agents.workspaceId,
+    })
+    .from(alerts)
+    .innerJoin(conversations, eq(alerts.conversationId, conversations.id))
+    .innerJoin(agents, eq(conversations.agentId, agents.id))
+    .where(
+      and(
+        eq(alerts.type, 'handoff_offer'),
+        eq(alerts.status, 'open'),
+        sql`${alerts.createdAt} < now() - interval '1 minute' * coalesce((${agents.config} ->> 'sla_minutes')::int, 15)`,
+      ),
+    );
+  let n = 0;
+  for (const s of stale) {
+    const resolved = await resolveOpenAlerts(db, s.workspaceId, s.convId, 'handoff_offer');
+    n += resolved.length;
+  }
+  return n;
 }
 
 export async function sweepAutoResume(db: Db): Promise<number> {

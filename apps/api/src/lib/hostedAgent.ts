@@ -8,6 +8,7 @@ import type { Db } from '../db/client.js';
 import { agents, agentWidgets, alerts, channelBindings, channels, contactIdentities, contacts, conversations, helpArticles, knowledgeFiles, memberships, messages, pendingActions, users, workspaces } from '../db/schema.js';
 import { processEvents } from '../services/ingest.js';
 import { fireErrorAlert } from './ruleAlerts.js';
+import { resolveOpenAlerts } from './alerts.js';
 import { storeSuggestion } from '../services/suggestions.js';
 import { recordLlmUsage, llmSpendOverCap } from './usage.js';
 import { loadSecretsMap } from './secrets.js';
@@ -6826,6 +6827,22 @@ async function replyAsHostedAgent(
       });
       await emit(events);
       return;
+    }
+    // Implicit decline: an offer was open and the customer answered with
+    // something other than "yes" — a real acceptance arrives as the
+    // [HANDOFF] tag (or an explicit decline as [CANCEL_HANDOFF]/"no
+    // thanks", handled above), so reaching here means they moved on.
+    // Close the offer quietly; the reply keeps flowing to them.
+    if (
+      openEsc.some((a) => a.type === 'handoff_offer') &&
+      tag?.kind !== 'handoff' &&
+      tag?.kind !== 'offer'
+    ) {
+      const dropped = await resolveOpenAlerts(db, agent.workspaceId, convId, 'handoff_offer');
+      if (dropped.length) {
+        inspectorFlag.inspector.offer_auto_dismissed = true;
+        console.log(`[hosted] handoff offer auto-dismissed — customer moved on conv=${convId}`);
+      }
     }
     if (!handoffEnabled && tag && (tag.kind === 'handoff' || tag.kind === 'offer')) {
       // Escalation is off for this agent — the tag can't page anyone;
