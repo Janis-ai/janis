@@ -44,6 +44,7 @@ export function searchRoutes(db: Db) {
           sql`(
             ${conversations.externalId} ilike ${like}
             or ${conversations.userProfile}::text ilike ${like}
+            or ${conversations.tags}::text ilike ${like}
             or exists (
               select 1 from ${messages}
               where ${messages.conversationId} = ${conversations.id}
