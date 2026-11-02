@@ -129,6 +129,24 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   the backfill — no migration needed — but tools REMOVED from a template
   linger in stored configs (name-merge only adds).
 
+## 2026-11-02h — OAuth wave: all registrations live + provider gotchas
+- Every self-serve Connect card is REGISTERED + env'd: Jira, Linear,
+  HubSpot (hs CLI, AUP signed, 25-install cap), Salesforce (ECA + PKCE),
+  GitHub (org OAuth app, expiring tokens ON), Slack (existing Janis app,
+  bot scopes), Confluence (same Atlassian app), Zendesk (local client in
+  janis-96119 — global request filed w/ partners@zendesk.com + portal).
+- Live-fire learnings: SF ECAs require PKCE (verifier rides signed
+  intent v field); Atlassian authorize needs PER-PROVIDER callbacks
+  registered + per-product site access (add Confluence product to the
+  site); Zendesk granular scopes must match client allowed-scopes;
+  slack/github/zendesk tokens are staticToken (stored token serves —
+  noRefresh + staticToken BOTH required or mint throws at verify);
+  Zendesk needs subdomain-aware tokenUrl (function on intent).
+- Mike confirmed all five connects tested/working. Next: MCP client
+  (long-tail play, needs identity/approval design for discovered tools),
+  Notion (OAuth card first — same machinery; deeper knowledge-source
+  sync later).
+
 ## 2026-11-02g — Connector wave: GitHub + Slack cards, HubSpot OAuth restored
 - github / github-connect cards (PAT + OAuth) — third escalation target.
   OAuth spec: api.github.com on CONN_GITHUB_TOKEN, repo scope. Mike
