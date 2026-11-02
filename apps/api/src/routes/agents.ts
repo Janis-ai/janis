@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { AgentConfig, catalogModel, friendlyName, vendorForBaseUrl } from '@janis/shared';
 import type { Db } from '../db/client.js';
-import { agents, agentApiKeys, agentConnections, agentInstructionRevisions, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, campaignSends, campaigns, channelBindings, channels, contactIdentities, conversations, evalSuggestions, helpArticles, helpSearchLog, knowledgeFiles, memberships, messages, pendingActions, savedReplies, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
+import { agents, agentApiKeys, agentConnections, agentInstructionRevisions, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, campaignSends, campaigns, channelBindings, channels, contactIdentities, conversations, evalSuggestions, helpArticles, helpSearchLog, knowledgeFiles, memberships, messages, pendingActions, savedReplies, shopifyShops, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import { WidgetComponent, WidgetState, WidgetToolBinding } from '../lib/widgets.js';
 import { toolsFor } from '../lib/toolExec.js';
 import {
@@ -2156,9 +2156,12 @@ export function agentRoutes(db: Db) {
     },
   );
 
-  // Remove a template's tools; secrets stay (they may be shared with custom
-  // tools). The template's connection drops via gcUnusedConnections below —
-  // reference-aware, so a custom tool still minting via CONN_* keeps it.
+  // Remove a template's tools — and the credentials they referenced, when
+  // nothing else still does. Secrets the REMOVED defs referenced are the
+  // template's own creds; any name still referenced by a surviving tool
+  // (a custom tool sharing it) stays. Mirrors connections' GC below.
+  // SHOPIFY_* secrets are exempt while an embedded-app shop link owns
+  // them — the mirror heals itself and unlinking is what clears them.
   app.delete('/:id/tools/:template', agentAdmin, async (c) => {
     const agent = await ownedAgent(c);
     if (!agent) return c.json({ error: 'not found' }, 404);
@@ -2168,15 +2171,52 @@ export function agentRoutes(db: Db) {
     // Dynamic templates (MCP) carry no static tool list — remove by the
     // template stamp instead.
     const names = new Set(tpl.tools.map((t) => t.name));
+    const removing = (cfg.tools ?? []).filter(
+      (t) =>
+        names.has(t.name) || (t as { template?: string }).template === tpl.id,
+    );
     const tools = (cfg.tools ?? []).filter(
       (t) =>
         !names.has(t.name) && (t as { template?: string }).template !== tpl.id,
     );
+    // Candidate creds: names the removed defs referenced (covers dynamic
+    // names like MCP_<slug>_*) plus every name the template produces —
+    // server-side-only secrets like SHOPIFY_STOREFRONT_PASSWORD are never
+    // in a {{}} placeholder but still belong to this template. Probing
+    // secrets() with dummy fields yields the name set (static templates'
+    // keys don't depend on field values; dynamic names come via refs).
+    const removedSecretRefs = new Set(
+      [...JSON.stringify(removing).matchAll(/\{\{secrets\.([A-Za-z0-9_]+)\}\}/g)].map(
+        (m) => m[1],
+      ),
+    );
+    try {
+      const probe = Object.fromEntries(tpl.fields.map((f) => [f.key, 'x']));
+      for (const n of Object.keys(tpl.secrets(probe))) removedSecretRefs.add(n);
+    } catch {
+      /* a secrets() that needs real fields — refs alone still cover */
+    }
     const [updated] = await db
       .update(agents)
       .set({ config: { ...cfg, tools } })
       .where(eq(agents.id, agent.id))
       .returning();
+    const remainingRefs = JSON.stringify(tools);
+    const [linkedShop] = await db
+      .select({ id: shopifyShops.id })
+      .from(shopifyShops)
+      .where(and(eq(shopifyShops.agentId, agent.id), eq(shopifyShops.state, 'linked')))
+      .limit(1);
+    const dead = [...removedSecretRefs].filter(
+      (n) =>
+        !remainingRefs.includes(`secrets.${n}`) &&
+        !(linkedShop && n.startsWith('SHOPIFY_')),
+    );
+    if (dead.length) {
+      await db
+        .delete(agentSecrets)
+        .where(and(eq(agentSecrets.agentId, agent.id), inArray(agentSecrets.name, dead)));
+    }
     await gcUnusedConnections(agent.id, tools);
     return c.json({ agent: toAgent(updated) });
   });

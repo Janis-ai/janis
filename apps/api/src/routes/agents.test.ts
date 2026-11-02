@@ -166,7 +166,7 @@ describe('tool template install', () => {
     expect(secrets.secrets).toHaveLength(0);
   });
 
-  it('uninstall removes the template tools but keeps the secrets', async () => {
+  it('uninstall removes the template tools', async () => {
     const id = await newAgentId();
     await app.request(`/api/agents/${id}/tools/install`, {
       method: 'POST',
@@ -180,6 +180,63 @@ describe('tool template install', () => {
     expect(res.status).toBe(200);
     const { agent } = await res.json();
     expect(agent.config.tools ?? []).toHaveLength(0);
+  });
+
+  it('uninstall drops the template creds unless another tool still references them', async () => {
+    const id = await newAgentId();
+    await app.request(`/api/agents/${id}/tools/install`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', cookie: parentCookie },
+      body: JSON.stringify({
+        template: 'shopify',
+        fields: { shop: 'mystore', token: 'shpat_test', storefront_password: 'pw' },
+      }),
+    });
+    const secretNames = async () =>
+      (
+        await (
+          await app.request(`/api/agents/${id}/secrets`, {
+            headers: { cookie: parentCookie },
+          })
+        ).json()
+      ).secrets.map((s: { name: string }) => s.name);
+    expect(await secretNames()).toEqual(
+      expect.arrayContaining(['SHOPIFY_SHOP', 'SHOPIFY_TOKEN', 'SHOPIFY_STOREFRONT_PASSWORD']),
+    );
+
+    // A hand-built tool referencing the same token — the shared credential
+    // survives the template's removal.
+    const [agentRow] = await db.select().from(agents).where(eq(agents.id, id));
+    const cfg = agentRow.config as { tools: Record<string, unknown>[] };
+    await db
+      .update(agents)
+      .set({
+        config: {
+          ...cfg,
+          tools: [
+            ...cfg.tools,
+            {
+              name: 'my_custom_stock_check',
+              description: 'custom',
+              method: 'GET',
+              url: 'https://example.com/x',
+              headers: { authorization: 'Bearer {{secrets.SHOPIFY_TOKEN}}' },
+            },
+          ],
+        },
+      })
+      .where(eq(agents.id, id));
+
+    const res = await app.request(`/api/agents/${id}/tools/shopify`, {
+      method: 'DELETE',
+      headers: { cookie: parentCookie },
+    });
+    expect(res.status).toBe(200);
+    const names = await secretNames();
+    // Shared cred stays; unreferenced creds go with the template.
+    expect(names).toContain('SHOPIFY_TOKEN');
+    expect(names).not.toContain('SHOPIFY_SHOP');
+    expect(names).not.toContain('SHOPIFY_STOREFRONT_PASSWORD');
   });
 
   it('a config PATCH preserves every tool field — bodyTemplate, identity, widget.relevance', async () => {
