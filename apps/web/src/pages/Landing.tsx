@@ -148,7 +148,7 @@ const FEATURE_GROUPS: {
       {
         icon: 'inbox',
         title: 'Every channel, one inbox',
-        body: 'Messenger, Instagram, WhatsApp, SMS, Gmail and Outlook inboxes, and web chat — unified, searchable, triageable.',
+        body: 'Messenger, Instagram, WhatsApp, SMS, Gmail and Outlook inboxes, and web chat — one control plane for the agent and the humans beside it.',
       },
       {
         icon: 'phone',
@@ -164,6 +164,27 @@ const FEATURE_GROUPS: {
         icon: 'book',
         title: 'A help center that answers first',
         body: 'Publish a branded help center from the same knowledge the agent uses. The widget suggests articles before visitors even ask — and every article keeps version history.',
+      },
+    ],
+  },
+  {
+    heading: 'Sell inside the support conversation',
+    sub: 'A useful answer should lead to a purchase — the buying action lives in the same thread as the question.',
+    items: [
+      {
+        icon: 'inbox',
+        title: 'Live products in the thread',
+        body: 'Real catalog entries with options and pricing surface inside the conversation — not a link away from it.',
+      },
+      {
+        icon: 'send',
+        title: 'Cart to checkout, in chat',
+        body: 'The shopper builds a cart and gets a checkout link without leaving the thread — the product question becomes the purchase.',
+      },
+      {
+        icon: 'flag',
+        title: 'The same supervision applies',
+        body: 'Price overrides, discounts and order changes ride the same approval gates and takeover flow as every other action.',
       },
     ],
   },
@@ -259,6 +280,7 @@ const DIFFERENT: [string, string, string][] = [
   ['When the AI fails', 'A dashboard shows you where', 'Janis drafts the fix for you'],
   ['Changing the rules', 'Publish and pray', 'Replay real conversations before it ships'],
   ['Integrations', 'Read-only lookups', 'Read and write — refunds, tickets, bookings'],
+  ['Commerce', 'Answers stop at text', 'Products, cart and checkout inside the thread'],
   ['Pricing', 'Per seat, per teammate', 'Per message + metered tokens'],
 ];
 
@@ -313,10 +335,10 @@ const FAQ = [
 const INTEGRATIONS = ['Shopify', 'HubSpot', 'Salesforce', 'Zendesk', 'Stripe', 'Google Drive', 'Cal.com', 'Calendly', 'Twilio', 'Slack', 'Zapier', 'Make'];
 
 const STEPS = [
-  ['Connect', 'Link your channels and knowledge — plus the agent: hosted on Janis, your own code, or your Chatfuel/ManyChat bot.'],
-  ['Agent answers', 'Instant replies grounded in your docs, site, and Google files — 24/7.'],
-  ['Human steps in', 'An alert lands with an AI brief — take over in the console or straight from Slack, and approve gated actions inline.'],
-  ['Hand it back', 'Resume the agent; the rescue becomes a replayable regression test.'],
+  ['Understand', 'Orders, policies, products — your docs, site and Google files, plus the agent: hosted on Janis, your own code, or your Chatfuel/ManyChat bot.'],
+  ['Act', 'Instant grounded replies and real actions — refunds, bookings, live products and a checkout link inside the thread.'],
+  ['Supervise', 'A human approves the action or takes over the same thread, transcript and context intact — console or Slack.'],
+  ['Improve', 'Review the correction, add the instruction, save the scenario — it replays against every future agent change.'],
 ];
 
 type Beat = {
@@ -696,8 +718,8 @@ export default function Landing() {
         <h1>Your AI agent has a help button.</h1>
         <p>
           AI handles customer conversations across every channel. When it needs
-          help or approval, your team steps in. Then your agent picks up right
-          where it left off.
+          help or approval, your team steps in. Then the agent picks up right
+          where it left off — and finishes the job.
         </p>
         <p className="landing-sub">
           Build a hosted agent in minutes — or bring the agent, bot,
@@ -795,6 +817,7 @@ export default function Landing() {
 
       <section className="landing-pricing" id="pricing">
         <h2>Simple pricing</h2>
+        <p className="landing-sub">Every plan includes unlimited seats and channels — you pay for messages, not people.</p>
         <p className="muted" style={{ textAlign: 'center', margin: '0 0 12px' }}>
           Every plan includes the console, unlimited seats and channels, alerts, and digests.
           You pay for messages — not seats. LLM tokens are metered at provider rates on
