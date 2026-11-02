@@ -192,6 +192,14 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   agent list, and useAgentContext bounces a settled-foreign uuid param to
   /conversations instead of persisting it — isFetching gates the
   just-created-agent race, /agents/new/<id> exempt.
+- Third report ("delete agent → sign out/in → Agent not found once, then
+  clean") was the PWA precache serving the PRE-fix bundle — verified
+  end-to-end via scripts/ui/deleted-agent-landing.mjs (Playwright: visit→
+  delete→stash→sign-out→real sign-in — every vector drops). Root systemic
+  fix in main.tsx: controllerchange → one reload, so the load that
+  discovers a new SW also runs the new bundle (first-install exempt —
+  nothing stale was ever served). Without it a long-lived tab can run a
+  pre-fix build for a full extra sign-in cycle.
 ## 2026-11-01e — Composer consolidation: always-up box, Pause ⇄ Resume toggle, send-as popover
 - The ops row (Take over / Reply as agent / Internal note / Teach / Archive /
   Delete) is gone. The composer always renders for non-archived threads —
