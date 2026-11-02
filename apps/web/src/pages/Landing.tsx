@@ -718,22 +718,6 @@ export default function Landing() {
           human: approve or deny the request yourself.
         </p>
         <DemoStrip />
-        <figure className="demo-window landing-shot">
-          <video
-            className="hero-vid"
-            src="/img/marketing-approval.mp4"
-            poster="/img/marketing-console.png"
-            autoPlay
-            muted
-            loop
-            playsInline
-            preload="metadata"
-            aria-label="The same flow in the real console — a fee waiver waits on a human decision, gets approved, and the agent replies"
-          />
-          <figcaption className="landing-shot-cap">
-            The same flow, in the real console — a fee-waiver request lands, a teammate approves it, the agent finishes the rebooking.
-          </figcaption>
-        </figure>
       </section>
 
       {FEATURE_GROUPS.map((g) => (
