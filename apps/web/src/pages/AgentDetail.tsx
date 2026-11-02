@@ -13,7 +13,7 @@ import type {
 import { DEFAULT_INTENTS } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useGroups, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
-import { AgentChannels } from '../components/AgentChannels';
+import { AgentChannels, effectiveEmailSending } from '../components/AgentChannels';
 import { EmailDomainCard, useEmailDomainEnabled } from '../components/Channels';
 import { MemberGroups } from '../components/MemberGroups';
 import { MemberCell, TeamRow, TeamTable, teamTd } from '../components/TeamTable';
@@ -3456,8 +3456,9 @@ export function ToolsTab({
  *  right where the tool was installed — most agents never open Channels. */
 function EmailSendingNudge({ cfg, agentId }: { cfg: AgentConfig; agentId: string }) {
   const qc = useQueryClient();
+  const { data: chData } = useChannels();
   const enabled = useEmailDomainEnabled();
-  const es = cfg.email_sending ?? {};
+  const es = effectiveEmailSending(cfg, chData?.channels);
   const verified = Boolean(es.email_domain && es.email_domain_status === 'verified');
   const needsVerifyMail = (cfg.tools ?? []).some(
     (t) => (t as { identity?: boolean }).identity === true,

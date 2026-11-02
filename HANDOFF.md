@@ -93,6 +93,14 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02p — One sending domain, one management spot
+- A domain already registered on an email channel now pre-populates the
+  agent Email sending surfaces: effectiveEmailSending(cfg, channels)
+  resolves agent bag ?? channel bag for display; the agent email-domain
+  routes adopt the channel's bag into config.email_sending on first write;
+  agent DELETE cascades — strips the same domain_id + dependent
+  from_address off the agent's email channels too.
+
 ## 2026-11-02o — Domain setup surfaces inside the Integrations section
 - The Channels-page Email sending card wasn't discoverable: a
   Shopify-installed merchant never opens Channels. New EmailSendingNudge

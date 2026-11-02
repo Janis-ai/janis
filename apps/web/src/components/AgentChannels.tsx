@@ -10,14 +10,39 @@ import { KIND_LABEL, MetaAssetList, EmailDomainCard, useEmailDomainEnabled, type
 import { useConfirm } from './Prompt';
 import { friendlyError } from '../lib/friendlyError';
 
+/** The domain the agent effectively sends from — config.email_sending,
+ *  falling back to an email channel that already registered one (the first
+ *  agent-level write adopts it, so the surface stays pre-populated). */
+export function effectiveEmailSending(
+  cfg: Agent['config'],
+  chans: Channel[] | undefined,
+): NonNullable<Agent['config']['email_sending']> & { cf_connected?: boolean } {
+  const es = cfg.email_sending ?? {};
+  if (es.email_domain) return es;
+  const ch = (chans ?? []).find((c) => c.kind === 'email' && c.meta.email_domain);
+  const m = ch?.meta;
+  return m
+    ? {
+        ...es,
+        email_domain: m.email_domain,
+        email_domain_status: m.email_domain_status,
+        email_domain_records: m.email_domain_records,
+        cf_connected: m.cf_connected,
+        from_name: es.from_name ?? m.from_name,
+        from_address: es.from_address ?? m.from_address,
+      }
+    : es;
+}
+
 /** Agent-level sending identity — verification codes and other
  *  agent-originated customer mail send from the client's verified domain.
  *  Works with or without an email channel; shares the email channel's
  *  Custom sending domain machinery (same endpoints on /api/agents/:id). */
 function AgentEmailSending({ agent }: { agent: Agent }) {
   const qc = useQueryClient();
+  const { data: chData } = useChannels();
   const enabled = useEmailDomainEnabled();
-  const es = agent.config.email_sending ?? {};
+  const es = effectiveEmailSending(agent.config, chData?.channels);
   const verified = Boolean(es.email_domain && es.email_domain_status === 'verified');
   // Customer-record tools (order lookups etc.) email the shopper a 6-digit
   // code to prove who they are — if any are installed and no domain is

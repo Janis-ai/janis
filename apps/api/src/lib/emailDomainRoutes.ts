@@ -89,6 +89,9 @@ export function mountEmailDomainRoutes(
     /** Email channels may send as their inbound-domain reply address; an
      *  agent-level sender can only use the verified custom domain. */
     inboundFromAllowed: boolean;
+    /** After a domain delete — receives the PRE-delete bag. Agents use it to
+     *  strip the same domain off email channels: one management spot. */
+    onDelete?: (owner: EmailDomainOwner, removed: EmailDomainBag) => Promise<void>;
   },
 ) {
   const admin = async (c: Context<SessionEnv>, agentId: string) =>
@@ -314,6 +317,7 @@ export function mountEmailDomainRoutes(
     if (next.from_address && bag.email_domain && next.from_address.endsWith(`@${bag.email_domain}`))
       delete next.from_address;
     await opts.save(owner, next);
+    await opts.onDelete?.(owner, bag);
     return c.json({ ok: true });
   });
 }

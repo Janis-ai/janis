@@ -629,7 +629,29 @@ export function agentRoutes(db: Db) {
         .where(and(eq(agents.id, id), eq(agents.workspaceId, workspaceId)))
         .limit(1);
       if (!row) return null;
-      const bag = (((row.config ?? {}) as AgentConfig).email_sending ?? {}) as EmailDomainBag;
+      const own = (((row.config ?? {}) as AgentConfig).email_sending ?? {}) as EmailDomainBag;
+      if (own.email_domain) return { id: row.id, agentId: row.id, bag: own };
+      // Pre-populate from an email channel that already registered a domain —
+      // the first write adopts it onto the agent so there's one managed copy.
+      const chans = await db
+        .select({ credentials: channels.credentials })
+        .from(channels)
+        .where(and(eq(channels.agentId, id), eq(channels.kind, 'email')));
+      const src = chans
+        .map((r) => r.credentials as EmailDomainBag)
+        .find((c) => c.email_domain);
+      const bag = src
+        ? {
+            email_domain: src.email_domain,
+            email_domain_id: src.email_domain_id,
+            email_domain_status: src.email_domain_status,
+            email_domain_checked_at: src.email_domain_checked_at,
+            email_domain_records: src.email_domain_records,
+            cf_refresh_token: src.cf_refresh_token,
+            from_name: src.from_name,
+            from_address: src.from_address,
+          }
+        : own;
       return { id: row.id, agentId: row.id, bag };
     },
     save: async (owner, bag) => {
@@ -639,6 +661,33 @@ export function agentRoutes(db: Db) {
           config: sql`coalesce(${agents.config}, '{}'::jsonb) || jsonb_build_object('email_sending', ${JSON.stringify(bag)}::jsonb)`,
         })
         .where(eq(agents.id, owner.id));
+    },
+    onDelete: async (owner, removed) => {
+      if (!removed.email_domain_id) return;
+      // One domain, one management spot — removing here also strips any
+      // email channel carrying the same domain (and its branded From).
+      const chans = await db
+        .select({ id: channels.id, credentials: channels.credentials })
+        .from(channels)
+        .where(and(eq(channels.agentId, owner.id), eq(channels.kind, 'email')));
+      for (const ch of chans) {
+        const creds = ch.credentials as EmailDomainBag;
+        if (creds.email_domain_id !== removed.email_domain_id) continue;
+        const next = { ...creds };
+        delete next.email_domain;
+        delete next.email_domain_id;
+        delete next.email_domain_status;
+        delete next.email_domain_records;
+        delete next.email_domain_checked_at;
+        if (
+          next.from_address &&
+          removed.email_domain &&
+          next.from_address.endsWith(`@${removed.email_domain}`)
+        )
+          delete next.from_address;
+        await db.update(channels).set({ credentials: next }).where(eq(channels.id, ch.id));
+      }
+      invalidateChannelCache();
     },
   });
 
