@@ -12,9 +12,13 @@
         "https://www.janis.ai/oauth/hubspot/callback"
       ],
       "requiredScopes": [
+        "oauth",
         "crm.objects.contacts.read",
         "crm.objects.contacts.write",
-        "tickets"
+        "crm.objects.tickets.read",
+        "crm.objects.tickets.write",
+        "crm.schemas.tickets.read",
+        "crm.schemas.tickets.write"
       ],
       "optionalScopes": [],
       "conditionallyRequiredScopes": []

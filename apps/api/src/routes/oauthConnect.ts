@@ -126,7 +126,8 @@ const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
       `https://app.hubspot.com/oauth/authorize?${new URLSearchParams({
         client_id: clientId,
         redirect_uri: redirectUri,
-        scope: 'crm.objects.contacts.read crm.objects.contacts.write tickets',
+        scope:
+          'oauth crm.objects.contacts.read crm.objects.contacts.write crm.objects.tickets.read crm.objects.tickets.write crm.schemas.tickets.read crm.schemas.tickets.write',
         state,
       })}`,
     tokenUrl: 'https://api.hubapi.com/oauth/v1/token',
