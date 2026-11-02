@@ -265,7 +265,9 @@ describe('oauth callbacks', () => {
     );
 
     const secrets = await connectionSecrets(db, agentId);
-    expect(secrets.CONN_SALESFORCE_INSTANCE_URL).toBe('https://acme.my.salesforce.com');
+    // the tool URL already carries https:// — the exposed field must be
+    // host-only or the scheme doubles and every call fetch-fails
+    expect(secrets.CONN_SALESFORCE_INSTANCE_URL).toBe('acme.my.salesforce.com');
   });
 
   it('hubspot labels the portal and installs the tools', async () => {
