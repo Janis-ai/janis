@@ -44,6 +44,16 @@ function AgentEmailSending({ agent }: { agent: Agent }) {
   const enabled = useEmailDomainEnabled();
   const es = effectiveEmailSending(agent.config, chData?.channels);
   const verified = Boolean(es.email_domain && es.email_domain_status === 'verified');
+  // Removing here cascades to email channels carrying the same domain —
+  // warn before the delete rather than silently breaking their send-as.
+  const sharedChans = (chData?.channels ?? []).filter(
+    (c) => c.kind === 'email' && c.meta.email_domain === es.email_domain && es.email_domain,
+  );
+  const removeWarn = sharedChans.length
+    ? `Removing ${es.email_domain} also removes it from your email channel${
+        sharedChans.length > 1 ? 's' : ''
+      } (${sharedChans.map((c) => c.name).join(', ')}) — replies there stop sending from this address.`
+    : undefined;
   // Customer-record tools (order lookups etc.) email the shopper a 6-digit
   // code to prove who they are — if any are installed and no domain is
   // verified, that code still arrives as Janis. Nudge toward setup.
@@ -85,6 +95,7 @@ function AgentEmailSending({ agent }: { agent: Agent }) {
       <EmailDomainCard
         basePath={`/api/agents/${agent.id}`}
         meta={es}
+        removeWarn={removeWarn}
         onChanged={() => void qc.invalidateQueries({ queryKey: ['agents'] })}
         verifiedHint={'Set the address below to any @{domain} mailbox — replies reach that mailbox.'}
       />

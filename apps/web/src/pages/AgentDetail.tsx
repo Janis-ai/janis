@@ -3460,6 +3460,14 @@ function EmailSendingNudge({ cfg, agentId }: { cfg: AgentConfig; agentId: string
   const enabled = useEmailDomainEnabled();
   const es = effectiveEmailSending(cfg, chData?.channels);
   const verified = Boolean(es.email_domain && es.email_domain_status === 'verified');
+  const sharedChans = (chData?.channels ?? []).filter(
+    (c) => c.kind === 'email' && c.meta.email_domain === es.email_domain && es.email_domain,
+  );
+  const removeWarn = sharedChans.length
+    ? `Removing ${es.email_domain} also removes it from your email channel${
+        sharedChans.length > 1 ? 's' : ''
+      } (${sharedChans.map((c) => c.name).join(', ')}) — replies there stop sending from this address.`
+    : undefined;
   const needsVerifyMail = (cfg.tools ?? []).some(
     (t) => (t as { identity?: boolean }).identity === true,
   );
@@ -3475,6 +3483,7 @@ function EmailSendingNudge({ cfg, agentId }: { cfg: AgentConfig; agentId: string
       <EmailDomainCard
         basePath={`/api/agents/${agentId}`}
         meta={es}
+        removeWarn={removeWarn}
         onChanged={() => {
           void qc.invalidateQueries({ queryKey: ['agents'] });
           void qc.invalidateQueries({ queryKey: ['agent', agentId] });

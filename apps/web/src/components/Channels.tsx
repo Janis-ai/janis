@@ -2312,12 +2312,25 @@ export function EmailDomainCard({
   meta,
   onChanged,
   verifiedHint,
+  removeWarn,
 }: {
   basePath: string;
   meta: EmailDomainMeta;
   onChanged: () => void;
   verifiedHint: string;
+  /** When set, removing the domain asks first — e.g. it also feeds an
+   *  email channel's send-as (the agent-level delete cascades). */
+  removeWarn?: string;
 }) {
+  const [confirmEl, confirm] = useConfirm();
+  const removeDomain = async () => {
+    if (removeWarn && !(await confirm(removeWarn, undefined, true))) return;
+    void act('/email-domain', undefined, 'Domain removed.').then(() => {
+      setRegistered('');
+      setStatus('');
+      setRecords([]);
+    });
+  };
   const enabled = useEmailDomainEnabled();
   const [domain, setDomain] = useState(meta.email_domain ?? '');
   const [registered, setRegistered] = useState(meta.email_domain ?? '');
@@ -2480,13 +2493,7 @@ export function EmailDomainCard({
             )}
             <button
               className="btn sm"
-              onClick={() =>
-                act('/email-domain', undefined, 'Domain removed.').then(() => {
-                  setRegistered('');
-                  setStatus('');
-                  setRecords([]);
-                })
-              }
+              onClick={() => void removeDomain()}
             >
               Remove
             </button>
@@ -2556,19 +2563,14 @@ export function EmailDomainCard({
           </span>
           <button
             className="btn sm"
-            onClick={() =>
-              act('/email-domain', undefined, 'Domain removed.').then(() => {
-                setRegistered('');
-                setStatus('');
-                setRecords([]);
-              })
-            }
+            onClick={() => void removeDomain()}
           >
             Remove
           </button>
         </div>
       ) : null}
       {msg && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{msg}</div>}
+      {confirmEl}
     </div>
   );
 }
