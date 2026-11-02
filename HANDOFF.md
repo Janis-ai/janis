@@ -93,6 +93,30 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02l — Agent-level Email sending: custom domain without an email channel
+- The custom sending domain machinery was trapped inside email-channel
+  settings — a Shopify + webchat-only client had nowhere to enter a
+  domain, so verification codes could never come From them.
+- AgentConfig.email_sending (agents.config) now holds the same bag
+  channel credentials carry: email_domain*/records/cf_refresh_token +
+  from_name/from_address. Server-managed — agent config PATCH preserves
+  the stored bag (stale-tab saves can't clobber it), toAgent scrubs the
+  CF token to cf_connected.
+- The email-domain route family extracted into lib/emailDomainRoutes.ts
+  (mountEmailDomainRoutes: load/save/stateKey/inboundFromAllowed adapter)
+  and mounted on BOTH /api/channels/:id and /api/agents/:id — register,
+  verify, dns-setup, cf-connect, cf-setup, delete, plus new PATCH
+  /:id/email-sending (from_name/from_address, gated to the verified
+  domain; channels additionally allow inbound-domain addresses). The
+  shared cf-callback reads state {ch|ag} and lands on /agents/:id/channels.
+- sendVerificationMail prefers: bound channel → agent's verified domain
+  (From: from_name|agent.name <from_address|no-reply@domain>, Reply-To to
+  that mailbox) → custom-domain channel → gmail/outlook → plain channel
+  → env sender. sweepEmailDomainStatus also refreshes agent-level domains.
+- UI: EmailDomainCard parameterized (basePath/meta/onChanged/verifiedHint)
+  and rendered on the agent Channels page as "Email sending" with
+  send-as fields once verified.
+
 ## 2026-11-02k — Notion OAuth connect card
 - `notion-connect` + `notion` (internal-token) cards via the generic OAuth
   factory. Quirks: token exchange wants the client pair in HTTP Basic
