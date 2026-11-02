@@ -3724,7 +3724,14 @@ function IntegrationCards({
   const suggestions = cfg.builder?.suggested_templates ?? [];
   const sugOrder = new Map(suggestions.map((s, i) => [s.id, i]));
   const sugReason = new Map(suggestions.map((s) => [s.id, s.reason]));
-  const templates = [...(data?.templates ?? [])].sort(
+  const allTemplates = data?.templates ?? [];
+  // OAuth cards subsume their manual sibling — the credential card's id is
+  // named on the OAuth card's `manual`, rendered collapsed inside it
+  // rather than as a second catalog card.
+  const manualIds = new Set(
+    allTemplates.map((t) => t.manual).filter((x): x is string => !!x),
+  );
+  const templates = [...allTemplates.filter((t) => !manualIds.has(t.id))].sort(
     (a, b) =>
       (sugOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
       (sugOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER),
@@ -3742,6 +3749,9 @@ function IntegrationCards({
   );
 
   function card(t: ToolTemplateInfo) {
+    const manual = t.manual ? allTemplates.find((x) => x.id === t.manual) : undefined;
+    const ft =
+      openId === t.id ? t : openId === `${t.id}:manual` ? manual : undefined;
     return (
         <div
           key={t.id}
@@ -3868,9 +3878,9 @@ function IntegrationCards({
               )}
             </div>
           )}
-          {openId === t.id ? (
+          {ft ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {t.fields.map((f) => (
+              {ft.fields.map((f) => (
                 <div key={f.key}>
                   <div style={{ fontSize: 13, marginBottom: 4 }}>{f.label}</div>
                   <input
@@ -3890,8 +3900,8 @@ function IntegrationCards({
               <div className="row" style={{ marginTop: 2 }}>
                 <button
                   className="btn primary"
-                  disabled={install.isPending || t.fields.some((f) => !f.optional && !fields[f.key]?.trim())}
-                  onClick={() => install.mutate(t)}
+                  disabled={install.isPending || ft.fields.some((f) => !f.optional && !fields[f.key]?.trim())}
+                  onClick={() => install.mutate(ft)}
                 >
                   {install.isPending ? 'Connecting…' : 'Connect'}
                 </button>
@@ -3919,6 +3929,18 @@ function IntegrationCards({
                   </a>
                 )
               ) : null}
+              {/* OAuth is the default — the manual-credentials sibling it
+                  subsumes lives one click deeper for BYO-app installs. */}
+              {t.oauth_connect && manual && !installed(t) && (
+                <button
+                  className="btn sm"
+                  style={{ fontSize: 11 }}
+                  title="Paste your own credentials instead of OAuth consent"
+                  onClick={() => { setOpenId(`${t.id}:manual`); setErr(''); setFields({}); }}
+                >
+                  Use your own credentials instead
+                </button>
+              )}
               {/* Credential-less integrations have nothing to update once
                   installed — show the badge + Remove, not a dead button. */}
               {t.oauth_connect === '/api/google/connect' && installed(t) && (

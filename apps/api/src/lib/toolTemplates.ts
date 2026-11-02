@@ -47,6 +47,10 @@ export interface ToolTemplate {
    *  path instead of a credentials form; the OAuth callback creates the
    *  agent_connection row AND installs the tools. */
   oauth_connect?: string;
+  /** Manual-credentials template this OAuth card subsumes — the console
+   *  collapses it into an "API token instead" expander instead of two
+   *  cards for one provider. */
+  manual?: string;
   tools: CatalogTool[];
 }
 
@@ -667,6 +671,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       credentials: () => ({}),
     },
     oauth_connect: '/api/oauth/salesforce/connect',
+    manual: 'salesforce',
     tools: [], // filled from the `salesforce` template below — one source of truth
   },
   {
@@ -768,6 +773,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       credentials: () => ({}),
     },
     oauth_connect: '/api/oauth/jira/connect',
+    manual: 'jira',
     tools: [], // filled from the `jira` template below — one source of truth
   },
   {
@@ -883,6 +889,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       credentials: () => ({}),
     },
     oauth_connect: '/api/oauth/linear/connect',
+    manual: 'linear',
     tools: [], // filled from the `linear` template below — one source of truth
   },
   {
@@ -1221,6 +1228,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       credentials: () => ({}),
     },
     oauth_connect: '/api/calendly/connect',
+    manual: 'calendly',
     tools: [], // filled from the `calendly` template below — one source of truth
   },
   {

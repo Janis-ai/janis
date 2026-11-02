@@ -988,6 +988,10 @@ export const ToolTemplateInfo = z.object({
   // Janis-owned OAuth app — the card links here instead of rendering a
   // credentials form; the callback stores the connection + installs tools.
   oauth_connect: z.string().optional(),
+  // Id of the manual-credentials template this OAuth card subsumes — the
+  // console collapses that card into an "API token instead" expander here
+  // instead of showing two cards for one provider.
+  manual: z.string().optional(),
   fields: z.array(ToolTemplateField),
   tools: z.array(
     z.object({
