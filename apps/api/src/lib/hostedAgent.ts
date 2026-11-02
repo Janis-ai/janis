@@ -3614,19 +3614,23 @@ export async function complete(
         description: t.widget
           ? `${t.description} (result auto-renders as an in-conversation ${t.widget.type} widget — respond with a short lead-in, do NOT repeat the data as a WIDGET: line or list)`
           : t.description,
-        parameters: {
-          type: 'object',
-          // A param key ending in '?' is optional — stripped for the
-          // property name, dropped from `required` (pairs with {key?}
-          // placeholders in bodyTemplate, which emit null when absent).
-          properties: Object.fromEntries(
-            Object.entries(t.params ?? {}).map(([k, d]) => [
-              k.replace(/\?$/, ''),
-              { type: 'string', description: d },
-            ]),
-          ),
-          required: Object.keys(t.params ?? {}).filter((k) => !k.endsWith('?')),
-        },
+        parameters:
+          // MCP-discovered tools carry the server's own JSON Schema —
+          // hand it through verbatim instead of the flat string-params
+          // map (nested objects/arrays/enums survive).
+          t.inputSchema ?? {
+            type: 'object',
+            // A param key ending in '?' is optional — stripped for the
+            // property name, dropped from `required` (pairs with {key?}
+            // placeholders in bodyTemplate, which emit null when absent).
+            properties: Object.fromEntries(
+              Object.entries(t.params ?? {}).map(([k, d]) => [
+                k.replace(/\?$/, ''),
+                { type: 'string', description: d },
+              ]),
+            ),
+            required: Object.keys(t.params ?? {}).filter((k) => !k.endsWith('?')),
+          },
       },
     })),
     // Server-side builtins (web_search, …) — enabled per agent, run in-process

@@ -1,5 +1,6 @@
 import type { ToolTemplateInfo } from '@janis/shared';
 import type { ToolWidgetConfig } from './widgets.js';
+import { mcpListTools } from './mcpClient.js';
 
 interface CatalogTool {
   name: string;
@@ -22,6 +23,12 @@ interface CatalogTool {
   identity?: boolean;
   /** Live data binding — JSON results render as cards/options. */
   widget?: ToolWidgetConfig;
+  /** 'mcp' → JSON-RPC tools/call against the MCP server at `url`. */
+  transport?: 'mcp';
+  /** Remote tool name on the MCP server. */
+  mcpTool?: string;
+  /** The server's own JSON Schema for args — handed to the model verbatim. */
+  inputSchema?: Record<string, unknown>;
 }
 
 export interface ToolTemplate {
@@ -52,11 +59,16 @@ export interface ToolTemplate {
    *  instead of separate cards (Zendesk has two: PAT + BYO OAuth). */
   manual?: string | string[];
   tools: CatalogTool[];
+  /** Dynamic tool discovery — the template's `tools` is empty and the
+   *  install route calls this (after secrets land) to enumerate the real
+   *  defs: MCP servers expose their own tool list. Returning [] or
+   *  throwing fails the install cleanly. */
+  discoverTools?: (fields: Record<string, string>) => Promise<CatalogTool[]>;
 }
 
 /** Public catalog view — never ships the secrets function or full tool defs. */
 export function templateInfo(t: ToolTemplate): ToolTemplateInfo {
-  const { tools, connection, ...rest } = t;
+  const { tools, connection, discoverTools, ...rest } = t;
   return {
     ...rest,
     auth: connection ? 'oauth' : 'secrets',
@@ -1947,6 +1959,96 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         approval: true,
       },
     ],
+  },
+  {
+    id: 'mcp-server',
+    name: 'MCP server',
+    category: 'Automation',
+    blurb:
+      'Connect any hosted MCP server (Asana, Sentry, Airtable, internal tools) — its tools are discovered at install; read-only tools run freely, mutations ask for approval first.',
+    docs_url: 'https://modelcontextprotocol.io/docs',
+    fields: [
+      {
+        key: 'name',
+        label: 'Short name',
+        placeholder: 'asana',
+        help: 'Lowercase letters/digits/dashes — namespaces the tools (mcp_asana_*) and secrets.',
+      },
+      {
+        key: 'server_url',
+        label: 'Server URL',
+        placeholder: 'https://mcp.example.com/mcp',
+        help: 'The server\'s streamable-HTTP MCP endpoint (POST JSON-RPC).',
+      },
+      {
+        key: 'auth_token',
+        label: 'Bearer token (if required)',
+        optional: true,
+        placeholder: 'token…',
+        help: 'Sent as Authorization: Bearer on every call — stays server-side, the model never sees it.',
+      },
+    ],
+    secrets: (f) => {
+      const p = `MCP_${f.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').toUpperCase()}`;
+      return {
+        [`${p}_URL`]: f.server_url.trim().replace(/\/+$/, ''),
+        ...(f.auth_token?.trim() ? { [`${p}_TOKEN`]: f.auth_token.trim() } : {}),
+      };
+    },
+    tools: [], // discovered from the server at install — see discoverTools
+    discoverTools: async (fields) => {
+      const slug = fields.name
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '');
+      if (!slug) throw new Error('name must contain letters or digits');
+      const url = fields.server_url.trim();
+      if (!/^https?:\/\//.test(url)) throw new Error('server URL must be http(s)');
+      const p = `MCP_${slug.toUpperCase()}`;
+      const auth = fields.auth_token?.trim();
+      const { tools } = await mcpListTools(
+        url.replace(/\/+$/, ''),
+        auth ? { authorization: `Bearer ${auth}` } : {},
+      );
+      return tools.map((t): CatalogTool => {
+        const local = `mcp_${slug}_${t.name}`
+          .replace(/[^a-zA-Z0-9_-]/g, '_')
+          .slice(0, 64);
+        return {
+          name: local,
+          label: t.name.replace(/[_-]+/g, ' '),
+          description:
+            t.description ??
+            `MCP tool ${t.name} — args follow the server's schema, shown to the model.`,
+          method: 'POST',
+          url: `{{secrets.${p}_URL}}`,
+          headers: auth ? { authorization: `Bearer {{secrets.${p}_TOKEN}}` } : {},
+          transport: 'mcp',
+          mcpTool: t.name,
+          // The server's own JSON Schema — dropped (not truncated) when
+          // it's absurdly large so a hostile schema can't bloat the agent
+          // config or the model's tools payload.
+          ...(() => {
+            try {
+              return t.inputSchema &&
+                Object.keys(t.inputSchema).length &&
+                JSON.stringify(t.inputSchema).length <= 20_000
+                ? { inputSchema: t.inputSchema }
+                : {};
+            } catch {
+              return {};
+            }
+          })(),
+          // Security defaults: read-only tools run free; anything else
+          // proposes first. No `identity` flag — discovered tools can
+          // never bind to the verified customer record.
+          ...(t.annotations?.readOnlyHint && !t.annotations?.destructiveHint
+            ? {}
+            : { approval: true }),
+        };
+      });
+    },
   },
 ];
 

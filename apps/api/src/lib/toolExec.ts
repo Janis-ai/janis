@@ -1,6 +1,7 @@
 import type { Db } from '../db/client.js';
 import type { agents } from '../db/schema.js';
 import { interpolateSecrets } from './secrets.js';
+import { mcpCallTool } from './mcpClient.js';
 import { CATALOG_TOOL_NAMES, IDENTITY_TOOL_NAMES, TEMPLATE_BODY_TEMPLATES, TEMPLATE_WIDGETS, TOOL_TEMPLATES } from './toolTemplates.js';
 import type { ToolWidgetConfig } from './widgets.js';
 
@@ -46,6 +47,15 @@ export interface ToolDef {
    *  component (cards carousel / options picker) instead of the model
    *  retelling it as text. `map` selects fields off each result row. */
   widget?: ToolWidgetConfig;
+  /** 'mcp' → the call is a JSON-RPC tools/call to the MCP server at `url`
+   *  instead of an HTTP fetch — args pass through verbatim. */
+  transport?: 'mcp';
+  /** Remote tool name on the MCP server (transport='mcp' tools only —
+   *  `name` is the namespaced local alias). */
+  mcpTool?: string;
+  /** The MCP server's own JSON Schema for arguments, stored at discovery
+   *  and handed to the model verbatim instead of the flat `params` map. */
+  inputSchema?: Record<string, unknown>;
 }
 
 export function toolsFor(agent: AgentRow): ToolDef[] {
@@ -355,6 +365,21 @@ export async function callTool(
     }
   }
   if (!toolUrlAllowed(url)) return 'error: tool URL not allowed';
+
+  // MCP transport — the call is a JSON-RPC tools/call to the discovered
+  // server, not an HTTP fetch. Secrets already interpolated into url +
+  // headers; the model's args (built against the server's inputSchema)
+  // pass through as `arguments` with JSON-looking strings parsed.
+  if (tool.transport === 'mcp') {
+    try {
+      const mcpArgs = Object.fromEntries(
+        Object.entries(args).map(([k, v]) => [k, typeof v === 'string' ? jsonArg(v) : v]),
+      );
+      return await mcpCallTool(url, headers ?? {}, tool.mcpTool ?? tool.name, mcpArgs);
+    } catch (err) {
+      return `error: MCP call failed — ${(err as Error).message}`;
+    }
+  }
 
   // Body templates: every {key} placeholder must be supplied as an arg;
   // values substitute as JSON (strings quoted, objects nested). Secrets in

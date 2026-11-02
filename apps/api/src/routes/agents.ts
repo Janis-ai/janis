@@ -2026,10 +2026,32 @@ export function agentRoutes(db: Db) {
         const err = await upsertAgentSecret(db, agent.id, agent.workspaceId, name, value);
         if (err) return c.json({ error: err }, 409);
       }
+      // Dynamic templates (MCP) enumerate tools from the server now —
+      // a dead URL or bad token fails the install here, not mid-convo.
+      let catalog = tpl.tools;
+      if (tpl.discoverTools) {
+        try {
+          catalog = await tpl.discoverTools(fields);
+        } catch (err) {
+          return c.json(
+            { error: `could not reach the MCP server: ${(err as Error).message}` },
+            400,
+          );
+        }
+      }
       const cfg = (agent.config ?? {}) as AgentConfig;
-      const names = new Set(tpl.tools.map((t) => t.name));
-      const stamped = tpl.tools.map((t) => ({ ...t, template: tpl.id }));
-      const tools = [...(cfg.tools ?? []).filter((t) => !names.has(t.name)), ...stamped];
+      const names = new Set(catalog.map((t) => t.name));
+      const stamped = catalog.map((t) => ({ ...t, template: tpl.id }));
+      const tools = [
+        ...(cfg.tools ?? []).filter(
+          (t) =>
+            !names.has(t.name) &&
+            // Dynamic templates re-sync wholesale — defs the server
+            // dropped since last install leave with it.
+            !(tpl.discoverTools && (t as { template?: string }).template === tpl.id),
+        ),
+        ...stamped,
+      ];
       const [updated] = await db
         .update(agents)
         .set({ config: { ...cfg, tools } })
@@ -2060,8 +2082,13 @@ export function agentRoutes(db: Db) {
       const tpl = TOOL_TEMPLATES.find((t) => t.id === c.req.param('template'));
       if (!tpl) return c.json({ error: 'unknown template' }, 404);
       const { approvals = {}, disabled = {} } = c.req.valid('json');
+      // Dynamic templates (MCP) carry no static tool list — manage by the
+      // template stamp the install left on each stored def.
       const names = new Set(tpl.tools.map((t) => t.name));
       const cfg = (agent.config ?? {}) as AgentConfig;
+      for (const t of cfg.tools ?? []) {
+        if ((t as { template?: string }).template === tpl.id) names.add(t.name);
+      }
       const tools = (cfg.tools ?? []).map((t) => {
         if (!names.has(t.name)) return t;
         const touched = approvals[t.name] !== undefined || disabled[t.name] !== undefined;
@@ -2089,8 +2116,13 @@ export function agentRoutes(db: Db) {
     const tpl = TOOL_TEMPLATES.find((t) => t.id === c.req.param('template'));
     if (!tpl) return c.json({ error: 'unknown template' }, 404);
     const cfg = (agent.config ?? {}) as AgentConfig;
+    // Dynamic templates (MCP) carry no static tool list — remove by the
+    // template stamp instead.
     const names = new Set(tpl.tools.map((t) => t.name));
-    const tools = (cfg.tools ?? []).filter((t) => !names.has(t.name));
+    const tools = (cfg.tools ?? []).filter(
+      (t) =>
+        !names.has(t.name) && (t as { template?: string }).template !== tpl.id,
+    );
     const [updated] = await db
       .update(agents)
       .set({ config: { ...cfg, tools } })
