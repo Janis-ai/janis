@@ -18,7 +18,7 @@ import { copilotBuiltins, enabledBuiltins, type BuiltinTool } from './builtinToo
 import { bus } from './bus.js';
 import { toMessage } from './serializers.js';
 import { PLANS, effectivePlanKey, planFor } from './plans.js';
-import type { AttachmentRef } from './channels.js';
+import { channelBindingFor, replyAddressFor, type AttachmentRef, type ChannelCredentials } from './channels.js';
 import { getUpload } from './uploads.js';
 import { callTool, fabricatedIdReason, harvestProducedIds, identityBlockReason, missingTemplateArgs, toolsFor, type ToolDef } from './toolExec.js';
 import { requestToolApproval } from './approvals.js';
@@ -28,6 +28,7 @@ import { sendEmail } from './notify.js';
 import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, internalDataResult, interpolateSpec, itemsFromResult, namedProductsInReply, normTitle, normWidgetRef, propsFromResult, purchaseOptionsLine, reconcilePagedResult, sellableCollectionCounts, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, titlesMatch, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
+type ChannelRow = typeof channels.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
 
 export type { LlmSettings } from './llm.js';
@@ -3051,6 +3052,120 @@ type VerifyProfile = UserProfile & {
   verified_emails?: string[];
 };
 
+/** The email-family channel a verification code should ride on: the thread
+ *  the customer is already talking to wins, then the agent's best — a
+ *  verified custom-domain Resend sender, a connected Gmail/Outlook mailbox,
+ *  then a plain inbound-address channel (branded display name, and replies
+ *  still route back into the inbox). */
+async function verificationChannel(ctx: AgentRunContext): Promise<ChannelRow | undefined> {
+  if (!ctx.agent) return undefined;
+  const sendable = (ch: ChannelRow) =>
+    ch.kind === 'email' ||
+    Boolean((ch.credentials as ChannelCredentials).email_address);
+  const bound = (await channelBindingFor(ctx.db, ctx.convId))?.channel;
+  if (
+    bound &&
+    EMAIL_KINDS.includes(bound.kind as (typeof EMAIL_KINDS)[number]) &&
+    sendable(bound)
+  ) {
+    return bound;
+  }
+  const rows = await ctx.db
+    .select()
+    .from(channels)
+    .where(
+      and(eq(channels.agentId, ctx.agent.id), inArray(channels.kind, EMAIL_KINDS)),
+    );
+  const customFrom = (ch: ChannelRow) => {
+    const c = ch.credentials as ChannelCredentials;
+    return (
+      ch.kind === 'email' &&
+      !!c.from_address &&
+      !c.from_address.toLowerCase().endsWith(`@${env.emailInboundDomain}`)
+    );
+  };
+  const score = (ch: ChannelRow) =>
+    customFrom(ch) ? 0 : ch.kind === 'email' ? 2 : 1;
+  return rows.filter(sendable).sort((a, b) => score(a) - score(b))[0];
+}
+
+/** Emails the code from the client's own mail identity when the agent has
+ *  an email-family channel — their verified sending domain, or their real
+ *  Gmail/Outlook mailbox. Falls back to the global notify sender when
+ *  nothing is configured or the channel send fails — delivery beats
+ *  branding (a code that never arrives verifies nobody). */
+async function sendVerificationMail(ctx: AgentRunContext, email: string, code: string) {
+  const subject = 'Your verification code';
+  const text = `Your verification code is ${code} — enter it in the chat to continue. It expires in 10 minutes. If you did not request it, you can ignore this email.`;
+  try {
+    const channel = await verificationChannel(ctx);
+    if (channel) {
+      const creds = channel.credentials as ChannelCredentials;
+      const display = creds.from_name || channel.name;
+      if (channel.kind === 'gmail') {
+        const { ensureAccessToken, sendMessage } = await import('./gmail.js');
+        const token = await ensureAccessToken(ctx.db, channel);
+        await sendMessage(token, {
+          from: `${display} <${creds.from_address ?? creds.email_address}>`,
+          to: email,
+          subject,
+          text,
+        });
+        return;
+      }
+      if (channel.kind === 'outlook') {
+        const { ensureMsToken, sendMail } = await import('./outlook.js');
+        const token = await ensureMsToken(ctx.db, channel);
+        await sendMail(token, {
+          from: creds.from_address,
+          fromName: display,
+          to: email,
+          subject,
+          text,
+        });
+        return;
+      }
+      // kind === 'email' (Resend): a from_address on a verified custom
+      // domain stays the From; otherwise the channel's own reply address
+      // carries it under the branded display name. Reply-To points at the
+      // channel either way so a customer replying lands back in the inbox.
+      const replyAddr = await replyAddressFor(ctx.db, channel);
+      const brandedFrom =
+        creds.from_address &&
+        !creds.from_address.toLowerCase().endsWith(`@${env.emailInboundDomain}`)
+          ? creds.from_address
+          : undefined;
+      if (replyAddr) {
+        const res = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${env.resendApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            from: `${display} <${brandedFrom ?? replyAddr}>`,
+            reply_to: [replyAddr],
+            to: [email],
+            subject,
+            text,
+            headers: { 'X-Janis-Outbound': channel.id, 'Auto-Submitted': 'auto-generated' },
+          }),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (res.ok) return;
+        console.error(
+          'verification email via channel failed:',
+          res.status,
+          await res.text().catch(() => ''),
+        );
+      }
+    }
+  } catch (e) {
+    console.error('verification email channel send failed — falling back to default sender:', e);
+  }
+  await sendEmail([email], subject, text);
+}
+
 /**
  * Built-in tool: email a 6-digit code to the address the customer claims —
  * controlling the inbox is the proof that binds them to that identity.
@@ -3065,7 +3180,13 @@ export async function sendVerificationEmail(
     return 'error: not sent — that does not look like a valid email address';
   }
   if (!env.resendApiKey) {
-    return 'error: verification email cannot be sent — email sending is not configured; offer a human instead';
+    // A connected Gmail/Outlook mailbox can still carry the send.
+    const mailbox = await verificationChannel(ctx)
+      .then((ch) => !!ch && ch.kind !== 'email')
+      .catch(() => false);
+    if (!mailbox) {
+      return 'error: verification email cannot be sent — email sending is not configured; offer a human instead';
+    }
   }
   const [conv] = await ctx.db
     .select()
@@ -3109,11 +3230,7 @@ export async function sendVerificationEmail(
       userProfile: sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || jsonb_build_object('pending_verification', ${JSON.stringify(pending)}::jsonb)`,
     })
     .where(eq(conversations.id, ctx.convId));
-  await sendEmail(
-    [email],
-    'Your verification code',
-    `Your verification code is ${code} — enter it in the chat to continue. It expires in 10 minutes. If you did not request it, you can ignore this email.`,
-  );
+  await sendVerificationMail(ctx, email, code);
   return `sent — a 6-digit verification code was emailed to ${email}. Ask the customer for the code, then call check_verification_code with it. If it doesn't arrive, suggest checking spam before resending.`;
 }
 

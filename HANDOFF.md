@@ -93,6 +93,19 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02i — Verification codes send from the client's own mail identity
+- send_verification_email always went out as "Janis <alerts@janis.ai>"
+  (env.emailFrom via notify.sendEmail), even for agents whose email
+  channel already sends client-branded mail.
+- New sendVerificationMail resolves the agent's email-family channel —
+  the conversation's bound channel first, then best of: verified
+  custom-domain Resend sender (from_address on email_domain), a connected
+  Gmail/Outlook mailbox (sent through their API, lands in their Sent
+  folder), or a plain inbound-address channel (branded display name +
+  Reply-To back into the inbox). Any failure falls back to the env sender
+  — delivery beats branding. Also lets a gmail/outlook channel carry the
+  send when RESEND_API_KEY is unset.
+
 ## 2026-11-02h — Dead-tool postmortem: Linear braces, SF URL, Jira discovery
 - Found via a torontofood test chat that reported "no tickets" + deflected
   on filing. Root causes, all in the 11-02 connector wave:

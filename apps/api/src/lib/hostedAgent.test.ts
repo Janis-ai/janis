@@ -3564,6 +3564,70 @@ describe('email code verification — guest earns verified identity', () => {
     }
   });
 
+  it('sends the code from the agent\'s email channel — branded name + reply address', async () => {
+    const r = stubResend();
+    try {
+      const a = await mkAgent('vc-chan');
+      const conv = await mkConv(a.id, 'webchat:vcc');
+      await db.insert(channels).values({
+        workspaceId: wsId,
+        agentId: a.id,
+        kind: 'email',
+        name: 'Acme Support',
+        credentials: {
+          inbound_address: 'acme@inbound.janis.ai',
+          reply_address: 'acme@inbound.janis.ai',
+          from_name: 'Acme',
+        },
+      });
+      const ctx = { db, convId: conv.id, workspaceId: wsId, agent: a };
+
+      const sent = await sendVerificationEmail(ctx, { email: 's@x.co' });
+      expect(sent).toContain('sent');
+      const body = r.bodies.at(-1) as {
+        from?: string;
+        reply_to?: string[];
+        headers?: Record<string, string>;
+      };
+      expect(body.from).toBe('Acme <acme@inbound.janis.ai>');
+      expect(body.reply_to).toEqual(['acme@inbound.janis.ai']);
+      expect(body.headers?.['X-Janis-Outbound']).toBeTruthy();
+      expect(await checkVerificationCode(ctx, { code: r.code() })).toContain('verified');
+    } finally {
+      r.restore();
+    }
+  });
+
+  it('a verified custom-domain from_address carries the From; reply still routes to the channel', async () => {
+    const r = stubResend();
+    try {
+      const a = await mkAgent('vc-domain');
+      const conv = await mkConv(a.id, 'webchat:vcd');
+      await db.insert(channels).values({
+        workspaceId: wsId,
+        agentId: a.id,
+        kind: 'email',
+        name: 'Acme Support',
+        credentials: {
+          inbound_address: 'acme-1@inbound.janis.ai',
+          reply_address: 'acme-1@inbound.janis.ai',
+          from_name: 'Acme',
+          from_address: 'support@acme.com',
+          email_domain: 'acme.com',
+          email_domain_status: 'verified',
+        },
+      });
+      const ctx = { db, convId: conv.id, workspaceId: wsId, agent: a };
+
+      await sendVerificationEmail(ctx, { email: 's@x.co' });
+      const body = r.bodies.at(-1) as { from?: string; reply_to?: string[] };
+      expect(body.from).toBe('Acme <support@acme.com>');
+      expect(body.reply_to).toEqual(['acme-1@inbound.janis.ai']);
+    } finally {
+      r.restore();
+    }
+  });
+
   it('a second code verification ACCUMULATES — order-email ≠ account-email stays anchored', async () => {
     // The signed-in shopper verified their account email; the order was
     // placed under a different address (PayPal). Verifying that address
