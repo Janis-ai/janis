@@ -3733,9 +3733,7 @@ function IntegrationCards({
   // OAuth cards subsume their manual sibling — the credential card's id is
   // named on the OAuth card's `manual`, rendered collapsed inside it
   // rather than as a second catalog card.
-  const manualIds = new Set(
-    allTemplates.map((t) => t.manual).filter((x): x is string => !!x),
-  );
+  const manualIds = new Set(allTemplates.flatMap((t) => t.manual ?? []));
   const templates = [...allTemplates.filter((t) => !manualIds.has(t.id))].sort(
     (a, b) =>
       (sugOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
@@ -3754,9 +3752,13 @@ function IntegrationCards({
   );
 
   function card(t: ToolTemplateInfo) {
-    const manual = t.manual ? allTemplates.find((x) => x.id === t.manual) : undefined;
+    const manuals = (t.manual ? [t.manual].flat() : [])
+      .map((id) => allTemplates.find((x) => x.id === id))
+      .filter((x): x is ToolTemplateInfo => !!x);
     const ft =
-      openId === t.id ? t : openId === `${t.id}:manual` ? manual : undefined;
+      openId === t.id
+        ? t
+        : manuals.find((m) => openId === `${t.id}:manual:${m.id}`);
     return (
         <div
           key={t.id}
@@ -3956,15 +3958,21 @@ function IntegrationCards({
               ) : null}
               {/* OAuth is the default — the manual-credentials sibling it
                   subsumes lives one click deeper for BYO-app installs. */}
-              {t.oauth_connect && manual && !installed(t) && (
-                <button
-                  className="btn sm"
-                  style={{ fontSize: 11 }}
-                  title="Paste your own credentials instead of OAuth consent"
-                  onClick={() => { setOpenId(`${t.id}:manual`); setErr(''); setFields({}); }}
-                >
-                  Use your own credentials instead
-                </button>
+              {t.oauth_connect && manuals.length > 0 && !installed(t) && (
+                <div className="row" style={{ gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <span className="muted" style={{ fontSize: 11 }}>or your own:</span>
+                  {manuals.map((m) => (
+                    <button
+                      key={m.id}
+                      className="btn sm"
+                      style={{ fontSize: 11 }}
+                      title={`Connect with ${m.name} instead`}
+                      onClick={() => { setOpenId(`${t.id}:manual:${m.id}`); setErr(''); setFields({}); }}
+                    >
+                      {m.name}
+                    </button>
+                  ))}
+                </div>
               )}
               {/* Credential-less integrations have nothing to update once
                   installed — show the badge + Remove, not a dead button. */}

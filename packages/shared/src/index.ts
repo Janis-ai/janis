@@ -991,7 +991,7 @@ export const ToolTemplateInfo = z.object({
   // Id of the manual-credentials template this OAuth card subsumes — the
   // console collapses that card into an "API token instead" expander here
   // instead of showing two cards for one provider.
-  manual: z.string().optional(),
+  manual: z.union([z.string(), z.array(z.string())]).optional(),
   fields: z.array(ToolTemplateField),
   tools: z.array(
     z.object({

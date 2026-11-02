@@ -47,10 +47,10 @@ export interface ToolTemplate {
    *  path instead of a credentials form; the OAuth callback creates the
    *  agent_connection row AND installs the tools. */
   oauth_connect?: string;
-  /** Manual-credentials template this OAuth card subsumes — the console
-   *  collapses it into an "API token instead" expander instead of two
-   *  cards for one provider. */
-  manual?: string;
+  /** Manual-credentials template(s) this OAuth card subsumes — the
+   *  console collapses them into credential fallbacks inside the card
+   *  instead of separate cards (Zendesk has two: PAT + BYO OAuth). */
+  manual?: string | string[];
   tools: CatalogTool[];
 }
 
@@ -634,7 +634,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       credentials: () => ({}),
     },
     oauth_connect: '/api/oauth/zendesk/connect',
-    manual: 'zendesk-oauth',
+    manual: ['zendesk', 'zendesk-oauth'],
     tools: [], // filled from the `zendesk-oauth` template below — same tickets surface
   },
   {
