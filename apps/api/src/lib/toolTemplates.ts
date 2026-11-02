@@ -736,6 +736,16 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     }),
     tools: [
       {
+        name: 'jira_list_projects',
+        label: 'List projects',
+        description:
+          'List the Jira projects this connection can see — call before jira_create_issue to pick a real project key; a guessed key always fails.',
+        method: 'GET',
+        url: 'https://{{secrets.JIRA_HOST}}/rest/api/3/project/search?maxResults=50',
+        headers: { authorization: 'Basic {{secrets.JIRA_AUTH}}' },
+        params: {},
+      },
+      {
         name: 'jira_search',
         label: 'Search issues',
         description:
@@ -774,7 +784,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           '{"fields":{"project":{"key":{project}},"summary":{summary},"issuetype":{"name":{issue_type}},"description":{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Reported via Janis — customer email: {customer_email:text}"}]},{"type":"paragraph","content":[{"type":"text","text":{description}}]}]}}}',
         params: {
           project:
-            'project key — only one seen in earlier jira_search/jira_get_issue results or given by the customer/operator; a guessed key always 400s',
+            'project key — from jira_list_projects (call it first), an earlier issue lookup, or the customer/operator; a guessed key always 400s',
           summary: 'one-line issue title',
           issue_type: 'issue type name — "Bug" for defects, "Task" otherwise',
           customer_email: "the verified customer's email — written onto the ticket",

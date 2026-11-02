@@ -114,6 +114,48 @@ describe('toolsFor identity backfill', () => {
   const fakeAgent = (tools: ToolDef[]) =>
     ({ config: { tools } }) as unknown as typeof agents.$inferSelect;
 
+  it('backfills catalog tools added to a stamped template after install', () => {
+    // Installed via OAuth connect → defs stamp template:'jira-connect'. A
+    // tool the catalog added since (jira_list_projects) must appear without
+    // the operator reinstalling.
+    const t = toolsFor(
+      fakeAgent([
+        {
+          name: 'jira_search',
+          description: 'd',
+          method: 'GET',
+          url: 'https://api.atlassian.com/ex/jira/abc/rest/api/3/search/jql?jql={jql}',
+          params: { jql: 'q' },
+          template: 'jira-connect',
+        } as ToolDef,
+      ]),
+    );
+    const names = t.map((x) => x.name);
+    expect(names).toContain('jira_list_projects');
+    // the clone carries the OAuth URL shape, not the BYO host secret
+    expect(t.find((x) => x.name === 'jira_list_projects')?.url).toContain(
+      'CONN_JIRA_CLOUD_ID',
+    );
+  });
+
+  it('never resurrects a tool the operator still carries (disabled included)', () => {
+    const t = toolsFor(
+      fakeAgent([
+        {
+          name: 'jira_search',
+          description: 'd',
+          method: 'GET',
+          url: 'https://x.atlassian.net/rest/api/3/search/jql?jql={jql}',
+          disabled: true,
+          template: 'jira',
+        } as ToolDef,
+      ]),
+    );
+    // stored disabled def stays out; only genuinely missing names fill in
+    expect(t.filter((x) => x.name === 'jira_search')).toHaveLength(0);
+    expect(t.some((x) => x.name === 'jira_list_projects')).toBe(true);
+  });
+
   it('marks catalog customer-record tools even when stored config predates the flag', () => {
     const t = toolsFor(
       fakeAgent([

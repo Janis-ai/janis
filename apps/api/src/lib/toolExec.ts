@@ -50,7 +50,26 @@ export interface ToolDef {
 
 export function toolsFor(agent: AgentRow): ToolDef[] {
   const cfg = (agent.config ?? {}) as { tools?: ToolDef[] };
-  return (cfg.tools ?? [])
+  // Catalog tool-set sync: an install stamps each stored def with its
+  // template id, so a tool added to that template later backfills here —
+  // existing agents pick it up without a reinstall. Only the absence of a
+  // name fills in; a def the operator kept (disabled included) is never
+  // touched, and removing the whole template removes its stamps.
+  const stored = cfg.tools ?? [];
+  const seen = new Set(stored.map((t) => t.name));
+  const backfill: ToolDef[] = [];
+  for (const t of stored) {
+    const tpl = TOOL_TEMPLATES.find(
+      (x) => x.id === (t as ToolDef & { template?: string }).template,
+    );
+    for (const cat of tpl?.tools ?? []) {
+      if (!seen.has(cat.name)) {
+        seen.add(cat.name);
+        backfill.push(cat as ToolDef);
+      }
+    }
+  }
+  return [...stored, ...backfill]
     .filter((t) => t.name && t.url && !t.disabled)
     // Retroactive catalog fields — tools installed before a flag/binding
     // existed serialize without it; the catalog is the source of truth.

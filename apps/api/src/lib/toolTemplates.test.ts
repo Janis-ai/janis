@@ -164,6 +164,16 @@ describe('jira tool template', () => {
     );
   });
 
+  it('list_projects grounds create_issue — unbound read of project keys', async () => {
+    const t = tool('jira_list_projects');
+    // not customer data — must stay unbound or a guest can never file
+    expect(t.identity).toBeUndefined();
+    await callTool(t, {}, secrets);
+    expect(sentUrl()).toBe(
+      'https://acme.atlassian.net/rest/api/3/project/search?maxResults=50',
+    );
+  });
+
   it('searches the enhanced jql endpoint, identity-bound', async () => {
     const t = tool('jira_search');
     expect(t.identity).toBe(true);
