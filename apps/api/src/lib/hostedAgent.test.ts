@@ -3628,6 +3628,54 @@ describe('email code verification — guest earns verified identity', () => {
     }
   });
 
+  it('an agent-level verified domain sends the code From the brand — no channel needed', async () => {
+    const r = stubResend();
+    try {
+      const a = await mkAgent('vc-adom');
+      const conv = await mkConv(a.id, 'webchat:vcad');
+      const agent = {
+        ...a,
+        config: {
+          email_sending: {
+            email_domain: 'mail.acme.com',
+            email_domain_id: 'd1',
+            email_domain_status: 'verified',
+            from_name: 'Acme',
+            from_address: 'support@mail.acme.com',
+          },
+        },
+      };
+      const ctx = { db, convId: conv.id, workspaceId: wsId, agent };
+      await sendVerificationEmail(ctx, { email: 's@x.co' });
+      const body = r.bodies.at(-1) as { from?: string; reply_to?: string[] };
+      expect(body.from).toBe('Acme <support@mail.acme.com>');
+      expect(body.reply_to).toEqual(['support@mail.acme.com']);
+      expect(await checkVerificationCode(ctx, { code: r.code() })).toContain('verified');
+    } finally {
+      r.restore();
+    }
+  });
+
+  it('an unverified agent domain falls back to the default sender', async () => {
+    const r = stubResend();
+    try {
+      const a = await mkAgent('vc-pend');
+      const conv = await mkConv(a.id, 'webchat:vcp');
+      const agent = {
+        ...a,
+        config: {
+          email_sending: { email_domain: 'mail.acme.com', email_domain_id: 'd1', email_domain_status: 'pending' },
+        },
+      };
+      const ctx = { db, convId: conv.id, workspaceId: wsId, agent };
+      await sendVerificationEmail(ctx, { email: 's@x.co' });
+      const body = r.bodies.at(-1) as { from?: string };
+      expect(body.from).toBe(env.emailFrom);
+    } finally {
+      r.restore();
+    }
+  });
+
   it('a second code verification ACCUMULATES — order-email ≠ account-email stays anchored', async () => {
     // The signed-in shopper verified their account email; the order was
     // placed under a different address (PayPal). Verifying that address

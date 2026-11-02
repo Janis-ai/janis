@@ -3,16 +3,10 @@ import { HTTPException } from 'hono/http-exception';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import {
-  cfAuthorizeUrl,
-  cfExchangeCode,
-  cfRefresh,
-  cloudflareSetupRecords,
-  createOrAdoptResendDomain,
-  deleteResendDomain,
-  getResendDomain,
-  verifyResendDomain,
-} from '../lib/resendDomains.js';
-import { detectDnsSetup } from '../lib/dnsSetup.js';
+  cfDomainFinish,
+  mountEmailDomainRoutes,
+  type EmailDomainBag,
+} from '../lib/emailDomainRoutes.js';
 import { and, eq, ne, sql } from 'drizzle-orm';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
@@ -787,200 +781,26 @@ export function channelApiRoutes(db: Db) {
   // Client registers e.g. mail.acme.com on our Resend account; we return
   // the DNS records, they configure them, verify flips status. Replies
   // still route to the channel's inbound_address via Reply-To — sending-
-  // side records only.
-  const loadEmailChannel = async (workspaceId: string, channelId: string) => {
-    const [row] = await db
-      .select()
-      .from(channels)
-      .where(and(eq(channels.id, channelId), eq(channels.workspaceId, workspaceId)))
-      .limit(1);
-    return row;
-  };
-
-  app.post(
-    '/:id/email-domain',
-    zValidator('json', z.object({ domain: z.string().min(4).max(200) })),
-    async (c) => {
-      const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
-      if (!row) return c.json({ error: 'not found' }, 404);
-      if (row.kind !== 'email') return c.json({ error: 'email channel required' }, 400);
-      const role = await agentRoleFor(
-        db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
-      );
-      if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
-      const domain = c.req
-        .valid('json')
-        .domain.trim()
-        .toLowerCase()
-        .replace(/^https?:\/\//, '')
-        .replace(/[/?#].*$/, '');
-      if (!/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(domain) || domain.endsWith(env.emailInboundDomain))
-        return c.json({ error: 'enter a domain you own — e.g. mail.acme.com' }, 400);
-      if (!env.resendCustomDomains)
-        return c.json({ error: 'custom sending domains are not available on this deployment' }, 400);
-      const creds = row.credentials as ChannelCredentials;
-      let d;
-      try {
-        // idempotent — re-registering an existing domain adopts it
-        d = await createOrAdoptResendDomain(domain);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        // Resend's raw "your plan" message reads as the customer's plan —
-        // it's actually the platform account's domain quota.
-        if (/domain limit/i.test(msg))
-          return c.json({ error: 'custom sending domains are temporarily unavailable — try again later' }, 503);
-        return c.json({ error: `resend: ${msg}` }, 502);
-      }
-      const next = {
-        ...creds,
-        email_domain: domain,
-        email_domain_id: d.id,
-        email_domain_status: d.status ?? 'pending',
-        email_domain_records: d.records ?? [],
-      };
-      await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
-      invalidateChannelCache();
-      return c.json({ email_domain: domain, status: next.email_domain_status, records: next.email_domain_records });
+  // side records only. Shared implementation lives in emailDomainRoutes —
+  // agents mount the same family for channel-free sending (verification
+  // codes etc).
+  mountEmailDomainRoutes(app, db, {
+    stateKey: 'ch',
+    inboundFromAllowed: true,
+    load: async (workspaceId, id) => {
+      const [row] = await db
+        .select()
+        .from(channels)
+        .where(and(eq(channels.id, id), eq(channels.workspaceId, workspaceId)))
+        .limit(1);
+      if (!row) return null;
+      if (row.kind !== 'email') return { error: 'email channel required' };
+      return { id: row.id, agentId: row.agentId, bag: row.credentials as EmailDomainBag };
     },
-  );
-
-  app.post('/:id/email-domain/verify', async (c) => {
-    const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
-    if (!row) return c.json({ error: 'not found' }, 404);
-    if (row.kind !== 'email') return c.json({ error: 'email channel required' }, 400);
-    const creds = row.credentials as ChannelCredentials;
-    if (!creds.email_domain_id) return c.json({ error: 'no domain registered' }, 400);
-    const role = await agentRoleFor(
-      db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
-    );
-    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
-    try {
-      // ask Resend to re-check; a not-yet-propagated domain can error — the
-      // fresh GET below is the source of truth either way
-      await verifyResendDomain(creds.email_domain_id).catch(() => {});
-      const d = await getResendDomain(creds.email_domain_id);
-      const next = {
-        ...creds,
-        email_domain_status: d.status ?? creds.email_domain_status,
-        ...(d.records?.length ? { email_domain_records: d.records } : {}),
-      };
-      await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
+    save: async (owner, bag) => {
+      await db.update(channels).set({ credentials: bag }).where(eq(channels.id, owner.id));
       invalidateChannelCache();
-      return c.json({ status: next.email_domain_status, records: next.email_domain_records ?? creds.email_domain_records ?? [] });
-    } catch (e) {
-      return c.json({ error: `resend: ${e instanceof Error ? e.message : e}` }, 502);
-    }
-  });
-
-  // Cloudflare OAuth — one-click DNS setup. State is HMAC-signed and binds
-  // the consent redirect back to this channel (same scheme as Slack).
-  const cfRedirectUri = (c: Context) => `${requestOrigin(c)}/channels/email-domain/cf-callback`;
-  app.post('/:id/email-domain/cf-connect', async (c) => {
-    if (!env.cfOauthClientId) return c.json({ error: 'cloudflare oauth not configured' }, 503);
-    const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
-    if (!row) return c.json({ error: 'not found' }, 404);
-    const role = await agentRoleFor(
-      db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
-    );
-    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
-    const b64 = Buffer.from(
-      JSON.stringify({ ch: row.id, w: c.get('workspaceId'), x: Date.now() + 600_000 }),
-    ).toString('base64url');
-    const sig = createHmac('sha256', env.sessionSecret).update(b64).digest('base64url');
-    return c.json({ url: cfAuthorizeUrl(cfRedirectUri(c), `cf.${b64}.${sig}`) });
-  });
-
-  // Best-path DNS setup: Domain Connect → Cloudflare OAuth → manual. The UI
-  // calls this and navigates to whatever URL comes back (or shows records).
-  app.post('/:id/email-domain/dns-setup', async (c) => {
-    const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
-    if (!row) return c.json({ error: 'not found' }, 404);
-    if (row.kind !== 'email') return c.json({ error: 'email channel required' }, 400);
-    const creds = row.credentials as ChannelCredentials;
-    if (!creds.email_domain || !creds.email_domain_records?.length)
-      return c.json({ error: 'register a domain first' }, 400);
-    const role = await agentRoleFor(
-      db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
-    );
-    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
-    const mode = await detectDnsSetup(creds.email_domain, creds.email_domain_records);
-    if (mode.mode === 'cloudflare') {
-      if (!env.cfOauthClientId) return c.json({ mode: 'manual' });
-      const b64 = Buffer.from(
-        JSON.stringify({ ch: row.id, w: c.get('workspaceId'), x: Date.now() + 600_000 }),
-      ).toString('base64url');
-      const sig = createHmac('sha256', env.sessionSecret).update(b64).digest('base64url');
-      return c.json({ mode: 'cloudflare', url: cfAuthorizeUrl(cfRedirectUri(c), `cf.${b64}.${sig}`) });
-    }
-    return c.json(mode);
-  });
-
-  // Push the DNS records into Cloudflare on the client's behalf — an OAuth
-  // connection if one exists, else a one-shot API token (never stored).
-  // Skips records that already exist.
-  app.post(
-    '/:id/email-domain/cf-setup',
-    zValidator('json', z.object({ api_token: z.string().min(20).max(200).optional() })),
-    async (c) => {
-      const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
-      if (!row) return c.json({ error: 'not found' }, 404);
-      if (row.kind !== 'email') return c.json({ error: 'email channel required' }, 400);
-      const creds = row.credentials as ChannelCredentials;
-      if (!creds.email_domain || !creds.email_domain_records?.length)
-        return c.json({ error: 'register a domain first' }, 400);
-      const role = await agentRoleFor(
-        db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
-      );
-      if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
-      try {
-        let token = c.req.valid('json').api_token;
-        if (!token) {
-          if (!creds.cf_refresh_token)
-            return c.json({ error: 'connect Cloudflare or paste an API token' }, 400);
-          token = (await cfRefresh(creds.cf_refresh_token)).access_token;
-        }
-        const out = await cloudflareSetupRecords(
-          creds.email_domain,
-          creds.email_domain_records,
-          token,
-        );
-        await verifyResendDomain(creds.email_domain_id!).catch(() => {});
-        const d = await getResendDomain(creds.email_domain_id!);
-        const next = {
-          ...creds,
-          email_domain_status: d.status ?? creds.email_domain_status,
-          ...(d.records?.length ? { email_domain_records: d.records } : {}),
-        };
-        await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
-        invalidateChannelCache();
-        return c.json({ ...out, status: next.email_domain_status, records: next.email_domain_records });
-      } catch (e) {
-        return c.json({ error: `cloudflare: ${e instanceof Error ? e.message : e}` }, 502);
-      }
     },
-  );
-
-  app.delete('/:id/email-domain', async (c) => {
-    const row = await loadEmailChannel(c.get('workspaceId'), c.req.param('id'));
-    if (!row) return c.json({ error: 'not found' }, 404);
-    if (row.kind !== 'email') return c.json({ error: 'email channel required' }, 400);
-    const creds = row.credentials as ChannelCredentials;
-    const role = await agentRoleFor(
-      db, c.get('user').id, c.get('role'), c.get('agentScope'), row.agentId, c.get('workspaceId'),
-    );
-    if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
-    if (creds.email_domain_id) void deleteResendDomain(creds.email_domain_id).catch(() => {});
-    const next = { ...creds };
-    delete next.email_domain;
-    delete next.email_domain_id;
-    delete next.email_domain_status;
-    delete next.email_domain_records;
-    // a branded From on the removed domain can no longer send
-    if (next.from_address && creds.email_domain && next.from_address.endsWith(`@${creds.email_domain}`))
-      delete next.from_address;
-    await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
-    invalidateChannelCache();
-    return c.json({ ok: true });
   });
 
   app.delete('/:id', async (c) => {
@@ -1240,42 +1060,48 @@ export function channelWebhookRoutes(db: Db) {
       !timingSafeEqual(Buffer.from(sig), Buffer.from(expected))
     )
       return fail('invalid state');
-    let st: { ch?: string; w?: string; x?: number };
+    let st: { ch?: string; ag?: string; w?: string; x?: number };
     try {
       st = JSON.parse(Buffer.from(b64, 'base64url').toString());
     } catch {
       return fail('invalid state');
     }
-    if (!st.ch || !st.w || !st.x || st.x < Date.now()) return fail('expired state');
+    if ((!st.ch && !st.ag) || !st.w || !st.x || st.x < Date.now()) return fail('expired state');
+    const redirectUri = `${requestOrigin(c)}/channels/email-domain/cf-callback`;
+    // Agent-level sending domain — the bag lives on config.email_sending.
+    if (st.ag) {
+      const [agent] = await db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, st.ag), eq(agents.workspaceId, st.w)))
+        .limit(1);
+      if (!agent) return fail('agent not found');
+      const bag = ((agent.config ?? {}) as { email_sending?: EmailDomainBag }).email_sending ?? {};
+      try {
+        const { next, pushed } = await cfDomainFinish(bag, code, redirectUri);
+        await db
+          .update(agents)
+          .set({
+            config: sql`coalesce(${agents.config}, '{}'::jsonb) || jsonb_build_object('email_sending', ${JSON.stringify(next)}::jsonb)`,
+          })
+          .where(eq(agents.id, agent.id));
+        return c.redirect(
+          `${requestWebOrigin(c)}/agents/${agent.id}/channels?cf_connect=${encodeURIComponent(`Cloudflare${pushed}`)}`,
+        );
+      } catch (e) {
+        return fail(e instanceof Error ? e.message : 'cloudflare setup failed', agent.id);
+      }
+    }
     const [row] = await db
       .select()
       .from(channels)
-      .where(and(eq(channels.id, st.ch), eq(channels.workspaceId, st.w)))
+      .where(and(eq(channels.id, st.ch!), eq(channels.workspaceId, st.w)))
       .limit(1);
     if (!row) return fail('channel not found');
     const failAtAgent = (msg: string) => fail(msg, row.agentId, row.id);
     const creds = row.credentials as ChannelCredentials;
     try {
-      const tokens = await cfExchangeCode(
-        code,
-        `${requestOrigin(c)}/channels/email-domain/cf-callback`,
-      );
-      const next = { ...creds, cf_refresh_token: tokens.refresh_token ?? creds.cf_refresh_token };
-      let pushed = '';
-      if (creds.email_domain && creds.email_domain_records?.length) {
-        const out = await cloudflareSetupRecords(
-          creds.email_domain,
-          creds.email_domain_records,
-          tokens.access_token,
-        );
-        if (creds.email_domain_id) {
-          await verifyResendDomain(creds.email_domain_id).catch(() => {});
-          const d = await getResendDomain(creds.email_domain_id);
-          next.email_domain_status = d.status ?? creds.email_domain_status;
-          if (d.records?.length) next.email_domain_records = d.records;
-        }
-        pushed = ` — ${out.created} record${out.created === 1 ? '' : 's'} created`;
-      }
+      const { next, pushed } = await cfDomainFinish(creds, code, redirectUri);
       await db.update(channels).set({ credentials: next }).where(eq(channels.id, row.id));
       invalidateChannelCache();
       return c.redirect(

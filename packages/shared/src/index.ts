@@ -256,6 +256,37 @@ export const AgentConfig = z.object({
     .max(8)
     .optional(),
   tone: z.string().optional(),
+  // Transactional sending identity — verification codes and other
+  // agent-originated customer email send from this domain instead of the
+  // platform sender, no email channel required. Server-managed via
+  // /api/agents/:id/email-domain; mirrors the channel email_domain
+  // credential fields. cf_refresh_token is write-only (reads return
+  // cf_connected) and config PATCHes preserve the stored bag.
+  email_sending: z
+    .object({
+      from_name: z.string().max(120).optional(),
+      from_address: z.string().max(200).optional(),
+      email_domain: z.string().max(200).optional(),
+      email_domain_id: z.string().max(100).optional(),
+      email_domain_status: z.string().max(40).optional(),
+      email_domain_checked_at: z.string().max(60).optional(),
+      email_domain_records: z
+        .array(
+          z.object({
+            record: z.string().optional(),
+            name: z.string(),
+            type: z.string(),
+            value: z.string(),
+            ttl: z.union([z.string(), z.number()]).optional(),
+            priority: z.number().optional(),
+            status: z.string().optional(),
+          }),
+        )
+        .optional(),
+      cf_refresh_token: z.string().optional(),
+      cf_connected: z.boolean().optional(), // read marker — never accepted on write
+    })
+    .optional(),
   // Per-agent help-center domain override — beats the workspace-level
   // help_domain when both are set. Bare domain only (help.acme.com).
   help_domain: z

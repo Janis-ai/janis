@@ -59,6 +59,7 @@ import { applySuggestion, type SuggestionPatch } from '../lib/evalTriage.js';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { effectiveMeteredModel } from '../lib/llm.js';
 import { llmModelsResult } from '../lib/llmModels.js';
+import { mountEmailDomainRoutes, type EmailDomainBag } from '../lib/emailDomainRoutes.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { processEvents } from '../services/ingest.js';
@@ -542,6 +543,12 @@ export function agentRoutes(db: Db) {
           .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
           .limit(1)
       : [undefined];
+    // email_sending is server-managed (the /:id/email-domain routes own it)
+    // — a config save from a stale tab must not clobber domain/token state.
+    const storedEs = ((prevCfg?.config ?? {}) as AgentConfig).email_sending;
+    if (configToSave !== undefined && storedEs) {
+      configToSave = { ...configToSave, email_sending: storedEs };
+    }
     const [row] = await db
       .update(agents)
       .set({
@@ -606,6 +613,33 @@ export function agentRoutes(db: Db) {
       }
     }
     return c.json({ agent: toAgent(row) });
+  });
+
+  // ── Agent-level email sending (no channel required) ────────────────
+  // The same custom-domain family an email channel mounts, stored on
+  // config.email_sending — verification codes and other agent-originated
+  // customer mail send From the client's verified domain.
+  mountEmailDomainRoutes(app, db, {
+    stateKey: 'ag',
+    inboundFromAllowed: false,
+    load: async (workspaceId, id) => {
+      const [row] = await db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, id), eq(agents.workspaceId, workspaceId)))
+        .limit(1);
+      if (!row) return null;
+      const bag = (((row.config ?? {}) as AgentConfig).email_sending ?? {}) as EmailDomainBag;
+      return { id: row.id, agentId: row.id, bag };
+    },
+    save: async (owner, bag) => {
+      await db
+        .update(agents)
+        .set({
+          config: sql`coalesce(${agents.config}, '{}'::jsonb) || jsonb_build_object('email_sending', ${JSON.stringify(bag)}::jsonb)`,
+        })
+        .where(eq(agents.id, owner.id));
+    },
   });
 
   // Guidance edit history — every save that changed instructions/greeting/

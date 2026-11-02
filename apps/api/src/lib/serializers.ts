@@ -39,6 +39,12 @@ function scrubLlmKey(config: unknown): AgentConfig {
   const cfg = { ...((config ?? {}) as Record<string, unknown>) };
   const llm = cfg.llm as Record<string, unknown> | undefined;
   if (llm) cfg.llm = scrubLlmBlock(llm);
+  // cf_refresh_token is write-only like llm.api_key — reads get a boolean.
+  const es = cfg.email_sending as Record<string, unknown> | undefined;
+  if (es) {
+    const { cf_refresh_token, ...rest } = es;
+    cfg.email_sending = { ...rest, cf_connected: Boolean(cf_refresh_token) };
+  }
   return cfg as AgentConfig;
 }
 

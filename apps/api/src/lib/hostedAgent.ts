@@ -3052,12 +3052,20 @@ type VerifyProfile = UserProfile & {
   verified_emails?: string[];
 };
 
-/** The email-family channel a verification code should ride on: the thread
- *  the customer is already talking to wins, then the agent's best — a
- *  verified custom-domain Resend sender, a connected Gmail/Outlook mailbox,
- *  then a plain inbound-address channel (branded display name, and replies
- *  still route back into the inbox). */
-async function verificationChannel(ctx: AgentRunContext): Promise<ChannelRow | undefined> {
+/** Where a verification code should send From — the client's own mail
+ *  identity in every form we can drive: an email-family channel (Resend
+ *  channel / connected mailbox) or the agent's verified sending domain
+ *  (config.email_sending — no channel required). */
+type VerifySender =
+  | { via: 'channel'; channel: ChannelRow }
+  | { via: 'domain'; from: string; replyTo: string };
+
+/** The thread the customer is already talking to wins, then the agent's
+ *  verified sending domain, then its best email channel — a custom-domain
+ *  Resend sender, a connected Gmail/Outlook mailbox, or a plain
+ *  inbound-address channel (branded display name, replies still route
+ *  back into the inbox). */
+async function verificationSender(ctx: AgentRunContext): Promise<VerifySender | undefined> {
   if (!ctx.agent) return undefined;
   const sendable = (ch: ChannelRow) =>
     ch.kind === 'email' ||
@@ -3068,7 +3076,19 @@ async function verificationChannel(ctx: AgentRunContext): Promise<ChannelRow | u
     EMAIL_KINDS.includes(bound.kind as (typeof EMAIL_KINDS)[number]) &&
     sendable(bound)
   ) {
-    return bound;
+    return { via: 'channel', channel: bound };
+  }
+  // config.email_sending — verified under Email sending — carries
+  // verification mail even when no email channel exists (webchat-only
+  // agents). Reply-To is the branded address itself so a customer response
+  // reaches the client's real mailbox.
+  const es = ((ctx.agent.config ?? {}) as AgentConfig).email_sending;
+  if (es?.email_domain && es.email_domain_status === 'verified' && env.resendApiKey) {
+    const addr =
+      es.from_address && es.from_address.toLowerCase().endsWith(`@${es.email_domain}`)
+        ? es.from_address
+        : `no-reply@${es.email_domain}`;
+    return { via: 'domain', from: `${es.from_name || ctx.agent.name} <${addr}>`, replyTo: addr };
   }
   const rows = await ctx.db
     .select()
@@ -3086,19 +3106,45 @@ async function verificationChannel(ctx: AgentRunContext): Promise<ChannelRow | u
   };
   const score = (ch: ChannelRow) =>
     customFrom(ch) ? 0 : ch.kind === 'email' ? 2 : 1;
-  return rows.filter(sendable).sort((a, b) => score(a) - score(b))[0];
+  const ch = rows.filter(sendable).sort((a, b) => score(a) - score(b))[0];
+  return ch ? { via: 'channel', channel: ch } : undefined;
 }
 
 /** Emails the code from the client's own mail identity when the agent has
- *  an email-family channel — their verified sending domain, or their real
- *  Gmail/Outlook mailbox. Falls back to the global notify sender when
- *  nothing is configured or the channel send fails — delivery beats
- *  branding (a code that never arrives verifies nobody). */
+ *  one — their verified sending domain, or their real Gmail/Outlook
+ *  mailbox. Falls back to the global notify sender when nothing is
+ *  configured or the send fails — delivery beats branding (a code that
+ *  never arrives verifies nobody). */
 async function sendVerificationMail(ctx: AgentRunContext, email: string, code: string) {
   const subject = 'Your verification code';
   const text = `Your verification code is ${code} — enter it in the chat to continue. It expires in 10 minutes. If you did not request it, you can ignore this email.`;
   try {
-    const channel = await verificationChannel(ctx);
+    const sender = await verificationSender(ctx);
+    if (sender?.via === 'domain') {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: sender.from,
+          reply_to: [sender.replyTo],
+          to: [email],
+          subject,
+          text,
+          headers: { 'X-Janis-Outbound': `verify:${ctx.agent!.id}`, 'Auto-Submitted': 'auto-generated' },
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (res.ok) return;
+      console.error(
+        'verification email via agent domain failed:',
+        res.status,
+        await res.text().catch(() => ''),
+      );
+    }
+    const channel = sender?.via === 'channel' ? sender.channel : undefined;
     if (channel) {
       const creds = channel.credentials as ChannelCredentials;
       const display = creds.from_name || channel.name;
@@ -3181,8 +3227,8 @@ export async function sendVerificationEmail(
   }
   if (!env.resendApiKey) {
     // A connected Gmail/Outlook mailbox can still carry the send.
-    const mailbox = await verificationChannel(ctx)
-      .then((ch) => !!ch && ch.kind !== 'email')
+    const mailbox = await verificationSender(ctx)
+      .then((s) => s?.via === 'channel' && s.channel.kind !== 'email')
       .catch(() => false);
     if (!mailbox) {
       return 'error: verification email cannot be sent — email sending is not configured; offer a human instead';

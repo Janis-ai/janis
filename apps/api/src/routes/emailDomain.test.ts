@@ -17,6 +17,7 @@ process.env.CLOUDFLARE_OAUTH_CLIENT_ID = 'cf_client';
 process.env.CLOUDFLARE_OAUTH_CLIENT_SECRET = 'cf_secret';
 
 const { channelApiRoutes, channelWebhookRoutes } = await import('./channels.js');
+const { agentRoutes } = await import('./agents.js');
 
 let db: Db;
 let app: Hono;
@@ -51,7 +52,9 @@ beforeAll(async () => {
   const client = new PGlite();
   db = drizzle(client, { schema }) as unknown as Db;
   await migrate(db as never, { migrationsFolder: './drizzle' });
-  app = new Hono().route('/api/channels', channelApiRoutes(db));
+  app = new Hono()
+    .route('/api/channels', channelApiRoutes(db))
+    .route('/api/agents', agentRoutes(db));
 
   const [ws] = await db.insert(workspaces).values({ name: 'W', plan: 'pro' }).returning();
   const [agent] = await db
@@ -318,5 +321,111 @@ describe('custom email domain', () => {
     const creds = ch.credentials as Record<string, unknown>;
     expect(creds.email_domain).toBeUndefined();
     expect(creds.from_address).toBeUndefined();
+  });
+});
+
+describe('agent-level email sending (no channel required)', () => {
+  let agentId = '';
+
+  const agentPost = (path: string, body?: unknown) =>
+    app.fetch(
+      new Request(`http://t/api/agents${path}`, {
+        method: 'POST',
+        headers: { cookie, 'content-type': 'application/json' },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }),
+    );
+  const agentSendPatch = (body: unknown) =>
+    app.fetch(
+      new Request(`http://t/api/agents/${agentId}/email-sending`, {
+        method: 'PATCH',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      }),
+    );
+  const emailSending = async () => {
+    const [row] = await db.select().from(agents).where(eq(agents.id, agentId));
+    return ((row.config ?? {}) as { email_sending?: Record<string, unknown> }).email_sending ?? {};
+  };
+
+  beforeAll(async () => {
+    const [ch] = await db.select().from(channels).where(eq(channels.id, channelId));
+    const [a] = await db
+      .insert(agents)
+      .values({ workspaceId: ch.workspaceId, name: 'mail-agent', apiKeyHash: 'h-m', apiKeyPreview: 'p' })
+      .returning();
+    agentId = a.id;
+  });
+
+  it('registers a domain onto config.email_sending', async () => {
+    stubResend();
+    const res = await agentPost(`/${agentId}/email-domain`, { domain: 'Mail.Acme.com' });
+    const body = await j(res);
+    expect(res.status).toBe(200);
+    expect(body.email_domain).toBe('mail.acme.com');
+    const es = await emailSending();
+    expect(es.email_domain).toBe('mail.acme.com');
+    expect(es.email_domain_id).toBe('dom_1');
+    expect(es.email_domain_status).toBe('pending');
+  });
+
+  it('verify flips status; email-sending gates from_address on the verified domain', async () => {
+    stubResend();
+    expect((await agentSendPatch({ from_address: 'support@other.com' })).status).toBe(400);
+    const v = await agentPost(`/${agentId}/email-domain/verify`);
+    expect((await j(v)).status).toBe('verified');
+    expect((await agentSendPatch({ from_address: 'support@mail.acme.com', from_name: 'Acme' })).status).toBe(200);
+    const es = await emailSending();
+    expect(es.from_address).toBe('support@mail.acme.com');
+    expect(es.from_name).toBe('Acme');
+  });
+
+  it('a config PATCH cannot clobber the stored domain bag', async () => {
+    const res = await app.fetch(
+      new Request(`http://t/api/agents/${agentId}`, {
+        method: 'PATCH',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ config: { system_prompt: 'be helpful' } }),
+      }),
+    );
+    expect(res.status).toBe(200);
+    const es = await emailSending();
+    expect(es.email_domain).toBe('mail.acme.com');
+    expect(es.from_address).toBe('support@mail.acme.com');
+  });
+
+  it('toAgent scrubs cf_refresh_token to a cf_connected marker', async () => {
+    const [row] = await db.select().from(agents).where(eq(agents.id, agentId));
+    const es = (row.config as { email_sending?: Record<string, unknown> }).email_sending ?? {};
+    await db
+      .update(agents)
+      .set({ config: { ...(row.config as object), email_sending: { ...es, cf_refresh_token: 'rt_secret' } } })
+      .where(eq(agents.id, agentId));
+    const res = await app.fetch(new Request(`http://t/api/agents`, { headers: { cookie } }));
+    expect(res.status).toBe(200);
+    const body = (await j(res)) as { agents?: { id: string; config?: { email_sending?: Record<string, unknown> } }[] };
+    const shown = body.agents?.find((a) => a.id === agentId)?.config?.email_sending ?? {};
+    expect(shown.cf_connected).toBe(true);
+    expect(shown.cf_refresh_token).toBeUndefined();
+    // the stored bag still holds it
+    expect((await emailSending()).cf_refresh_token).toBe('rt_secret');
+  });
+
+  it('delete clears the domain and its dependent from_address', async () => {
+    stubResend();
+    const res = await app.fetch(
+      new Request(`http://t/api/agents/${agentId}/email-domain`, {
+        method: 'DELETE',
+        headers: { cookie },
+      }),
+    );
+    expect(res.status).toBe(200);
+    const es = await emailSending();
+    expect(es.email_domain).toBeUndefined();
+    expect(es.from_address).toBeUndefined();
+    // from_name survives — it's not domain-bound — and the Cloudflare
+    // connection stays (same contract as the channel's delete).
+    expect(es.from_name).toBe('Acme');
+    expect(es.cf_refresh_token).toBe('rt_secret');
   });
 });

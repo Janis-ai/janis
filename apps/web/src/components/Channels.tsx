@@ -994,9 +994,9 @@ function EmailFromName({ channel }: { channel: Channel }) {
  *  feature is `answer_addresses`: mail To/Cc/Delivered-To'd to a listed
  *  address is ingested even when it's list-fanned — that's what makes a
  *  Google Group / alias / shared mailbox work. */
-/** Whether this deployment offers per-channel custom sending domains —
+/** Whether this deployment offers per-owner custom sending domains —
  *  false when the platform Resend account's domain quota is spoken for. */
-function useEmailDomainEnabled() {
+export function useEmailDomainEnabled() {
   return useQuery({
     queryKey: ['email-domain-enabled'],
     queryFn: () => api<{ enabled: boolean }>('/api/channels/email-domain/status'),
@@ -1121,7 +1121,17 @@ function EmailAnswerRules({ channel }: { channel: Channel }) {
       {channel.kind === 'email' && (
         <MirrorRow channel={channel} />
       )}
-      {channel.kind === 'email' && <EmailDomainCard channel={channel} />}
+      {channel.kind === 'email' && (
+        <EmailDomainCard
+          basePath={`/api/channels/${channel.id}`}
+          meta={channel.meta}
+          onChanged={() => {
+            void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+            void qc.invalidateQueries({ queryKey: ['channels'] });
+          }}
+          verifiedHint={'Set "Send replies as" to any @{domain} address — replies still route to this channel.'}
+        />
+      )}
       {channel.kind === 'gmail' && (
         <div style={{ marginTop: 10 }}>
           <div style={{ fontSize: 13, fontWeight: 600 }}>Gmail scope</div>
@@ -2276,38 +2286,64 @@ type DomainResp = {
   zone?: string;
 };
 
-function EmailDomainCard({ channel }: { channel: Channel }) {
-  const qc = useQueryClient();
+/** The domain credential bag the card reads — channel.meta on an email
+ *  channel, agent.config.email_sending for agent-level sending. */
+export type EmailDomainMeta = {
+  email_domain?: string;
+  email_domain_status?: string;
+  email_domain_records?: {
+    record?: string;
+    name: string;
+    type: string;
+    value: string;
+    ttl?: string | number;
+    priority?: number;
+    status?: string;
+  }[];
+  cf_connected?: boolean;
+};
+
+/** Custom sending domain — register a client domain on the platform Resend
+ *  account, show the DNS records to add, verify. Shared by an email
+ *  channel's settings (basePath /api/channels/:id) and an agent's Email
+ *  sending card (basePath /api/agents/:id). */
+export function EmailDomainCard({
+  basePath,
+  meta,
+  onChanged,
+  verifiedHint,
+}: {
+  basePath: string;
+  meta: EmailDomainMeta;
+  onChanged: () => void;
+  verifiedHint: string;
+}) {
   const enabled = useEmailDomainEnabled();
-  const [domain, setDomain] = useState(channel.meta.email_domain ?? '');
-  const [registered, setRegistered] = useState(channel.meta.email_domain ?? '');
-  const [status, setStatus] = useState(channel.meta.email_domain_status ?? '');
-  const [records, setRecords] = useState(channel.meta.email_domain_records ?? []);
+  const [domain, setDomain] = useState(meta.email_domain ?? '');
+  const [registered, setRegistered] = useState(meta.email_domain ?? '');
+  const [status, setStatus] = useState(meta.email_domain_status ?? '');
+  const [records, setRecords] = useState(meta.email_domain_records ?? []);
   const [cfToken, setCfToken] = useState('');
   const [cfOpen, setCfOpen] = useState(false);
   const [msg, setMsg] = useState('');
   // Local copies exist for instant feedback after a mutation — but re-sync
-  // whenever the channel prop changes, or a stale query snapshot freezes the
+  // whenever the meta prop changes, or a stale query snapshot freezes the
   // card on whatever domain was registered at mount.
   useEffect(() => {
-    setRegistered(channel.meta.email_domain ?? '');
-    setStatus(channel.meta.email_domain_status ?? '');
-    if (channel.meta.email_domain_records) setRecords(channel.meta.email_domain_records);
+    setRegistered(meta.email_domain ?? '');
+    setStatus(meta.email_domain_status ?? '');
+    if (meta.email_domain_records) setRecords(meta.email_domain_records);
     // A refetch that lands on verified makes any lingering "add the DNS
     // records" instruction stale — the verified state speaks for itself.
-    if (channel.meta.email_domain_status === 'verified') setMsg('');
-  }, [channel.id, channel.meta.email_domain, channel.meta.email_domain_status, channel.meta.email_domain_records]); // eslint-disable-line react-hooks/exhaustive-deps
-  const refresh = () => {
-    void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
-    void qc.invalidateQueries({ queryKey: ['channels'] });
-  };
+    if (meta.email_domain_status === 'verified') setMsg('');
+  }, [basePath, meta.email_domain, meta.email_domain_status, meta.email_domain_records]); // eslint-disable-line react-hooks/exhaustive-deps
   const apply = (d: DomainResp) => {
     if (d.email_domain !== undefined) setRegistered(d.email_domain);
     if (d.status !== undefined) setStatus(d.status);
     if (d.records) setRecords(d.records);
   };
   const act = (path: string, body?: unknown, okMsg: string | ((d: DomainResp) => string) = 'Done.') =>
-    api(`/api/channels/${channel.id}${path}`, {
+    api(`${basePath}${path}`, {
       method: body === undefined ? 'DELETE' : 'POST',
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     })
@@ -2315,7 +2351,7 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
         const r = d as DomainResp;
         setMsg(typeof okMsg === 'function' ? okMsg(r) : okMsg);
         apply(r);
-        refresh();
+        onChanged();
         return true;
       })
       .catch((e) => {
@@ -2414,7 +2450,7 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
             >
               Verify DNS
             </button>
-            {channel.meta.cf_connected ? (
+            {meta.cf_connected ? (
               <button
                 className="btn sm"
                 onClick={() =>
@@ -2429,7 +2465,7 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
               <button
                 className="btn sm"
                 onClick={() =>
-                  api(`/api/channels/${channel.id}/email-domain/dns-setup`, { method: 'POST' })
+                  api(`${basePath}/email-domain/dns-setup`, { method: 'POST' })
                     .then((d) => {
                       const r = d as { mode: string; url?: string };
                       if (r.url) window.location.href = r.url;
@@ -2455,7 +2491,7 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
               Remove
             </button>
           </div>
-          {!cfOpen && !channel.meta.cf_connected && (
+          {!cfOpen && !meta.cf_connected && (
             <button
               className="muted"
               style={{ fontSize: 12, marginTop: 6, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
@@ -2474,7 +2510,7 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
                 className="btn sm"
                 style={{ marginTop: 6 }}
                 onClick={() =>
-                  api(`/api/channels/${channel.id}/email-domain/cf-connect`, { method: 'POST' })
+                  api(`${basePath}/email-domain/cf-connect`, { method: 'POST' })
                     .then((d) => { window.location.href = (d as { url: string }).url; })
                     .catch((e) => setMsg(e instanceof Error ? e.message : 'failed'))
                 }
@@ -2516,8 +2552,7 @@ function EmailDomainCard({ channel }: { channel: Channel }) {
       ) : status === 'verified' ? (
         <div className="row" style={{ marginTop: 6 }}>
           <span className="muted" style={{ fontSize: 12 }}>
-            Set "Send replies as" to any @{registered} address — replies still
-            route to this channel.
+            {verifiedHint.replace('{domain}', registered)}
           </span>
           <button
             className="btn sm"

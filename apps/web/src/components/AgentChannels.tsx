@@ -6,9 +6,77 @@ import { Lock } from 'lucide-react';
 import type { Agent, Channel } from '@janis/shared';
 import { useBillingStatus, useChannels, useMe } from '../api/hooks';
 import { Empty } from './bits';
-import { KIND_LABEL, MetaAssetList, type AssetRow, type AssetSurface, type BoundAsset, type PendingAssets } from './Channels';
+import { KIND_LABEL, MetaAssetList, EmailDomainCard, useEmailDomainEnabled, type AssetRow, type AssetSurface, type BoundAsset, type PendingAssets } from './Channels';
 import { useConfirm } from './Prompt';
 import { friendlyError } from '../lib/friendlyError';
+
+/** Agent-level sending identity — verification codes and other
+ *  agent-originated customer mail send from the client's verified domain.
+ *  Works with or without an email channel; shares the email channel's
+ *  Custom sending domain machinery (same endpoints on /api/agents/:id). */
+function AgentEmailSending({ agent }: { agent: Agent }) {
+  const qc = useQueryClient();
+  const enabled = useEmailDomainEnabled();
+  const es = agent.config.email_sending ?? {};
+  const verified = Boolean(es.email_domain && es.email_domain_status === 'verified');
+  const [fromName, setFromName] = useState(es.from_name ?? '');
+  const [fromAddr, setFromAddr] = useState(es.from_address ?? '');
+  const [msg, setMsg] = useState('');
+  const save = useMutation({
+    mutationFn: () =>
+      api(`/api/agents/${agent.id}/email-sending`, {
+        method: 'PATCH',
+        body: JSON.stringify({ from_name: fromName.trim(), from_address: fromAddr.trim() }),
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['agents'] });
+      setMsg('Saved.');
+    },
+    onError: (e) => setMsg(friendlyError(e instanceof Error ? e.message : 'Save failed').text),
+  });
+  // Feature off on this deployment (platform Resend quota) — hide the whole
+  // card unless a domain is already registered, so Remove stays reachable.
+  if (enabled === false && !es.email_domain) return null;
+  return (
+    <div className="card" style={{ marginTop: 16 }}>
+      <strong style={{ fontSize: 15 }}>Email sending</strong>
+      <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+        Verification codes and other customer email send from your domain instead
+        of Janis — no email channel needed.
+      </div>
+      <EmailDomainCard
+        basePath={`/api/agents/${agent.id}`}
+        meta={es}
+        onChanged={() => void qc.invalidateQueries({ queryKey: ['agents'] })}
+        verifiedHint={'Set the address below to any @{domain} mailbox — replies reach that mailbox.'}
+      />
+      {verified && (
+        <div style={{ marginTop: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 600 }}>Send email as</div>
+          <div className="row" style={{ marginTop: 4, gap: 6 }}>
+            <input
+              className="input grow"
+              placeholder={`support@${es.email_domain}`}
+              value={fromAddr}
+              onChange={(e) => setFromAddr(e.target.value)}
+            />
+            <input
+              className="input"
+              style={{ maxWidth: 220 }}
+              placeholder={`From name (defaults to "${agent.name}")`}
+              value={fromName}
+              onChange={(e) => setFromName(e.target.value)}
+            />
+            <button className="btn sm" disabled={save.isPending} onClick={() => save.mutate()}>
+              Save
+            </button>
+          </div>
+          {msg && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{msg}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /**
  * Per-agent channel manager — everything the old workspace-wide /integrations
@@ -1337,6 +1405,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
           Not answering anywhere yet.
         </p>
       )}
+
+      <AgentEmailSending agent={agent} />
 
       <h2 className="section-title">Add a channel</h2>
 

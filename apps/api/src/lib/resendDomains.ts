@@ -1,7 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
 import { env } from '../env.js';
 import type { Db } from '../db/client.js';
-import { channels } from '../db/schema.js';
+import { agents, channels } from '../db/schema.js';
 import { invalidateChannelCache, type ChannelCredentials } from './channels.js';
 
 /** Resend domain management — client-branded sending. A channel registers
@@ -187,37 +187,65 @@ export const cfRefresh = (refreshToken: string) =>
 const EMAIL_DOMAIN_CHECK_MS = 10 * 60_000;
 const REFRESH_STATUSES = new Set(['not_started', 'pending', 'temporary_failure', 'failed']);
 
-/** Re-ask Resend for one channel's domain state and merge it into creds.
- *  verify first — Resend only rescans DNS on demand — then the GET is the
- *  source of truth for status + per-record state. A 404 means the domain
- *  was deleted on Resend's side; the stored claim is dead → 'failed'. */
+/** Re-ask Resend for a domain's state and return the merged bag: verify
+ *  first — Resend only rescans DNS on demand — then the GET is the source
+ *  of truth for status + per-record state. A 404 means the domain was
+ *  deleted on Resend's side; the stored claim is dead → 'failed'. */
+async function recheckDomain(
+  bag: ChannelCredentials,
+): Promise<ChannelCredentials> {
+  const next = { ...bag, email_domain_checked_at: new Date().toISOString() };
+  try {
+    await verifyResendDomain(bag.email_domain_id!).catch(() => {});
+    const d = await getResendDomain(bag.email_domain_id!);
+    next.email_domain_status = d.status ?? bag.email_domain_status;
+    if (d.records?.length) next.email_domain_records = d.records;
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) next.email_domain_status = 'failed';
+    // other errors: only checked_at moves — throttle, keep last known status
+  }
+  return next;
+}
+
+/** Re-ask Resend for one channel's domain state and merge it into creds. */
 export async function refreshEmailDomainStatus(
   db: Db,
   channel: { id: string; credentials: unknown },
 ): Promise<boolean> {
   const creds = (channel.credentials ?? {}) as ChannelCredentials;
   if (!creds.email_domain_id) return false;
-  const next = { ...creds, email_domain_checked_at: new Date().toISOString() };
-  try {
-    await verifyResendDomain(creds.email_domain_id).catch(() => {});
-    const d = await getResendDomain(creds.email_domain_id);
-    next.email_domain_status = d.status ?? creds.email_domain_status;
-    if (d.records?.length) next.email_domain_records = d.records;
-  } catch (e) {
-    if ((e as { status?: number }).status === 404) next.email_domain_status = 'failed';
-    // other errors: only checked_at moves — throttle, keep last known status
-  }
+  const next = await recheckDomain(creds);
   await db.update(channels).set({ credentials: next }).where(eq(channels.id, channel.id));
   invalidateChannelCache();
   return next.email_domain_status !== creds.email_domain_status;
 }
 
-/** Sweep entry — called under the leader lock each tick. Channels whose
- *  stored domain status is non-terminal and hasn't been re-checked in
- *  EMAIL_DOMAIN_CHECK_MS get refreshed; verified channels cost nothing
- *  (no rows selected). Bounded at 10 per tick — domains are rare. */
+/** Same for an agent-level sending domain — the bag lives on
+ *  config.email_sending; only that key is rewritten. */
+async function refreshAgentEmailDomainStatus(
+  db: Db,
+  agentId: string,
+  bag: ChannelCredentials,
+): Promise<boolean> {
+  if (!bag.email_domain_id) return false;
+  const next = await recheckDomain(bag);
+  await db
+    .update(agents)
+    .set({
+      config: sql`coalesce(${agents.config}, '{}'::jsonb) || jsonb_build_object('email_sending', ${JSON.stringify(next)}::jsonb)`,
+    })
+    .where(eq(agents.id, agentId));
+  return next.email_domain_status !== bag.email_domain_status;
+}
+
+/** Sweep entry — called under the leader lock each tick. Channels (and
+ *  agent-level sending domains) whose stored status is non-terminal and
+ *  hasn't been re-checked in EMAIL_DOMAIN_CHECK_MS get refreshed; verified
+ *  owners cost nothing (no rows selected). Bounded at 10 per tick —
+ *  domains are rare. */
 export async function sweepEmailDomainStatus(db: Db): Promise<number> {
   if (!env.resendApiKey) return 0;
+  const stale = new Date(Date.now() - EMAIL_DOMAIN_CHECK_MS).toISOString();
   const rows = await db
     .select({ id: channels.id, credentials: channels.credentials })
     .from(channels)
@@ -227,7 +255,7 @@ export async function sweepEmailDomainStatus(db: Db): Promise<number> {
         sql`${channels.credentials}->>'email_domain_id' is not null`,
         sql`${channels.credentials}->>'email_domain_status' <> 'verified'`,
         sql`coalesce(${channels.credentials}->>'email_domain_checked_at', '1970-01-01')
-            < ${new Date(Date.now() - EMAIL_DOMAIN_CHECK_MS).toISOString()}`,
+            < ${stale}`,
       ),
     )
     .limit(10);
@@ -237,6 +265,28 @@ export async function sweepEmailDomainStatus(db: Db): Promise<number> {
     if (!REFRESH_STATUSES.has(creds.email_domain_status ?? 'pending')) continue;
     try {
       if (await refreshEmailDomainStatus(db, row)) changed++;
+    } catch {
+      // a single bad row shouldn't stall the sweep
+    }
+  }
+  const agentRows = await db
+    .select({ id: agents.id, config: agents.config })
+    .from(agents)
+    .where(
+      and(
+        sql`${agents.config}->'email_sending'->>'email_domain_id' is not null`,
+        sql`${agents.config}->'email_sending'->>'email_domain_status' <> 'verified'`,
+        sql`coalesce(${agents.config}->'email_sending'->>'email_domain_checked_at', '1970-01-01')
+            < ${stale}`,
+      ),
+    )
+    .limit(10);
+  for (const row of agentRows) {
+    const bag = (((row.config ?? {}) as { email_sending?: ChannelCredentials }).email_sending ??
+      {}) as ChannelCredentials;
+    if (!REFRESH_STATUSES.has(bag.email_domain_status ?? 'pending')) continue;
+    try {
+      if (await refreshAgentEmailDomainStatus(db, row.id, bag)) changed++;
     } catch {
       // a single bad row shouldn't stall the sweep
     }
