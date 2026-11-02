@@ -204,6 +204,8 @@ export const env = {
   zendeskClientSecret: process.env.ZENDESK_CLIENT_SECRET ?? '',
   githubClientId: process.env.GITHUB_CLIENT_ID ?? '',
   githubClientSecret: process.env.GITHUB_CLIENT_SECRET ?? '',
+  notionClientId: process.env.NOTION_CLIENT_ID ?? '',
+  notionClientSecret: process.env.NOTION_CLIENT_SECRET ?? '',
   // Cloudflare OAuth client — auto-configures sending-domain DNS records on
   // the client's zone (zone.read + dns.write scopes).
   cfOauthClientId: process.env.CLOUDFLARE_OAUTH_CLIENT_ID ?? '',

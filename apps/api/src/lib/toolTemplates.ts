@@ -1205,6 +1205,122 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [], // filled from the `slack` template above — one source of truth
   },
   {
+    id: 'notion',
+    name: 'Notion',
+    category: 'Docs & data',
+    blurb:
+      'Search and read pages and databases in the workspace — the agent answers from your team\'s docs and can file new pages.',
+    docs_url: 'https://developers.notion.com/docs/authorization',
+    fields: [
+      {
+        key: 'token',
+        label: 'Internal integration secret (ntn_…)',
+        placeholder: 'ntn_…',
+        help: 'notion.so/my-integrations → New integration → copy the Internal Integration Secret → in Notion, share the pages/databases the agent should reach with the integration (Connections → add).',
+      },
+    ],
+    secrets: (f) => ({ NOTION_TOKEN: f.token.trim() }),
+    tools: [
+      {
+        name: 'notion_search',
+        label: 'Search workspace',
+        description:
+          'Search pages and databases the integration can access — returns titles, ids and last-edited times. Feed page ids to notion_get_page / notion_read_page and database ids to notion_query_database.',
+        method: 'POST',
+        url: 'https://api.notion.com/v1/search',
+        headers: {
+          authorization: 'Bearer {{secrets.NOTION_TOKEN}}',
+          'notion-version': '2022-06-28',
+          'content-type': 'application/json',
+        },
+        bodyTemplate: '{"query":{query},"page_size":10}',
+        params: { query: 'search text — a page title, topic or database name' },
+      },
+      {
+        name: 'notion_get_page',
+        label: 'Get page',
+        description:
+          'Fetch a Notion page\'s metadata (title, url, parent, last edited) — pair with notion_read_page for the actual content.',
+        method: 'GET',
+        url: 'https://api.notion.com/v1/pages/{page_id}',
+        headers: {
+          authorization: 'Bearer {{secrets.NOTION_TOKEN}}',
+          'notion-version': '2022-06-28',
+        },
+        params: { page_id: 'Notion page id (UUID) — from notion_search' },
+      },
+      {
+        name: 'notion_read_page',
+        label: 'Read page content',
+        description:
+          'Read a Notion page\'s block content — the paragraphs, headings and lists that carry the actual text. Answer ONLY from the returned blocks; a short or empty list means the page is thin, say so rather than guessing.',
+        method: 'GET',
+        url: 'https://api.notion.com/v1/blocks/{page_id}/children?page_size=100',
+        headers: {
+          authorization: 'Bearer {{secrets.NOTION_TOKEN}}',
+          'notion-version': '2022-06-28',
+        },
+        params: { page_id: 'Notion page id (UUID) — from notion_search' },
+      },
+      {
+        name: 'notion_query_database',
+        label: 'Query database',
+        description:
+          'Query a Notion database — returns up to 25 rows with their property values. Use after notion_search surfaces a database id.',
+        method: 'POST',
+        url: 'https://api.notion.com/v1/databases/{database_id}/query',
+        headers: {
+          authorization: 'Bearer {{secrets.NOTION_TOKEN}}',
+          'notion-version': '2022-06-28',
+          'content-type': 'application/json',
+        },
+        bodyTemplate: '{"page_size":25}',
+        params: {
+          database_id: 'Notion database id (UUID) — from notion_search',
+        },
+      },
+      {
+        name: 'notion_create_page',
+        label: 'Create page',
+        description:
+          'Create a Notion page under a parent page — use to file escalation notes, summaries or follow-ups the team should see. Propose it, a teammate approves before it posts.',
+        method: 'POST',
+        url: 'https://api.notion.com/v1/pages',
+        headers: {
+          authorization: 'Bearer {{secrets.NOTION_TOKEN}}',
+          'notion-version': '2022-06-28',
+          'content-type': 'application/json',
+        },
+        bodyTemplate:
+          '{"parent":{"page_id":{parent_page_id}},"properties":{"title":{"title":[{"text":{"content":{title}}}]}},"children":[{"object":"block","type":"paragraph","paragraph":{"rich_text":[{"type":"text","text":{"content":{content}}}]}}]}',
+        params: {
+          parent_page_id: 'parent Notion page id (UUID) — from notion_search',
+          title: 'page title',
+          content: 'body text — the context the team needs',
+        },
+        approval: true,
+      },
+    ],
+  },
+  {
+    id: 'notion-connect',
+    name: 'Notion (OAuth)',
+    category: 'Docs & data',
+    blurb:
+      'Same Notion tools via one-click OAuth — pick the pages to share during consent, no token to paste.',
+    docs_url: 'https://developers.notion.com/docs/authorization',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'notion',
+      label: () => 'Notion workspace',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/oauth/notion/connect',
+    manual: 'notion',
+    tools: [], // filled from the `notion` template above — one source of truth
+  },
+  {
     id: 'brave',
     name: 'Brave Search',
     category: 'Web search',
@@ -1892,6 +2008,14 @@ for (const v of [
     auth: 'Bearer {{secrets.CONN_SLACK_TOKEN}}',
   },
   {
+    from: 'notion',
+    to: 'notion-connect',
+    // OAuth mints a bot token — same Bearer + version headers the
+    // internal-token card sends.
+    headers: { 'notion-version': '2022-06-28' },
+    auth: 'Bearer {{secrets.CONN_NOTION_TOKEN}}',
+  },
+  {
     from: 'github',
     to: 'github-connect',
     // One OAuth grant covers every repo the connecting user can reach —
@@ -1913,7 +2037,7 @@ for (const v of [
     dst.tools = src.tools.map((t) => ({
       ...t,
       ...(v.urlFrom ? { url: t.url.replaceAll(v.urlFrom!, v.urlTo!) } : {}),
-      headers: { ...v.headers, authorization: v.auth },
+      headers: { ...v.headers, authorization: v.auth } as Record<string, string>,
       ...(v.params ? { params: { ...t.params, ...v.params } } : {}),
     }));
   }

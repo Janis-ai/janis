@@ -3624,6 +3624,7 @@ function IntegrationCards({
     github: 'GitHub',
     slack: 'Slack',
     zendesk: 'Zendesk',
+    notion: 'Notion',
   };
   const connectProvider = Object.keys(OAUTH_PROVIDERS).find(
     (p) => params.get(`${p}_connect`) != null || params.get(`${p}_error`) != null,

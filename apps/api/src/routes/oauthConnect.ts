@@ -271,6 +271,30 @@ const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     noRefresh: true,
     label: (_t, extra) => extra.subdomain || 'Zendesk',
   },
+  notion: {
+    id: 'notion',
+    templateId: 'notion-connect',
+    // Public integration (notion.so/my-integrations) — self-serve, no
+    // review; capabilities are set on the integration, not the OAuth URL.
+    envCreds: () => ({ clientId: env.notionClientId, clientSecret: env.notionClientSecret }),
+    authorizeUrl: ({ clientId, redirectUri, state }) =>
+      `https://api.notion.com/v1/oauth/authorize?${new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        response_type: 'code',
+        owner: 'user',
+        state,
+      })}`,
+    tokenUrl: 'https://api.notion.com/v1/oauth/token',
+    // Token endpoint wants the client pair in Basic and the grant as JSON.
+    tokenJson: true,
+    credsIn: 'basic',
+    // Bot tokens don't expire and no refresh_token comes back — the
+    // stored token serves until the integration is uninstalled.
+    noRefresh: true,
+    label: (tok) =>
+      (typeof tok.workspace_name === 'string' && tok.workspace_name) || 'Notion workspace',
+  },
   salesforce: {
     id: 'salesforce',
     templateId: 'salesforce-connect',

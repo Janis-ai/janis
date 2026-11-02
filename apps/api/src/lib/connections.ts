@@ -135,6 +135,17 @@ const PROVIDERS: Record<string, ProviderSpec> = {
     acceptJson: true,
     staticToken: true,
   },
+  // Notion public-integration tokens don't expire — the stored bot token
+  // serves until the integration is uninstalled (staticToken short-circuits
+  // mint), refreshBody kept only as a spec-shape stub.
+  notion: {
+    tokenUrl: () => 'https://api.notion.com/v1/oauth/token',
+    staticToken: true,
+    refreshBody: () => ({
+      client_id: env.notionClientId,
+      client_secret: env.notionClientSecret,
+    }),
+  },
   // Janis-owned OAuth app (developer.calendly.com) — the connection stores
   // only the visitor-granted refresh token; access tokens last ~2h.
   calendly: {

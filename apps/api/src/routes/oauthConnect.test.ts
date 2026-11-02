@@ -54,6 +54,8 @@ beforeAll(async () => {
   process.env.SALESFORCE_CLIENT_SECRET = 'sf_secret';
   process.env.GITHUB_CLIENT_ID = 'gh_cid';
   process.env.GITHUB_CLIENT_SECRET = 'gh_secret';
+  process.env.NOTION_CLIENT_ID = 'ntn_cid';
+  process.env.NOTION_CLIENT_SECRET = 'ntn_secret';
   const mod = await import('./oauthConnect.js');
   routes = mod.oauthApiRoutes;
   publicRoutes = mod.oauthPublicRoutes;
@@ -128,6 +130,10 @@ describe('oauth connect — consent redirects', () => {
     expect(gh.origin).toBe('https://github.com');
     expect(gh.pathname).toBe('/login/oauth/authorize');
     expect(gh.searchParams.get('scope')).toContain('repo');
+    const ntn = new URL(await connect('notion'));
+    expect(ntn.origin + ntn.pathname).toBe('https://api.notion.com/v1/oauth/authorize');
+    expect(ntn.searchParams.get('owner')).toBe('user');
+    expect(ntn.searchParams.get('response_type')).toBe('code');
   });
 
   it('unknown provider bounces with an error flash', async () => {
@@ -343,6 +349,61 @@ describe('oauth callbacks', () => {
     const secrets = await connectionSecrets(db, agentId);
     expect(secrets.CONN_GITHUB_TOKEN).toBe('gho_x');
     expect(sent.filter((s) => s.url === 'token')).toHaveLength(0);
+  });
+
+  it('notion exchanges with Basic creds, labels the workspace, serves the stored token', async () => {
+    const state = stateOf(await connect('notion'));
+    const sent: { init?: RequestInit }[] = [];
+    stubFetch({
+      'api.notion.com/v1/oauth/token': (init) => {
+        sent.push({ init });
+        // Notion bot tokens don't expire — access_token + workspace only.
+        return new Response(
+          JSON.stringify({
+            access_token: 'ntn_x',
+            workspace_name: 'Acme Docs',
+            workspace_id: 'ws-1',
+            bot_id: 'bot-1',
+          }),
+          { status: 200 },
+        );
+      },
+    });
+    const res = await app.request(`/oauth/notion/callback?state=${state}&code=c6`, {
+      redirect: 'manual',
+    });
+    expect(res.headers.get('location')).toContain('notion_connect=Acme%20Docs');
+
+    // Client pair rides HTTP Basic — Notion's token endpoint wants it
+    // there, not in the JSON grant body.
+    const auth = (sent[0].init?.headers as Record<string, string>).authorization;
+    expect(auth).toBe(`Basic ${Buffer.from('ntn_cid:ntn_secret').toString('base64')}`);
+    expect(JSON.parse(String(sent[0].init?.body))).toMatchObject({
+      grant_type: 'authorization_code',
+      code: 'c6',
+    });
+    expect(JSON.parse(String(sent[0].init?.body)).client_id).toBeUndefined();
+
+    const [conn] = await db
+      .select()
+      .from(agentConnections)
+      .where(eq(agentConnections.provider, 'notion'));
+    expect(conn.label).toBe('Acme Docs');
+
+    const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
+    const tools =
+      (agent.config as { tools?: { name: string; headers?: Record<string, string> }[] }).tools ??
+      [];
+    const search = tools.find((t) => t.name === 'notion_search')!;
+    expect(search.headers?.authorization).toBe('Bearer {{secrets.CONN_NOTION_TOKEN}}');
+    expect(search.headers?.['notion-version']).toBe('2022-06-28');
+    expect(tools.find((t) => t.name === 'notion_create_page')).toBeDefined();
+
+    // Static token — serves the stored access token, no mint call.
+    sent.length = 0;
+    const secrets = await connectionSecrets(db, agentId);
+    expect(secrets.CONN_NOTION_TOKEN).toBe('ntn_x');
+    expect(sent).toHaveLength(0);
   });
 
   it('a forged state bounces with oauth_error and stores nothing', async () => {

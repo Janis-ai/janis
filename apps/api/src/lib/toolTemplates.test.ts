@@ -243,6 +243,7 @@ describe('oauth-connect template variants', () => {
       ['hubspot', 'hubspot-connect'],
       ['salesforce', 'salesforce-connect'],
       ['github', 'github-connect'],
+      ['notion', 'notion-connect'],
     ]) {
       const p = provider ?? from;
       const pat = tpl(from);
@@ -300,6 +301,15 @@ describe('oauth-connect template variants', () => {
     const comment = tpl('github-connect').tools.find((t) => t.name === 'github_add_comment')!;
     expect(comment.url).toBe('https://api.github.com/repos/{repo}/issues/{number}/comments');
     expect(comment.headers?.authorization).toBe('Bearer {{secrets.CONN_GITHUB_TOKEN}}');
+  });
+
+  it('notion-connect keeps the Notion-Version header on the connection token', () => {
+    const search = tpl('notion-connect').tools.find((t) => t.name === 'notion_search')!;
+    expect(search.headers?.authorization).toBe('Bearer {{secrets.CONN_NOTION_TOKEN}}');
+    expect(search.headers?.['notion-version']).toBe('2022-06-28');
+    expect(
+      tpl('notion-connect').tools.find((t) => t.name === 'notion_create_page')?.approval,
+    ).toBe(true);
   });
 });
 
