@@ -93,6 +93,31 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02j — Approval gating + concierge misclassification + reverse-sync
+- jira/linear/github create_issue are now approval-gated (same class as the
+  already-gated *_add_comment — catalog flag, operators can't un-gate).
+  Kills the silent/over-eager filing seen in the torontofood test chat
+  (JAN-7..10 incl. a literal "Don't forget the peas" ticket) — lite
+  models ignore description nudges on mutations.
+- isConciergeAction(workspaceId, userProfile) matches ANY
+  identity_verified conversation on env.operatorWorkspaceId — including a
+  regular agent's test chat where the customer verified by email. Two
+  call sites misfired on it: /api/actions/:id/decide 404'd member
+  approvals (it demanded external_id === user.id, the concierge
+  self-decide rule), and decidePendingAction posted the deterministic
+  "Done — ran" + skipped resumeAfterDecision. Both paths now require the
+  decider to BE the verified visitor; member approvals on customer convs
+  take the normal workspace path + agent resume (reports "KAN-4 filed").
+- Provider webhooks (reverse sync — Intercom-borrowed): POST
+  /webhooks/linear/:agentId (linear-signature HMAC verified) and
+  /webhooks/jira/:agentId/:token (URL token — Jira doesn't sign).
+  Terminal transitions post a customer-visible "ticket marked Done" note
+  into the filing conversation; dedupe on payload.closed_ticket. Auto-
+  registered at OAuth-connect with per-connection secrets kept across
+  reconnects. REQUIRED new scopes: linear +write, jira +manage:jira-webhook
+  — existing connections must be RECONNECTED once to grant them (the
+  token is server-side only; tools stay the trust boundary). Webhook
+  registration is best-effort — a 403 on old-scope tokens just skips.
 ## 2026-11-02i — Verification codes send from the client's own mail identity
 - send_verification_email always went out as "Janis <alerts@janis.ai>"
   (env.emailFrom via notify.sendEmail), even for agents whose email
