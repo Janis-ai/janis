@@ -38,6 +38,7 @@ import { slackApiRoutes, slackPublicRoutes } from './routes/slack.js';
 import { slackClassicRoutes } from './routes/slackClassic.js';
 import { channelApiRoutes, channelWebhookRoutes } from './routes/channels.js';
 import { metaApiRoutes, metaPublicRoutes } from './routes/meta.js';
+import { providerWebhookRoutes } from './routes/providerWebhooks.js';
 import { gmailApiRoutes, gmailPublicRoutes } from './routes/gmail.js';
 import { calendlyApiRoutes, calendlyPublicRoutes } from './routes/calendly.js';
 import { googleApiRoutes, googlePublicRoutes } from './routes/googleConnect.js';
@@ -200,6 +201,7 @@ export function createApp(db: Db) {
   app.route('/messenger', legacyWebhookRoutes(db)); // legacy Meta app path (webhook.janis.ai)
   app.route('/bot', botIngestRoutes(db)); // Chatfuel/ManyChat external-request ingest — hosted pipeline
   app.route('/meta', metaPublicRoutes(db)); // Meta-signed: data-deletion + deauthorize callbacks
+  app.route('/webhooks', providerWebhookRoutes(db)); // Linear/Jira issue-state → ticket-closed notes
   app.route('/gmail', gmailPublicRoutes(db));
   app.route('/calendly', calendlyPublicRoutes(db)); // Calendly OAuth callback
   app.route('/google', googlePublicRoutes(db)); // Google Sheets/Docs OAuth callback

@@ -7,6 +7,7 @@ import { AgentConfig } from '@janis/shared';
 import { agentConnections, agents } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
 import { connectionToken, type ConnectionCreds } from '../lib/connections.js';
+import { registerIssueWebhook } from './providerWebhooks.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { TOOL_TEMPLATES } from '../lib/toolTemplates.js';
 
@@ -512,6 +513,16 @@ export function oauthPublicRoutes(db: Db) {
         .update(agents)
         .set({ config: { ...cfg, tools } })
         .where(eq(agents.id, agent.id));
+    }
+    // Issue trackers get the reverse-sync webhook registered too — a closed
+    // ticket posts back into the filing conversation. Best-effort: a failed
+    // register must not fail the connect.
+    if (spec.id === 'linear' || spec.id === 'jira') {
+      try {
+        await registerIssueWebhook(db, conn, accessToken, requestOrigin(c));
+      } catch (err) {
+        console.warn('issue webhook registration failed', spec.id, (err as Error).message);
+      }
     }
     return done(label, true);
   });

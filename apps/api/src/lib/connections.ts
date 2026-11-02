@@ -4,7 +4,7 @@ import { agentConnections } from '../db/schema.js';
 import { env } from '../env.js';
 import { decryptSecret, encryptSecret } from './secrets.js';
 
-type ConnRow = typeof agentConnections.$inferSelect;
+export type ConnRow = typeof agentConnections.$inferSelect;
 
 /** Stored credential payload per provider — host is the instance/subdomain. */
 export interface ConnectionCreds {
