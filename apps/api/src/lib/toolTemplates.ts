@@ -653,6 +653,189 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     ],
   },
   {
+    id: 'jira',
+    name: 'Jira',
+    category: 'Issue tracking',
+    blurb:
+      'Check ticket status for customers and file engineering issues on escalation — the customer email on the ticket keys the lookup.',
+    docs_url: 'https://developer.atlassian.com/cloud/jira/platform/rest/v3/',
+    fields: [
+      { key: 'site', label: 'Site', placeholder: 'yourcompany.atlassian.net' },
+      { key: 'email', label: 'Atlassian account email', placeholder: 'you@company.com' },
+      {
+        key: 'api_token',
+        label: 'API token',
+        help: 'id.atlassian.com → Security → API tokens → Create API token → copy it (shown once). The account needs Browse Projects plus Create/Comment Issues on the projects the agent should touch.',
+      },
+    ],
+    secrets: (f) => ({
+      JIRA_HOST: normHost(f.site, '.atlassian.net'),
+      JIRA_AUTH: Buffer.from(`${f.email.trim()}:${f.api_token.trim()}`).toString('base64'),
+    }),
+    tools: [
+      {
+        name: 'jira_search',
+        label: 'Search issues',
+        description:
+          'Search Jira issues with JQL — must scope the query to the verified customer (e.g. text ~ "their-verified-email" OR reporter = "their-verified-email"). Returns issue keys, summaries, statuses and priorities — feed keys to jira_get_issue or jira_add_comment.',
+        method: 'GET',
+        url: 'https://{{secrets.JIRA_HOST}}/rest/api/3/search/jql?jql={jql}&maxResults=10&fields=summary,status,priority,issuetype,created,updated',
+        headers: { authorization: 'Basic {{secrets.JIRA_AUTH}}' },
+        params: {
+          jql: 'JQL query — must include the verified customer email, e.g. text ~ "customer@email.com" OR reporter = "customer@email.com"',
+        },
+        identity: true,
+      },
+      {
+        name: 'jira_get_issue',
+        label: 'Get issue',
+        description:
+          'Fetch a single Jira issue by key (e.g. SUP-123) — scoped to the verified customer: the ticket must reference their email (reporter, description or comments) or the lookup returns nothing. Returns full detail including description and recent comments.',
+        method: 'GET',
+        url: 'https://{{secrets.JIRA_HOST}}/rest/api/3/search/jql?jql=key%20%3D%20%22{issue_key}%22%20AND%20%28text%20~%20%22{email}%22%20OR%20reporter%20%3D%20%22{email}%22%29&maxResults=1&fields=summary,description,status,priority,issuetype,reporter,created,updated,comment',
+        headers: { authorization: 'Basic {{secrets.JIRA_AUTH}}' },
+        params: {
+          issue_key: 'issue key, e.g. SUP-123 — from jira_search results or the customer',
+          email: "the verified customer's own email address",
+        },
+        identity: true,
+      },
+      {
+        name: 'jira_create_issue',
+        label: 'Create issue',
+        description:
+          "File a Jira issue for a bug or request the agent could not resolve — records the customer's verified email on the ticket so engineering can follow up and jira_get_issue can find it for them later.",
+        method: 'POST',
+        url: 'https://{{secrets.JIRA_HOST}}/rest/api/3/issue',
+        headers: { authorization: 'Basic {{secrets.JIRA_AUTH}}' },
+        bodyTemplate:
+          '{"fields":{"project":{"key":{project}},"summary":{summary},"issuetype":{"name":{issue_type}},"description":{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Reported via Janis — customer email: {customer_email:text}"}]},{"type":"paragraph","content":[{"type":"text","text":{description}}]}]}}}',
+        params: {
+          project: 'project key, e.g. SUP',
+          summary: 'one-line issue title',
+          issue_type: 'issue type name — "Bug" for defects, "Task" otherwise',
+          customer_email: "the verified customer's email — written onto the ticket",
+          description: 'what the customer reported, steps to reproduce, and what they expected',
+        },
+        identity: true,
+      },
+      {
+        name: 'jira_add_comment',
+        label: 'Add comment',
+        description:
+          'Add a comment to an existing Jira issue — propose it, a teammate approves before it posts.',
+        method: 'POST',
+        url: 'https://{{secrets.JIRA_HOST}}/rest/api/3/issue/{issue_key}/comment',
+        headers: { authorization: 'Basic {{secrets.JIRA_AUTH}}' },
+        bodyTemplate:
+          '{"body":{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":{comment}}]}]}}',
+        params: {
+          issue_key: 'issue key from jira_search or jira_get_issue, e.g. SUP-123',
+          comment: "comment text — the context the team needs, e.g. the customer's follow-up",
+        },
+        approval: true,
+      },
+    ],
+  },
+  {
+    id: 'linear',
+    name: 'Linear',
+    category: 'Issue tracking',
+    blurb:
+      'Check issue status for customers and file Linear issues on escalation — filed issues carry the customer email so status lookups stay scoped.',
+    docs_url: 'https://linear.app/developers/graphql',
+    fields: [
+      {
+        key: 'api_key',
+        label: 'Personal API key',
+        placeholder: 'lin_api_…',
+        help: 'Linear → Settings → Security & access → Personal API keys → create a key with read + write access. Paste it as-is — no "Bearer" prefix.',
+      },
+    ],
+    secrets: (f) => ({ LINEAR_API_KEY: f.api_key.trim() }),
+    tools: [
+      {
+        name: 'linear_teams',
+        label: 'List teams',
+        description: 'List Linear teams — the id is the team_id linear_create_issue needs.',
+        method: 'POST',
+        url: 'https://api.linear.app/graphql',
+        headers: { authorization: '{{secrets.LINEAR_API_KEY}}' },
+        bodyTemplate:
+          '{"query":"{teams(first:50){nodes{id key name}}}","variables":{"_pad":${noop?}}}',
+        params: {},
+      },
+      {
+        name: 'linear_search_issues',
+        label: 'Search issues',
+        description:
+          'Search Linear issues with an IssueFilter JSON object — must scope to the verified customer via {"description":{"contains":"their-verified-email"}} (issues filed through Janis always carry it). Returns identifiers, titles, states and priorities — feed the issue id to linear_add_comment, the numeric part of the identifier to linear_get_issue.',
+        method: 'POST',
+        url: 'https://api.linear.app/graphql',
+        headers: { authorization: '{{secrets.LINEAR_API_KEY}}' },
+        bodyTemplate:
+          '{"query":"query($f:IssueFilter!){issues(first:10,filter:$f){nodes{id identifier title description state{name type position} priorityLabel assignee{displayName} team{key name} labels{nodes{name}} createdAt updatedAt url}}}}","variables":{"f":${filter}}}',
+        params: {
+          filter:
+            'JSON IssueFilter, e.g. {"and":[{"description":{"contains":"customer@email.com"}},{"title":{"contains":"checkout"}}]} — must include the verified customer email',
+        },
+        identity: true,
+      },
+      {
+        name: 'linear_get_issue',
+        label: 'Get issue',
+        description:
+          'Fetch a Linear issue by its numeric key — scoped to the verified customer: the issue description must contain their email or nothing returns. Returns full detail including recent comments.',
+        method: 'POST',
+        url: 'https://api.linear.app/graphql',
+        headers: { authorization: '{{secrets.LINEAR_API_KEY}}' },
+        bodyTemplate:
+          '{"query":"query($f:IssueFilter!){issues(first:5,filter:$f){nodes{id identifier title description state{name type position} priorityLabel assignee{displayName} team{key name} comments(first:10){nodes{body user{displayName} createdAt}} createdAt updatedAt url}}}}","variables":{"f":{"and":[{"number":{"eq":${number:text}}},{"description":{"contains":"${email:text}"}}]}}}',
+        params: {
+          number: 'numeric part of the issue key — ENG-123 → 123',
+          email: "the verified customer's own email address",
+        },
+        identity: true,
+      },
+      {
+        name: 'linear_create_issue',
+        label: 'Create issue',
+        description:
+          "File a Linear issue for a bug or request the agent could not resolve — records the customer's verified email in the description so the team can follow up and linear_get_issue can find it. Get team_id from linear_teams.",
+        method: 'POST',
+        url: 'https://api.linear.app/graphql',
+        headers: { authorization: '{{secrets.LINEAR_API_KEY}}' },
+        bodyTemplate:
+          '{"query":"mutation($input:IssueCreateInput!){issueCreate(input:$input){success issue{id identifier title url state{name}}}}","variables":{"input":{"teamId":"${team_id:text}","title":"${title:text}","description":"Reported via Janis chat — customer email: ${customer_email:text}\\n\\n${description:text}","priority":${priority?:text}}}}',
+        params: {
+          team_id: 'team UUID — the id field from linear_teams',
+          title: 'one-line issue title',
+          customer_email: "the verified customer's email — written onto the issue",
+          description: 'what the customer reported, steps to reproduce, and what they expected',
+          'priority?': 'optional — 0 none, 1 urgent, 2 high, 3 normal, 4 low',
+        },
+        identity: true,
+      },
+      {
+        name: 'linear_add_comment',
+        label: 'Add comment',
+        description:
+          'Comment on an existing Linear issue — propose it, a teammate approves before it posts.',
+        method: 'POST',
+        url: 'https://api.linear.app/graphql',
+        headers: { authorization: '{{secrets.LINEAR_API_KEY}}' },
+        bodyTemplate:
+          '{"query":"mutation($input:CommentCreateInput!){commentCreate(input:$input){success comment{id body createdAt}}}}","variables":{"input":{"issueId":"${issue_id:text}","body":"${comment:text}"}}}',
+        params: {
+          issue_id:
+            'issue UUID — the id field (not the ABC-123 identifier) from linear_search_issues or linear_get_issue',
+          comment: 'comment text — the context the team needs',
+        },
+        approval: true,
+      },
+    ],
+  },
+  {
     id: 'brave',
     name: 'Brave Search',
     category: 'Web search',

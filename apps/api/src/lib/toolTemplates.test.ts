@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { callTool, type ToolDef } from './toolExec.js';
 import { TOOL_TEMPLATES } from './toolTemplates.js';
 
 const stripe = TOOL_TEMPLATES.find((t) => t.id === 'stripe')!;
@@ -133,5 +134,163 @@ describe('shopify self-service tools', () => {
     expect(t.approval).toBe(true);
     expect(t.bodyTemplate).toContain('discountCodeBasicCreate');
     expect(t.params?.discount).toContain('DiscountCodeBasicInput');
+  });
+});
+
+describe('jira tool template', () => {
+  const jira = TOOL_TEMPLATES.find((t) => t.id === 'jira')!;
+  const tool = (name: string) => jira.tools.find((t) => t.name === name)! as ToolDef;
+  const secrets = jira.secrets({
+    site: 'acme',
+    email: 'ops@acme.com',
+    api_token: 'ATATT_x',
+  });
+  const fetchMock = vi.fn();
+  const sentUrl = () => fetchMock.mock.calls[0][0] as string;
+  const sentBody = () => JSON.parse(fetchMock.mock.calls[0][1].body as string);
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('derives host + basic auth from site/email/token', () => {
+    expect(secrets.JIRA_HOST).toBe('acme.atlassian.net');
+    expect(Buffer.from(secrets.JIRA_AUTH, 'base64').toString()).toBe('ops@acme.com:ATATT_x');
+    expect(jira.secrets({ site: 'https://acme.atlassian.net/', email: 'e', api_token: 't' }).JIRA_HOST).toBe(
+      'acme.atlassian.net',
+    );
+  });
+
+  it('searches the enhanced jql endpoint, identity-bound', async () => {
+    const t = tool('jira_search');
+    expect(t.identity).toBe(true);
+    expect(t.url).toContain('/rest/api/3/search/jql');
+    await callTool(t, { jql: 'reporter = "me@x.com"' }, secrets);
+    expect(sentUrl()).toBe(
+      'https://acme.atlassian.net/rest/api/3/search/jql?jql=' +
+        encodeURIComponent('reporter = "me@x.com"') +
+        '&maxResults=10&fields=summary,status,priority,issuetype,created,updated',
+    );
+    expect(fetchMock.mock.calls[0][1].headers.authorization).toBe(`Basic ${secrets.JIRA_AUTH}`);
+  });
+
+  it('get_issue mechanically scopes the key lookup to the verified email', async () => {
+    const t = tool('jira_get_issue');
+    expect(t.identity).toBe(true);
+    await callTool(t, { issue_key: 'SUP-12', email: 'me@x.com' }, secrets);
+    const jql = new URL(sentUrl()).searchParams.get('jql')!;
+    expect(jql).toBe('key = "SUP-12" AND (text ~ "me@x.com" OR reporter = "me@x.com")');
+  });
+
+  it('create_issue files an ADF description carrying the verified email', async () => {
+    const t = tool('jira_create_issue');
+    expect(t.identity).toBe(true);
+    await callTool(
+      t,
+      {
+        project: 'SUP',
+        summary: 'Checkout 500s',
+        issue_type: 'Bug',
+        customer_email: 'me@x.com',
+        description: 'Payment step returns a 500',
+      },
+      secrets,
+    );
+    expect(sentUrl()).toBe('https://acme.atlassian.net/rest/api/3/issue');
+    const fields = sentBody().fields;
+    expect(fields.project).toEqual({ key: 'SUP' });
+    expect(fields.issuetype).toEqual({ name: 'Bug' });
+    const paras = fields.description.content.map((p: { content: { text: string }[] }) => p.content[0].text);
+    expect(paras[0]).toContain('me@x.com');
+    expect(paras[1]).toBe('Payment step returns a 500');
+  });
+
+  it('add_comment is approval-gated and posts ADF', async () => {
+    const t = tool('jira_add_comment');
+    expect(t.approval).toBe(true);
+    await callTool(t, { issue_key: 'SUP-12', comment: 'Customer followed up' }, secrets);
+    expect(sentUrl()).toBe('https://acme.atlassian.net/rest/api/3/issue/SUP-12/comment');
+    expect(sentBody().body.content[0].content[0].text).toBe('Customer followed up');
+  });
+});
+
+describe('linear tool template', () => {
+  const linear = TOOL_TEMPLATES.find((t) => t.id === 'linear')!;
+  const tool = (name: string) => linear.tools.find((t) => t.name === name)! as ToolDef;
+  const secrets = linear.secrets({ api_key: 'lin_api_x' });
+  const fetchMock = vi.fn();
+  const sentBody = () => JSON.parse(fetchMock.mock.calls[0][1].body as string);
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(new Response('{"data":{}}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('sends the personal key raw — Linear rejects a Bearer prefix', async () => {
+    await callTool(tool('linear_teams'), {}, secrets);
+    expect(fetchMock.mock.calls[0][1].headers.authorization).toBe('lin_api_x');
+    expect(sentBody().query).toContain('teams');
+  });
+
+  it('search is identity-bound and passes the filter through as typed JSON', async () => {
+    const t = tool('linear_search_issues');
+    expect(t.identity).toBe(true);
+    await callTool(
+      t,
+      { filter: '{"and":[{"description":{"contains":"me@x.com"}},{"title":{"contains":"checkout"}}]}' },
+      secrets,
+    );
+    expect(sentBody().variables.f.and[1].title.contains).toBe('checkout');
+  });
+
+  it('get_issue mechanically scopes by issue number + verified email', async () => {
+    const t = tool('linear_get_issue');
+    expect(t.identity).toBe(true);
+    await callTool(t, { number: '123', email: 'me@x.com' }, secrets);
+    const f = sentBody().variables.f;
+    expect(f.and[0].number.eq).toBe(123); // bare number, not a string
+    expect(f.and[1].description.contains).toBe('me@x.com');
+  });
+
+  it('create_issue embeds the verified email and keeps priority numeric', async () => {
+    const t = tool('linear_create_issue');
+    expect(t.identity).toBe(true);
+    await callTool(
+      t,
+      {
+        team_id: 'team-uuid',
+        title: 'Checkout 500s',
+        customer_email: 'me@x.com',
+        description: 'Payment step returns a 500',
+        priority: '2',
+      },
+      secrets,
+    );
+    const input = sentBody().variables.input;
+    expect(input.teamId).toBe('team-uuid');
+    expect(input.priority).toBe(2);
+    expect(input.description).toContain('me@x.com');
+    expect(input.description).toContain('Payment step returns a 500');
+  });
+
+  it('create_issue omits priority cleanly when unset', async () => {
+    await callTool(
+      tool('linear_create_issue'),
+      { team_id: 't', title: 'x', customer_email: 'me@x.com', description: 'd' },
+      secrets,
+    );
+    expect(sentBody().variables.input.priority).toBeNull();
+  });
+
+  it('add_comment is approval-gated', async () => {
+    const t = tool('linear_add_comment');
+    expect(t.approval).toBe(true);
+    await callTool(t, { issue_id: 'uuid-1', comment: 'Customer followed up' }, secrets);
+    expect(sentBody().variables.input).toEqual({ issueId: 'uuid-1', body: 'Customer followed up' });
   });
 });
