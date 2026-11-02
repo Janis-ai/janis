@@ -221,20 +221,24 @@ describe('oauth-connect template variants', () => {
   const tpl = (id: string) => TOOL_TEMPLATES.find((t) => t.id === id)!;
 
   it('every variant exists, connects via /api/oauth, and clones the PAT tool set', () => {
-    for (const [from, to] of [
+    for (const [from, to, provider] of [
       ['jira', 'jira-connect'],
       ['confluence', 'confluence-connect'],
       ['linear', 'linear-connect'],
       ['slack', 'slack-connect'],
+      // PAT clone source is zendesk-oauth but the provider is zendesk —
+      // and the card keeps one field (the customer's subdomain).
+      ['zendesk-oauth', 'zendesk-connect', 'zendesk'],
       ['hubspot', 'hubspot-connect'],
       ['salesforce', 'salesforce-connect'],
       ['github', 'github-connect'],
     ]) {
+      const p = provider ?? from;
       const pat = tpl(from);
       const oauth = tpl(to);
-      expect(oauth.fields).toEqual([]);
-      expect(oauth.oauth_connect).toBe(`/api/oauth/${from}/connect`);
-      expect(oauth.connection?.provider).toBe(from === 'hubspot' ? 'hubspot' : from);
+      expect(oauth.fields.length).toBeLessThanOrEqual(1);
+      expect(oauth.oauth_connect).toBe(`/api/oauth/${p}/connect`);
+      expect(oauth.connection?.provider).toBe(p);
       expect(oauth.tools.map((t) => t.name)).toEqual(pat.tools.map((t) => t.name));
       // flags carry over verbatim — identity binding and approval gating
       // must not silently drop on the OAuth path

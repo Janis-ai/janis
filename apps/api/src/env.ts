@@ -200,6 +200,8 @@ export const env = {
   hubspotClientSecret: process.env.HUBSPOT_CLIENT_SECRET ?? '',
   salesforceClientId: process.env.SALESFORCE_CLIENT_ID ?? '',
   salesforceClientSecret: process.env.SALESFORCE_CLIENT_SECRET ?? '',
+  zendeskClientId: process.env.ZENDESK_CLIENT_ID ?? '',
+  zendeskClientSecret: process.env.ZENDESK_CLIENT_SECRET ?? '',
   githubClientId: process.env.GITHUB_CLIENT_ID ?? '',
   githubClientSecret: process.env.GITHUB_CLIENT_SECRET ?? '',
   // Cloudflare OAuth client — auto-configures sending-domain DNS records on

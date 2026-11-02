@@ -28,8 +28,17 @@ interface OAuthProvider {
   /** Janis-owned OAuth app creds — ''/'' until the env pair lands. */
   envCreds: () => { clientId: string; clientSecret: string };
   /** Consent URL — provider-specific params (audience, scope, actor). */
-  authorizeUrl: (p: { clientId: string; redirectUri: string; state: string }) => string;
-  tokenUrl: string;
+  authorizeUrl: (p: {
+    clientId: string;
+    redirectUri: string;
+    state: string;
+    /** Customer subdomain for per-org providers (Zendesk) — comes from the
+     *  card's query param and rides the signed intent into the exchange. */
+    sub?: string;
+  }) => string;
+  /** Static URL for most providers; function for per-subdomain token
+   *  endpoints (Zendesk calls <sub>.zendesk.com on authorize + exchange). */
+  tokenUrl: string | ((i: Intent) => string);
   /** Token exchange posts JSON instead of form-encoded (Atlassian). */
   tokenJson?: boolean;
   /** Extra headers on the token request — GitHub answers form-encoded
@@ -237,6 +246,28 @@ const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     label: (tok) =>
       ((tok.team as { name?: string } | undefined)?.name ?? '') || 'Slack workspace',
   },
+  zendesk: {
+    id: 'zendesk',
+    templateId: 'zendesk-connect',
+    // Global OAuth client (partner-gated) — authorize + exchange happen on
+    // the customer's own subdomain, which the card collects as a field.
+    envCreds: () => ({ clientId: env.zendeskClientId, clientSecret: env.zendeskClientSecret }),
+    authorizeUrl: ({ clientId, redirectUri, state, sub }) =>
+      `https://${sub}.zendesk.com/oauth/authorizations/new?${new URLSearchParams({
+        response_type: 'code',
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        state,
+        scope: 'read write',
+      })}`,
+    tokenUrl: (i) => `https://${i.z}.zendesk.com/oauth/tokens`,
+    tokenJson: true,
+    credsIn: 'body',
+    // Zendesk access tokens don't expire unless the client flips
+    // expiration on — no refresh path needed.
+    noRefresh: true,
+    label: (_t, extra) => extra.subdomain || 'Zendesk',
+  },
   salesforce: {
     id: 'salesforce',
     templateId: 'salesforce-connect',
@@ -279,6 +310,8 @@ interface Intent {
   /** PKCE code_verifier — rides the signed state so the callback can
    *  complete the exchange without server-side storage. */
   v?: string;
+  /** Zendesk subdomain — authorize and token both live on the org's host. */
+  z?: string;
 }
 
 function pkcePair(): { verifier: string; challenge: string } {
@@ -334,16 +367,22 @@ export function oauthApiRoutes(db: Db) {
       return fail(`pick the agent this ${spec.id} account should serve`);
     }
     const pkce = spec.pkce ? pkcePair() : null;
+    const sub = c.req.query('subdomain')?.trim();
+    if (typeof spec.tokenUrl === 'function' && !sub) {
+      return fail(`enter your ${spec.id} subdomain first`);
+    }
     const state = signIntent({
       w: c.get('workspaceId'),
       a: agentId,
       x: Date.now() + STATE_TTL_MS,
       v: pkce?.verifier,
+      z: sub,
     });
     let url = spec.authorizeUrl({
       clientId,
       redirectUri: `${requestOrigin(c)}/oauth/${spec.id}/callback`,
       state,
+      sub,
     });
     if (pkce) {
       url += `&code_challenge=${pkce.challenge}&code_challenge_method=S256`;
@@ -400,7 +439,9 @@ export function oauthPublicRoutes(db: Db) {
     if (spec.credsIn === 'basic') {
       headers.authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
     }
-    const tokenRes = await fetch(spec.tokenUrl, {
+    const tokenUrl =
+      typeof spec.tokenUrl === 'function' ? spec.tokenUrl(intent) : spec.tokenUrl;
+    const tokenRes = await fetch(tokenUrl, {
       method: 'POST',
       headers,
       body: spec.tokenJson ? JSON.stringify(fields) : new URLSearchParams(fields).toString(),
@@ -415,9 +456,9 @@ export function oauthPublicRoutes(db: Db) {
       );
     }
 
-    let extra: Record<string, string> = {};
+    let extra: Record<string, string> = intent.z ? { subdomain: intent.z } : {};
     try {
-      extra = (await spec.extraCreds?.(accessToken, tok)) ?? {};
+      extra = { ...extra, ...(await spec.extraCreds?.(accessToken, tok)) };
     } catch (err) {
       return done(`connected but setup failed: ${(err as Error).message}`);
     }

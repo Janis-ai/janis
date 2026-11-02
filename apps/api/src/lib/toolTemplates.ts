@@ -557,10 +557,10 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
   },
   {
     id: 'zendesk-oauth',
-    name: 'Zendesk (OAuth)',
+    name: 'Zendesk (client credentials)',
     category: 'Support desk',
     blurb:
-      'Same ticket tools via an OAuth client — the future-proof auth; Zendesk retires API tokens April 2027.',
+      'Same ticket tools via your own OAuth client — the future-proof auth; Zendesk retires API tokens April 2027.',
     docs_url: 'https://developer.zendesk.com/api-reference/sales-force-service-apps/',
     fields: [
       { key: 'subdomain', label: 'Subdomain', placeholder: 'yourcompany.zendesk.com' },
@@ -613,6 +613,29 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         },
       },
     ],
+  },
+  {
+    id: 'zendesk-connect',
+    name: 'Zendesk (OAuth)',
+    category: 'Support desk',
+    blurb:
+      'Same Zendesk tools via one-click OAuth consent — no client to register (Janis global client).',
+    docs_url: 'https://developer.zendesk.com/documentation/api-basics/using-oauth-authentication/',
+    // The only field OAuth can't supply: the customer's subdomain drives
+    // both authorize and token hosts. The card appends it to the connect
+    // URL as a query param.
+    fields: [
+      { key: 'subdomain', label: 'Zendesk subdomain', placeholder: 'acme', help: 'the acme part of acme.zendesk.com' },
+    ],
+    secrets: () => ({}),
+    connection: {
+      provider: 'zendesk',
+      label: () => 'Zendesk',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/oauth/zendesk/connect',
+    manual: 'zendesk',
+    tools: [], // filled from the `zendesk-oauth` template below — same tickets surface
   },
   {
     id: 'salesforce',
@@ -1839,6 +1862,15 @@ for (const v of [
     to: 'linear-connect',
     // OAuth tokens need Bearer — raw-key auth is the personal-API-key path.
     auth: 'Bearer {{secrets.CONN_LINEAR_TOKEN}}',
+  },
+  {
+    from: 'zendesk-oauth',
+    to: 'zendesk-connect',
+    // OAuth rows store the subdomain on the connection (exposed); BYO
+    // rows carry it as a plain secret — same host slot, different source.
+    urlFrom: '{{secrets.ZENDESK_OAUTH_SUBDOMAIN}}',
+    urlTo: '{{secrets.CONN_ZENDESK_SUBDOMAIN}}',
+    auth: 'Bearer {{secrets.CONN_ZENDESK_TOKEN}}',
   },
   {
     from: 'slack',

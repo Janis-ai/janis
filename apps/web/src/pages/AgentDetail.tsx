@@ -3623,6 +3623,7 @@ function IntegrationCards({
     salesforce: 'Salesforce',
     github: 'GitHub',
     slack: 'Slack',
+    zendesk: 'Zendesk',
   };
   const connectProvider = Object.keys(OAUTH_PROVIDERS).find(
     (p) => params.get(`${p}_connect`) != null || params.get(`${p}_error`) != null,
@@ -3915,6 +3916,26 @@ function IntegrationCards({
               </div>
             </div>
           ) : (
+            <>
+            {/* OAuth cards that still need a field (Zendesk's subdomain)
+                render it inline — the values append to the connect URL as
+                query params and ride the signed state to the callback. */}
+            {t.oauth_connect && t.fields.length > 0 && !installed(t) && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, margin: '10px 0 0' }}>
+                {t.fields.map((f) => (
+                  <div key={f.key}>
+                    <div style={{ fontSize: 12, marginBottom: 2 }}>{f.label}</div>
+                    <input
+                      style={{ width: '100%', boxSizing: 'border-box' }}
+                      placeholder={f.placeholder ?? ''}
+                      value={fields[f.key] ?? ''}
+                      onChange={(e) => setFields({ ...fields, [f.key]: e.target.value })}
+                    />
+                    {f.help && <div className="muted" style={{ fontSize: 11 }}>{f.help}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="row" style={{ marginTop: 10 }}>
               {/* Janis-owned OAuth apps get a consent link, not a form — the
                   callback stores the connection and installs the tools. */}
@@ -3926,7 +3947,7 @@ function IntegrationCards({
                 ) : (
                   <a
                     className="btn primary"
-                    href={`${t.oauth_connect}?agent_id=${agentId}${t.oauth_connect === '/api/google/connect' ? `&tpl=${t.id}` : ''}`}
+                    href={`${t.oauth_connect}?agent_id=${agentId}${t.fields.map((f) => `&${f.key}=${encodeURIComponent(fields[f.key] ?? '')}`).join('')}${t.oauth_connect === '/api/google/connect' ? `&tpl=${t.id}` : ''}`}
                     onClick={clearFlash}
                   >
                     Connect {t.name.replace(/ \(OAuth\)$/, '')}
@@ -3987,6 +4008,7 @@ function IntegrationCards({
                 </>
               )}
             </div>
+            </>
           )}
         </div>
     );

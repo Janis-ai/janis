@@ -55,6 +55,16 @@ const PROVIDERS: Record<string, ProviderSpec> = {
     scope: 'read write',
     extra: () => ({ grant_type: 'client_credentials' }),
   },
+  // Auth-code connect via the Janis global client — exchange + API host
+  // live on the customer's subdomain, stored at connect time.
+  zendesk: {
+    tokenUrl: (c) => `https://${c.subdomain}.zendesk.com/oauth/tokens`,
+    exposeSecrets: ['subdomain'],
+    refreshBody: () => ({
+      client_id: env.zendeskClientId,
+      client_secret: env.zendeskClientSecret,
+    }),
+  },
   salesforce: {
     // OAuth-connect rows carry a refresh_token + instance_url (minted on
     // login.salesforce.com); BYO rows carry host + client credentials.
