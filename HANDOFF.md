@@ -93,6 +93,25 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02m — MCP client: long-tail connector via remote tool discovery
+- `mcp-server` catalog template: operator supplies a name slug + server
+  URL + optional bearer → install calls tools/list on the server and
+  materializes stamped defs (mcp_<slug>_<tool>). Covers hosted MCP
+  servers (Asana/Sentry/Airtable-style endpoints) — no bespoke template
+  per provider. Reinstall re-syncs wholesale (server-dropped tools leave).
+- ToolDef gains transport:'mcp' + mcpTool + inputSchema: callTool
+  dispatches to JSON-RPC tools/call (mcpClient.ts — streamable HTTP only,
+  JSON and SSE responses, mcp-session-id handled, re-initializes every
+  call so nothing session-shaped is stored) and hostedAgent hands the
+  server's own inputSchema to the model instead of flat string params.
+- Security defaults: readOnlyHint&&!destructiveHint → autonomous,
+  everything else approval-gated (operator can still toggle — it's their
+  server); discovered tools NEVER take identity (no customer-record
+  binding on arbitrary remote tools); bearer token lives in
+  agent_secrets, interpolated server-side only. inputSchema dropped over
+  20KB (hostile-schema bloat guard).
+- PATCH/DELETE on dynamic templates scope by the `template` stamp — the
+  static tpl.tools list is empty for MCP so name-matching saw nothing.
 ## 2026-11-02l — Agent-level Email sending: custom domain without an email channel
 - The custom sending domain machinery was trapped inside email-channel
   settings — a Shopify + webchat-only client had nowhere to enter a
