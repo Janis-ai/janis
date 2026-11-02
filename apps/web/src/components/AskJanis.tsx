@@ -419,6 +419,11 @@ export function AskJanis({
   // stay glued to the bottom while the user is near it — a poll landing while
   // they're scrolled up reading history must not yank them back down
   const stick = useRef(true);
+  // The last real message row the snap already handled — the tall-message
+  // top-anchor is a DELIVERY-time move only. Without this, every commit while
+  // pinned re-anchors: read a long reply to the bottom and the next poll tick
+  // yanks you back to its greeting.
+  const snappedFor = useRef<HTMLElement | null>(null);
   const pendingAdjust = useRef<{ prevHeight: number; prevTop: number } | null>(null);
   const participantRef = useRef<string | null>(null);
   const lastTypingPing = useRef(0);
@@ -604,20 +609,22 @@ export function AskJanis({
       // history prepended above — keep the viewport on the same message
       el.scrollTop = pendingAdjust.current.prevTop + (el.scrollHeight - pendingAdjust.current.prevHeight);
       pendingAdjust.current = null;
-    } else if (stick.current) {
-      // Own sends always land at the tail; a tall incoming message anchors
-      // at its top so the reader starts at the greeting, not the signature.
-      const rows = el.querySelectorAll('.ask-msg');
-      const last = rows[rows.length - 1];
-      if (
-        last instanceof HTMLElement &&
-        !last.classList.contains('me') &&
-        last.offsetHeight > el.clientHeight
-      ) {
-        el.scrollTop += last.getBoundingClientRect().top - el.getBoundingClientRect().top;
-      } else {
-        el.scrollTo({ top: el.scrollHeight });
-      }
+      return;
+    }
+    // Typing dots render as a transient .ask-msg row — exclude them so their
+    // arrival/removal doesn't read as a new delivery and re-fire the anchor.
+    const rows = el.querySelectorAll('.ask-msg:not(.ask-typing)');
+    const last = rows[rows.length - 1];
+    const fresh = last instanceof HTMLElement && last !== snappedFor.current;
+    if (fresh) snappedFor.current = last;
+    if (!stick.current) return;
+    // Own sends always land at the tail; a tall incoming message anchors at
+    // its top ONCE — on delivery — so the reader starts at the greeting, not
+    // the signature. Later commits bottom-snap while pinned.
+    if (fresh && !last.classList.contains('me') && last.offsetHeight > el.clientHeight) {
+      el.scrollTop += last.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    } else {
+      el.scrollTo({ top: el.scrollHeight });
     }
     // Every commit, not just message/typing changes: the verdict box and
     // reply-expansion controls grow the bubble a render after the text
