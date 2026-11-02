@@ -114,7 +114,7 @@ describe('oauth connect — consent redirects', () => {
   it('linear asks for actor=app so issues post as the app', async () => {
     const p = new URL(await connect('linear')).searchParams;
     expect(p.get('actor')).toBe('app');
-    expect(p.get('scope')).toBe('read,issues:create,comments:create');
+    expect(p.get('scope')).toBe('read,issues:create,comments:create,write');
   });
 
   it('hubspot and salesforce hit their own consent hosts', async () => {
