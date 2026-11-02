@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { and, eq } from 'drizzle-orm';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env, requestOrigin, requestWebOrigin } from '../env.js';
 import { AgentConfig } from '@janis/shared';
@@ -34,6 +34,9 @@ interface OAuthProvider {
   tokenJson?: boolean;
   /** App creds in the POST body vs HTTP Basic — most providers take body. */
   credsIn: 'body' | 'basic';
+  /** PKCE — the provider requires code_challenge at authorize time
+   *  (Salesforce ECAs enforce it) and the verifier at exchange. */
+  pkce?: boolean;
   /** Extra creds fields gathered with the fresh token — Jira's cloud_id,
    *  Salesforce's instance_url — exposed to tools via exposeSecrets. */
   extraCreds?: (
@@ -160,6 +163,8 @@ const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
       })}`,
     tokenUrl: 'https://login.salesforce.com/services/oauth2/token',
     credsIn: 'body',
+    // External Client Apps default to requiring PKCE on the auth-code flow.
+    pkce: true,
     extraCreds: async (_at, tok) => ({
       instance_url: typeof tok.instance_url === 'string' ? tok.instance_url : '',
     }),
@@ -175,6 +180,15 @@ interface Intent {
   w: string;
   a: string;
   x: number;
+  /** PKCE code_verifier — rides the signed state so the callback can
+   *  complete the exchange without server-side storage. */
+  v?: string;
+}
+
+function pkcePair(): { verifier: string; challenge: string } {
+  const verifier = randomBytes(48).toString('base64url');
+  const challenge = createHash('sha256').update(verifier).digest('base64url');
+  return { verifier, challenge };
 }
 
 function signIntent(intent: Intent): string {
@@ -223,18 +237,22 @@ export function oauthApiRoutes(db: Db) {
     if (!agent) {
       return fail(`pick the agent this ${spec.id} account should serve`);
     }
+    const pkce = spec.pkce ? pkcePair() : null;
     const state = signIntent({
       w: c.get('workspaceId'),
       a: agentId,
       x: Date.now() + STATE_TTL_MS,
+      v: pkce?.verifier,
     });
-    return c.redirect(
-      spec.authorizeUrl({
-        clientId,
-        redirectUri: `${requestOrigin(c)}/oauth/${spec.id}/callback`,
-        state,
-      }),
-    );
+    let url = spec.authorizeUrl({
+      clientId,
+      redirectUri: `${requestOrigin(c)}/oauth/${spec.id}/callback`,
+      state,
+    });
+    if (pkce) {
+      url += `&code_challenge=${pkce.challenge}&code_challenge_method=S256`;
+    }
+    return c.redirect(url);
   });
 
   return app;
@@ -277,6 +295,7 @@ export function oauthPublicRoutes(db: Db) {
       ...(spec.credsIn === 'body'
         ? { client_id: clientId, client_secret: clientSecret }
         : {}),
+      ...(spec.pkce && intent.v ? { code_verifier: intent.v } : {}),
     };
     const headers: Record<string, string> = {
       'content-type': spec.tokenJson ? 'application/json' : 'application/x-www-form-urlencoded',
