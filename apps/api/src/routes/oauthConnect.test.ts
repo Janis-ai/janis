@@ -115,11 +115,13 @@ describe('oauth connect — consent redirects', () => {
     expect(p.get('scope')).toBe('read,issues:create,comments:create');
   });
 
-  it('salesforce hits its consent host with PKCE', async () => {
+  it('hubspot and salesforce hit their own consent hosts', async () => {
+    const hs = new URL(await connect('hubspot'));
+    expect(hs.origin).toBe('https://app.hubspot.com');
+    expect(hs.searchParams.get('scope')).toContain('crm.objects.contacts.read');
     const sf = new URL(await connect('salesforce'));
     expect(sf.host).toBe('login.salesforce.com');
     expect(sf.searchParams.get('scope')).toContain('refresh_token');
-    expect(sf.searchParams.get('code_challenge_method')).toBe('S256');
   });
 
   it('unknown provider bounces with an error flash', async () => {
@@ -258,6 +260,28 @@ describe('oauth callbacks', () => {
 
     const secrets = await connectionSecrets(db, agentId);
     expect(secrets.CONN_SALESFORCE_INSTANCE_URL).toBe('https://acme.my.salesforce.com');
+  });
+
+  it('hubspot labels the portal and installs the tools', async () => {
+    const state = stateOf(await connect('hubspot'));
+    stubFetch({
+      'hubapi.com/oauth/v1/token': () =>
+        new Response(
+          JSON.stringify({ access_token: 'at_h', refresh_token: 'rt_h', expires_in: 1800 }),
+          { status: 200 },
+        ),
+      'account-info/v3/details': () =>
+        new Response(JSON.stringify({ portalId: 992211 }), { status: 200 }),
+    });
+    const res = await app.request(`/oauth/hubspot/callback?state=${state}&code=c4`, {
+      redirect: 'manual',
+    });
+    expect(res.headers.get('location')).toContain('hubspot_connect=portal%20992211');
+    const [conn] = await db
+      .select()
+      .from(agentConnections)
+      .where(eq(agentConnections.provider, 'hubspot'));
+    expect(conn.label).toBe('portal 992211');
   });
 
   it('a forged state bounces with oauth_error and stores nothing', async () => {

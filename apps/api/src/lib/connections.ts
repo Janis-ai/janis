@@ -77,8 +77,13 @@ const PROVIDERS: Record<string, ProviderSpec> = {
     tokenUrl: () => 'https://api.linear.app/oauth/token',
     refreshBasic: () => [env.linearClientId, env.linearClientSecret],
   },
-  // HubSpot deliberately absent — their new dev platform gates public
-  // installs behind marketplace review; the PAT card stays the path.
+  hubspot: {
+    tokenUrl: () => 'https://api.hubapi.com/oauth/v1/token',
+    refreshBody: () => ({
+      client_id: env.hubspotClientId,
+      client_secret: env.hubspotClientSecret,
+    }),
+  },
   // Janis-owned OAuth app (developer.calendly.com) — the connection stores
   // only the visitor-granted refresh token; access tokens last ~2h.
   calendly: {

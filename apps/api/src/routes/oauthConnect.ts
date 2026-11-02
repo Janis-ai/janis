@@ -118,6 +118,29 @@ const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     },
     label: (_t, extra) => extra.site_name || 'Linear workspace',
   },
+  hubspot: {
+    id: 'hubspot',
+    templateId: 'hubspot-connect',
+    envCreds: () => ({ clientId: env.hubspotClientId, clientSecret: env.hubspotClientSecret }),
+    authorizeUrl: ({ clientId, redirectUri, state }) =>
+      `https://app.hubspot.com/oauth/authorize?${new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        scope: 'crm.objects.contacts.read crm.objects.contacts.write tickets',
+        state,
+      })}`,
+    tokenUrl: 'https://api.hubapi.com/oauth/v1/token',
+    credsIn: 'body',
+    extraCreds: async (accessToken) => {
+      const res = await fetch('https://api.hubapi.com/account-info/v3/details', {
+        headers: { authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json().catch(() => null)) as { portalId?: number } | null;
+      return { site_name: d?.portalId ? `portal ${d.portalId}` : 'HubSpot account' };
+    },
+    label: (_t, extra) => extra.site_name || 'HubSpot account',
+  },
   salesforce: {
     id: 'salesforce',
     templateId: 'salesforce-connect',

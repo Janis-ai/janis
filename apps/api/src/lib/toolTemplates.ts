@@ -493,6 +493,23 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     ],
   },
   {
+    id: 'hubspot-connect',
+    name: 'HubSpot (OAuth)',
+    category: 'CRM',
+    blurb: 'Same HubSpot tools via one-click OAuth — no private-app token to paste.',
+    docs_url: 'https://developers.hubspot.com/docs/api/oauth-quickstart-guide',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'hubspot',
+      label: () => 'HubSpot',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/oauth/hubspot/connect',
+    manual: 'hubspot',
+    tools: [], // filled from the `hubspot` template below — one source of truth
+  },
+  {
     id: 'zendesk',
     name: 'Zendesk',
     category: 'Support desk',
@@ -1527,6 +1544,11 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
 // to either credential shape.
 for (const v of [
   { from: 'calendly', to: 'calendly-connect', auth: 'Bearer {{secrets.CONN_CALENDLY_TOKEN}}' },
+  {
+    from: 'hubspot',
+    to: 'hubspot-connect',
+    auth: 'Bearer {{secrets.CONN_HUBSPOT_TOKEN}}',
+  },
   {
     from: 'salesforce',
     to: 'salesforce-connect',

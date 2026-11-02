@@ -1,0 +1,33 @@
+{
+  "uid": "janis",
+  "type": "app",
+  "config": {
+    "name": "Janis",
+    "description": "AI support agent — reads and writes HubSpot contacts and tickets.",
+    "distribution": "marketplace",
+    "auth": {
+      "type": "oauth",
+      "redirectUrls": [
+        "https://app.janis.ai/oauth/hubspot/callback",
+        "https://www.janis.ai/oauth/hubspot/callback"
+      ],
+      "requiredScopes": [
+        "crm.objects.contacts.read",
+        "crm.objects.contacts.write",
+        "tickets"
+      ],
+      "optionalScopes": [],
+      "conditionallyRequiredScopes": []
+    },
+    "permittedUrls": {
+      "fetch": ["https://api.hubapi.com"],
+      "iframe": [],
+      "img": []
+    },
+    "support": {
+      "supportEmail": "janis@inbound.janis.ai",
+      "documentationUrl": "https://www.janis.ai",
+      "supportUrl": "https://www.janis.ai"
+    }
+  }
+}
