@@ -59,6 +59,7 @@ const PROVIDERS: Record<string, ProviderSpec> = {
   // live on the customer's subdomain, stored at connect time.
   zendesk: {
     tokenUrl: (c) => `https://${c.subdomain}.zendesk.com/oauth/tokens`,
+    staticToken: true, // Zendesk tokens don't expire unless opted in
     exposeSecrets: ['subdomain'],
     refreshBody: () => ({
       client_id: env.zendeskClientId,
@@ -104,10 +105,11 @@ const PROVIDERS: Record<string, ProviderSpec> = {
     tokenUrl: () => 'https://api.linear.app/oauth/token',
     refreshBasic: () => [env.linearClientId, env.linearClientSecret],
   },
-  // Slack bot tokens don't expire — no refresh path, entry kept so the
-  // provider resolves if mint is ever called on the row.
+  // Slack bot tokens don't expire — the stored token serves (staticToken
+  // short-circuits mint), refreshBody kept only as a spec-shape stub.
   slack: {
     tokenUrl: () => 'https://slack.com/api/oauth.v2.access',
+    staticToken: true,
     refreshBody: () => ({
       client_id: env.slackClientId,
       client_secret: env.slackClientSecret,
