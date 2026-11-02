@@ -93,6 +93,27 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02g — Connector wave: GitHub + Slack cards, HubSpot OAuth restored
+- github / github-connect cards (PAT + OAuth) — third escalation target.
+  OAuth spec: api.github.com on CONN_GITHUB_TOKEN, repo scope. Mike
+  registers the OAuth App (Developer settings → OAuth Apps, both
+  callbacks) → GITHUB_CLIENT_ID/SECRET.
+- slack card — BYO bot token (xoxb-) + channels:read/chat:write scopes:
+  slack_list_channels + approval-gated slack_post_message for paging the
+  team. Tool templates can't reach workspace slack_installations yet —
+  that's the v2 (agent-scoped install → CONN_SLACK_TOKEN).
+- HubSpot OAuth card RESTORED after scope research: unlisted
+  marketplace-distribution apps install via OAuth up to 25 portals (AUP
+  signed = live). Gotchas: 'tickets' scope retired → crm.objects.tickets
+  + crm.schemas.tickets; 'oauth' scope required in requiredScopes AND
+  the authorize URL. Registration is hs CLI (tools/hubspot-app/ scaffold
+  committed): npm i -g @hubspot/cli → hs account auth → hs project
+  upload → creds on the project page. Installed app lives under
+  developer-projects/<acct>/project/<proj>/component/<app>/distribution.
+- card-collapse shipped: ToolTemplateInfo.manual links an OAuth card to
+  its credential sibling — one card per provider, OAuth Connect default,
+  'Use your own credentials instead' expander for BYO.
+
 ## 2026-11-02f — Ask Janis pane: tall-reply top-anchor fires once, not per commit
 - The every-commit layout effect in AskJanis.tsx re-anchored to the top of
   a taller-than-pane agent reply whenever `stick` was on — reading a long
