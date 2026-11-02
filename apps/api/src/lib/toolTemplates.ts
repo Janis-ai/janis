@@ -794,6 +794,70 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [], // filled from the `jira` template below — one source of truth
   },
   {
+    id: 'confluence',
+    name: 'Confluence',
+    category: 'Docs & data',
+    blurb:
+      'Search and read Confluence pages — the agent grounds answers in your runbooks and docs.',
+    docs_url: 'https://developer.atlassian.com/cloud/confluence/rest/v1/',
+    fields: [
+      { key: 'site', label: 'Site', placeholder: 'yourcompany.atlassian.net' },
+      { key: 'email', label: 'Atlassian account email', placeholder: 'you@company.com' },
+      {
+        key: 'api_token',
+        label: 'API token',
+        placeholder: 'id.atlassian.com → Security → API tokens',
+      },
+    ],
+    secrets: (f) => ({
+      CONFLUENCE_HOST: normHost(f.site, '.atlassian.net'),
+      CONFLUENCE_AUTH: Buffer.from(`${f.email.trim()}:${f.api_token.trim()}`).toString('base64'),
+    }),
+    tools: [
+      {
+        name: 'confluence_search',
+        label: 'Search pages',
+        description:
+          'Search Confluence pages with CQL — find the runbook or doc that answers the customer question.',
+        method: 'GET',
+        url: 'https://{{secrets.CONFLUENCE_HOST}}/wiki/rest/api/content/search?cql={cql}&limit=10',
+        headers: { authorization: 'Basic {{secrets.CONFLUENCE_AUTH}}' },
+        params: {
+          cql: 'Confluence Query Language — e.g. text ~ "password reset" AND type = page',
+        },
+      },
+      {
+        name: 'confluence_get_page',
+        label: 'Get page',
+        description:
+          "Fetch a Confluence page's title and rendered body — read the runbook before answering.",
+        method: 'GET',
+        url: 'https://{{secrets.CONFLUENCE_HOST}}/wiki/rest/api/content/{page_id}?expand=body.view',
+        headers: { authorization: 'Basic {{secrets.CONFLUENCE_AUTH}}' },
+        params: {
+          page_id: 'page id from confluence_search results (the id field)',
+        },
+      },
+    ],
+  },
+  {
+    id: 'confluence-connect',
+    name: 'Confluence (OAuth)',
+    category: 'Docs & data',
+    blurb: 'Same Confluence tools via one-click OAuth — no API token to paste.',
+    docs_url: 'https://developer.atlassian.com/cloud/confluence/oauth-2-3lo-apps/',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'confluence',
+      label: () => 'Confluence',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/oauth/confluence/connect',
+    manual: 'confluence',
+    tools: [], // filled from the `confluence` template above — one source of truth
+  },
+  {
     id: 'linear',
     name: 'Linear',
     category: 'Issue tracking',
@@ -1742,6 +1806,14 @@ for (const v of [
     urlFrom: 'https://{{secrets.JIRA_HOST}}',
     urlTo: 'https://api.atlassian.com/ex/jira/{{secrets.CONN_JIRA_CLOUD_ID}}',
     auth: 'Bearer {{secrets.CONN_JIRA_TOKEN}}',
+  },
+  {
+    from: 'confluence',
+    to: 'confluence-connect',
+    // Same Atlassian 3LO shape as Jira — wiki REST via ex/confluence.
+    urlFrom: 'https://{{secrets.CONFLUENCE_HOST}}',
+    urlTo: 'https://api.atlassian.com/ex/confluence/{{secrets.CONN_CONFLUENCE_CLOUD_ID}}',
+    auth: 'Bearer {{secrets.CONN_CONFLUENCE_TOKEN}}',
   },
   {
     from: 'linear',

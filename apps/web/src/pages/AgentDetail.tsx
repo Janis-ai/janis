@@ -3617,6 +3617,7 @@ function IntegrationCards({
     calendly: 'Calendly',
     google: 'Google',
     jira: 'Jira',
+    confluence: 'Confluence',
     linear: 'Linear',
     hubspot: 'HubSpot',
     salesforce: 'Salesforce',

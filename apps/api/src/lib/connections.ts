@@ -81,6 +81,15 @@ const PROVIDERS: Record<string, ProviderSpec> = {
     jsonToken: true,
     exposeSecrets: ['cloud_id'],
   },
+  confluence: {
+    tokenUrl: () => 'https://auth.atlassian.com/oauth/token',
+    refreshBody: () => ({
+      client_id: env.jiraClientId,
+      client_secret: env.jiraClientSecret,
+    }),
+    jsonToken: true,
+    exposeSecrets: ['cloud_id'],
+  },
   linear: {
     tokenUrl: () => 'https://api.linear.app/oauth/token',
     refreshBasic: () => [env.linearClientId, env.linearClientSecret],

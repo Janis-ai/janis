@@ -92,6 +92,41 @@ const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     },
     label: (_t, extra) => extra.site_name || 'Jira site',
   },
+  confluence: {
+    id: 'confluence',
+    templateId: 'confluence-connect',
+    // Same Atlassian OAuth app as Jira — the console just needs the
+    // Confluence API scopes added alongside the Jira ones.
+    envCreds: () => ({ clientId: env.jiraClientId, clientSecret: env.jiraClientSecret }),
+    authorizeUrl: ({ clientId, redirectUri, state }) =>
+      `https://auth.atlassian.com/authorize?${new URLSearchParams({
+        audience: 'api.atlassian.com',
+        client_id: clientId,
+        scope: 'read:confluence-content.summary read:confluence-space.summary offline_access',
+        redirect_uri: redirectUri,
+        state,
+        response_type: 'code',
+        prompt: 'consent',
+      })}`,
+    tokenUrl: 'https://auth.atlassian.com/oauth/token',
+    tokenJson: true,
+    credsIn: 'body',
+    extraCreds: async (accessToken) => {
+      const res = await fetch('https://api.atlassian.com/oauth/token/accessible-resources', {
+        headers: { authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const sites = (await res.json().catch(() => [])) as {
+        id?: string;
+        name?: string;
+        url?: string;
+      }[];
+      const site = sites[0];
+      if (!site?.id) throw new Error('the account grants no Confluence site access');
+      return { cloud_id: site.id, site_name: site.name ?? site.url ?? 'Confluence site' };
+    },
+    label: (_t, extra) => extra.site_name || 'Confluence site',
+  },
   linear: {
     id: 'linear',
     templateId: 'linear-connect',

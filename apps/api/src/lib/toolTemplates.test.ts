@@ -223,6 +223,7 @@ describe('oauth-connect template variants', () => {
   it('every variant exists, connects via /api/oauth, and clones the PAT tool set', () => {
     for (const [from, to] of [
       ['jira', 'jira-connect'],
+      ['confluence', 'confluence-connect'],
       ['linear', 'linear-connect'],
       ['hubspot', 'hubspot-connect'],
       ['salesforce', 'salesforce-connect'],
