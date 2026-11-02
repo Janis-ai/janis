@@ -32,17 +32,15 @@ export function actionRoutes(db: Db) {
       .from(conversations)
       .where(eq(conversations.id, action.conversationId))
       .limit(1);
-    const merchantAsk =
-      ((conv?.userProfile ?? {}) as UserProfile).kind === 'merchant_ask';
-    if (isConciergeAction(action.workspaceId, conv?.userProfile) && !merchantAsk) {
-      // Concierge action cards live on Janis's own workspace — the decider is
-      // the verified signed-in visitor of the concierge conversation, not a
-      // member here.
-      const p = (conv?.userProfile ?? {}) as UserProfile;
-      if (!p.identity_verified || p.external_id !== user.id) {
-        return c.json({ error: 'not found' }, 404);
-      }
-    } else {
+    const p = (conv?.userProfile ?? {}) as UserProfile;
+    const merchantAsk = p.kind === 'merchant_ask';
+    // The concierge path only applies when the caller IS the verified
+    // visitor the card belongs to. A verified CUSTOMER's conversation on
+    // the operator workspace (a regular agent's test chat) is not a
+    // concierge card — misclassifying it 404'd every approval there.
+    const conciergeCard =
+      isConciergeAction(action.workspaceId, p) && !merchantAsk && p.external_id === user.id;
+    if (!conciergeCard) {
       if (action.workspaceId !== workspaceId) return c.json({ error: 'not found' }, 404);
       // The conversation must be visible to the caller — scoped users are
       // limited to their grants, and hidden agents are excluded for members.
