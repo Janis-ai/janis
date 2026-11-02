@@ -93,6 +93,24 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02k — Notion OAuth connect card
+- `notion-connect` + `notion` (internal-token) cards via the generic OAuth
+  factory. Quirks: token exchange wants the client pair in HTTP Basic
+  (not body) + JSON grant; bot tokens never expire → noRefresh +
+  staticToken (stored access token serves, no mint); workspace_name is
+  the label; every tool call needs `notion-version: 2022-06-28` (kept on
+  the clone via the variant `headers` swap).
+- Tools: notion_search, notion_get_page, notion_read_page (block
+  children), notion_query_database, notion_create_page (approval-gated).
+  Database query ships WITHOUT a filter param — `{filter?}` emits
+  `"filter":null` and Notion's validation rejects it; filtering is a v2
+  candidate via a dedicated optional-member body syntax.
+- Capabilities/redirect URIs are set on the Notion integration itself
+  (notion.so/my-integrations → public integration), not the authorize
+  URL (owner=user is the only nonstandard param). NOTION_CLIENT_ID/SECRET
+  env stubs; card shows "not configured" until they land.
+- This is the LIVE-TOOLS Notion connector; deeper knowledge-source
+  import/embed sync remains separate future work.
 ## 2026-11-02j — Approval gating + concierge misclassification + reverse-sync
 - jira/linear/github create_issue are now approval-gated (same class as the
   already-gated *_add_comment — catalog flag, operators can't un-gate).
