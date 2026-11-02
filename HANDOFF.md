@@ -114,8 +114,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   link (Linear url field; Jira compose https://<host>/browse/<key> from
   `self`). Chat surfaces already linkify markdown + bare URLs.
 - Also seen: the model filed JAN-5 AND JAN-6 (dupes) without mentioning
-  either — description nudge shipped; silent-success is a model-behavior
-  watch item. torontofood's system_prompt now pins project KAN.
+  either. Retest after the nudge: filed JAN-7..10 anyway — incl. "Don't
+  forget the peas" as a literal ticket — still unreported. Verdict:
+  lite models ignore description nudges on mutations. Resolution:
+  jira/linear/github create_issue are now approval-gated (same class as
+  the already-gated *_add_comment — catalog flag, operators can't
+  un-gate). Zendesk/HubSpot create_ticket left autonomous — filing to
+  the human queue IS their product flow.
+- No delete tool exists and none should (a visitor nuking escalations);
+  Linear's OAuth scope is deliberately read+issues:create so even the
+  API token can't delete. Clean up test issues in the Linear UI.
+- torontofood's system_prompt now pins project KAN.
 - Note for future tool adds: new catalog tools reach stamped installs via
   the backfill — no migration needed — but tools REMOVED from a template
   linger in stored configs (name-merge only adds).
