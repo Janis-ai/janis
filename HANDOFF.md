@@ -93,6 +93,14 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02o — Domain setup surfaces inside the Integrations section
+- The Channels-page Email sending card wasn't discoverable: a
+  Shopify-installed merchant never opens Channels. New EmailSendingNudge
+  sits right under IntegrationCards on the agent's tools/integrations
+  section — when cfg.tools contains an identity-bound tool and no verified
+  domain, it renders the inline EmailDomainCard (same endpoints) with a
+  "Send the verification code as you" pitch.
+
 ## 2026-11-02n — Email-sending onboarding nudge + recovery mail rides the agent domain
 - Customer-facing email audit: verification codes (agent-domain since -i/-l)
   and abandoned-checkout recovery mail are the two shopper-facing sends;

@@ -14,6 +14,7 @@ import { DEFAULT_INTENTS } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useGroups, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
 import { AgentChannels } from '../components/AgentChannels';
+import { EmailDomainCard, useEmailDomainEnabled } from '../components/Channels';
 import { MemberGroups } from '../components/MemberGroups';
 import { MemberCell, TeamRow, TeamTable, teamTd } from '../components/TeamTable';
 import { SourceList } from '../components/SourceList';
@@ -3349,6 +3350,7 @@ export function ToolsTab({
       <ReadOnly off={!isAdmin}>
       <label>Integrations — services the agent can act in</label>
       <IntegrationCards cfg={cfg} setCfg={setCfg} agentId={agentId} />
+      <EmailSendingNudge cfg={cfg} agentId={agentId} />
       <details
         key={customTools.length ? 'adv-open' : 'adv'}
         open={customTools.length > 0}
@@ -3444,6 +3446,40 @@ export function ToolsTab({
         </div>
       </details>
       </ReadOnly>
+    </div>
+  );
+}
+
+/** Post-connect nudge — identity-bound integrations (order lookups, CRM
+ *  record tools) email the customer a 6-digit code to prove who they are;
+ *  with no verified domain it arrives as Janis. Surfaces the domain setup
+ *  right where the tool was installed — most agents never open Channels. */
+function EmailSendingNudge({ cfg, agentId }: { cfg: AgentConfig; agentId: string }) {
+  const qc = useQueryClient();
+  const enabled = useEmailDomainEnabled();
+  const es = cfg.email_sending ?? {};
+  const verified = Boolean(es.email_domain && es.email_domain_status === 'verified');
+  const needsVerifyMail = (cfg.tools ?? []).some(
+    (t) => (t as { identity?: boolean }).identity === true,
+  );
+  if (!needsVerifyMail || verified || enabled === false) return null;
+  return (
+    <div className="card" style={{ padding: 14, background: 'var(--panel-2)' }}>
+      <strong style={{ fontSize: 13 }}>Send the verification code as you</strong>
+      <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
+        These integrations can email customers a 6-digit code to prove who they
+        are — right now it arrives from Janis. Verify a domain and it comes from
+        your address instead.
+      </div>
+      <EmailDomainCard
+        basePath={`/api/agents/${agentId}`}
+        meta={es}
+        onChanged={() => {
+          void qc.invalidateQueries({ queryKey: ['agents'] });
+          void qc.invalidateQueries({ queryKey: ['agent', agentId] });
+        }}
+        verifiedHint={'Agent email now sends from @{domain} — the exact address is set on the Channels page.'}
+      />
     </div>
   );
 }
