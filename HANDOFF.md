@@ -158,6 +158,15 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   URI for all: https://api.janis.ai/oauth/<provider>/callback.
 - Zendesk deliberately skipped — real OAuth needs a global client =
   partner approval; the BYO client-credentials card stays.
+- PKCE: Salesforce External Client Apps REQUIRE code_challenge (the
+  first connect 400'd missing required code challenge) — spec.pkce
+  sends it; the verifier rides the signed Intent (v field), no server
+  storage. Other gotchas learned live: SF consumer keys take ~10min to
+  propagate; Jira consent 403s when the Atlassian account has no Jira
+  site; Linear app defaults "Private to this workspace" (flip for
+  customer installs); HubSpot moved app creation to the hs CLI and
+  gates public installs behind marketplace review — PAT card stays
+  primary there.
 
 ## 2026-11-02c — Jira + Linear tool templates (issue-tracker escalation)
 - Two new cards in toolTemplates.ts ('Issue tracking' category): jira
