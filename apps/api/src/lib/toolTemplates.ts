@@ -791,6 +791,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           description: 'what the customer reported, steps to reproduce, and what they expected',
         },
         identity: true,
+        approval: true,
       },
       {
         name: 'jira_add_comment',
@@ -969,6 +970,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
           'priority?': 'optional — 0 none, 1 urgent, 2 high, 3 normal, 4 low',
         },
         identity: true,
+        approval: true,
       },
       {
         name: 'linear_add_comment',
@@ -1095,6 +1097,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
             'what the customer reported, steps to reproduce, and what they expected',
         },
         identity: true,
+        approval: true,
       },
       {
         name: 'github_add_comment',

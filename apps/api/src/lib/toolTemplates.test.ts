@@ -198,6 +198,7 @@ describe('jira tool template', () => {
   it('create_issue files an ADF description carrying the verified email', async () => {
     const t = tool('jira_create_issue');
     expect(t.identity).toBe(true);
+    expect(t.approval).toBe(true);
     await callTool(
       t,
       {
@@ -345,6 +346,7 @@ describe('linear tool template', () => {
   it('create_issue embeds the verified email and keeps priority numeric', async () => {
     const t = tool('linear_create_issue');
     expect(t.identity).toBe(true);
+    expect(t.approval).toBe(true);
     await callTool(
       t,
       {
