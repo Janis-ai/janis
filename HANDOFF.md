@@ -93,6 +93,40 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02d — One-click OAuth for Jira, Linear, HubSpot, Salesforce
+- routes/oauthConnect.ts is a GENERIC connect factory — one pair of
+  routes (/api/oauth/:provider/connect admin+bounce; /oauth/:provider/
+  callback stateless) serves every *-connect card: consent redirect,
+  code exchange, agent_connections upsert, tool install, flash redirect.
+  Calendly/Google predate it and keep their own routes; new providers
+  are a config entry, not a file.
+- connections.ts grew three ProviderSpec knobs for auth-code providers:
+  refreshBody (client_id/secret in POST body — Atlassian/HubSpot/SF,
+  vs refreshBasic's Basic header), jsonToken (JSON body — Atlassian),
+  exposeSecrets (creds fields → CONN_<P>_<FIELD> secrets for tool URLs).
+- Provider quirks encoded: Jira 3LO calls api.atlassian.com/ex/jira/
+  {cloudId}, never the site host — cloud_id is captured from
+  accessible-resources at callback; Linear runs actor=app so issues
+  post as the app; Salesforce's instance_url from the token response
+  is the API host; salesforce provider spec now branches — OAuth rows
+  (refresh_token) mint on login.salesforce.com, BYO rows (client creds)
+  keep their instance host.
+- Four new cards: jira-connect / linear-connect / hubspot-connect /
+  salesforce-connect — tools cloned from the PAT cards (same names,
+  identity/approval flags carried) with CONN_* auth + host swaps.
+- Web flash list in AgentDetail is now provider-keyed (was hardcoded
+  calendly/google).
+- Cards show "not configured" until env lands — Mike registers four
+  self-serve OAuth apps (all free, instant, no review): Jira → dev
+  console OAuth 2.0 app + Distribution toggle ON, scopes read:jira-work
+  write:jira-work offline_access; Linear → Settings→API→OAuth app,
+  read,issues:create,comments:create; HubSpot → free developer account
+  public app, contacts read/write + tickets; Salesforce → connected app
+  in any org (free DE org works), api + refresh_token scopes. Redirect
+  URI for all: https://api.janis.ai/oauth/<provider>/callback.
+- Zendesk deliberately skipped — real OAuth needs a global client =
+  partner approval; the BYO client-credentials card stays.
+
 ## 2026-11-02c — Jira + Linear tool templates (issue-tracker escalation)
 - Two new cards in toolTemplates.ts ('Issue tracking' category): jira
   (search / get_issue / create_issue / add_comment) and linear (teams /

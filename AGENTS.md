@@ -1298,7 +1298,9 @@ at /api/agents/:id/api-keys, legacy key revocable), Google files
 connector (see own section), hosted chat page per bubble
 (channelChatUrl /chat/:id/page fallback), Jira + Linear tool templates
 (issue-tracker escalation — identity-scoped reads, approval-gated
-comments; see HANDOFF 2026-11-02c).
+comments; see HANDOFF 2026-11-02c), one-click OAuth connects for
+Jira/Linear/HubSpot/Salesforce (generic oauthConnect factory;
+HANDOFF 2026-11-02d — env creds + app registrations are Mike's gate).
 
 ## Shopify App Store track (started 2026-10-13)
 
