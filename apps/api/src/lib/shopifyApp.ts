@@ -1820,7 +1820,8 @@ async function draftRecoveryEmail(
 /** Standalone Resend send for recovery emails — shopper-facing sends don't
  *  ride a channel (the shopper's thread is webchat), so this isn't
  *  sendEmailReply: From is the store name on the verified inbound domain,
- *  replies route to the merchant's shop email. */
+ *  replies route to the merchant's shop email. `from` overrides the whole
+ *  header when the agent owns a verified sending domain. */
 async function sendRecoveryEmail(
   opts: {
     to: string;
@@ -1828,6 +1829,9 @@ async function sendRecoveryEmail(
     text: string;
     html: string;
     fromName: string;
+    /** Full "Name <addr>" header — set when the agent's email_sending
+     *  domain is verified (sends as the store, not "via Janis"). */
+    from?: string;
     replyTo?: string | null;
     unsubUrl: string;
   },
@@ -1841,7 +1845,7 @@ async function sendRecoveryEmail(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        from: `${opts.fromName} via Janis <recovery@${env.emailInboundDomain}>`,
+        from: opts.from ?? `${opts.fromName} via Janis <recovery@${env.emailInboundDomain}>`,
         ...(opts.replyTo ? { reply_to: [opts.replyTo] } : {}),
         to: [opts.to],
         subject: opts.subject,
@@ -1979,6 +1983,25 @@ export async function runCheckoutEmail(
     .returning();
   bus.publish(workspaceId, { type: 'message', data: toMessage(marker) });
 
+  // A verified agent sending domain (Email sending) carries the From too —
+  // recovery mail goes out as the store's own address, not "via Janis".
+  // Reply-To stays the merchant's shop contact so replies reach them.
+  const es = ((agent?.config ?? {}) as {
+    email_sending?: {
+      email_domain?: string;
+      email_domain_status?: string;
+      from_name?: string;
+      from_address?: string;
+    };
+  }).email_sending;
+  const domainFrom =
+    es?.email_domain && es.email_domain_status === 'verified'
+      ? `${es.from_name || storeName} <${
+          es.from_address && es.from_address.toLowerCase().endsWith(`@${es.email_domain}`)
+            ? es.from_address
+            : `no-reply@${es.email_domain}`
+        }>`
+      : undefined;
   const sendOnce = () =>
     sendRecoveryEmail({
       to: email,
@@ -1986,6 +2009,7 @@ export async function runCheckoutEmail(
       text,
       html,
       fromName: storeName,
+      from: domainFrom,
       replyTo: row.contactEmail,
       unsubUrl,
     });

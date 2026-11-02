@@ -19,6 +19,12 @@ function AgentEmailSending({ agent }: { agent: Agent }) {
   const enabled = useEmailDomainEnabled();
   const es = agent.config.email_sending ?? {};
   const verified = Boolean(es.email_domain && es.email_domain_status === 'verified');
+  // Customer-record tools (order lookups etc.) email the shopper a 6-digit
+  // code to prove who they are — if any are installed and no domain is
+  // verified, that code still arrives as Janis. Nudge toward setup.
+  const needsVerifyMail = (agent.config.tools ?? []).some(
+    (t) => (t as { identity?: boolean }).identity === true,
+  );
   const [fromName, setFromName] = useState(es.from_name ?? '');
   const [fromAddr, setFromAddr] = useState(es.from_address ?? '');
   const [msg, setMsg] = useState('');
@@ -44,6 +50,13 @@ function AgentEmailSending({ agent }: { agent: Agent }) {
         Verification codes and other customer email send from your domain instead
         of Janis — no email channel needed.
       </div>
+      {needsVerifyMail && !verified && (
+        <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+          ⓘ Your agent can email customers a 6-digit code to verify who they are
+          (order lookups and the like) — right now it arrives as Janis. Verify a
+          domain and it comes from you.
+        </div>
+      )}
       <EmailDomainCard
         basePath={`/api/agents/${agent.id}`}
         meta={es}

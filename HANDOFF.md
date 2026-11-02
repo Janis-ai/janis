@@ -93,6 +93,19 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02n — Email-sending onboarding nudge + recovery mail rides the agent domain
+- Customer-facing email audit: verification codes (agent-domain since -i/-l)
+  and abandoned-checkout recovery mail are the two shopper-facing sends;
+  everything else is Janis→operator (auth, invites, migration, data-request,
+  form destinations, alerts) and correctly stays on the Janis sender.
+- Recovery mail now sends `from: {from_name|store} <{from_address|no-reply@domain}>`
+  when the agent's email_sending domain is verified — was "Store via Janis
+  <recovery@inbound.janis.ai>". Reply-To stays the merchant's shop contact.
+- AgentChannels Email sending card shows a contextual hint when the agent
+  has identity-bound customer-record tools installed (order lookups that
+  fire send_verification_email) and no verified domain — "right now it
+  arrives as Janis; verify a domain and it comes from you."
+
 ## 2026-11-02m — MCP client: long-tail connector via remote tool discovery
 - `mcp-server` catalog template: operator supplies a name slug + server
   URL + optional bearer → install calls tools/list on the server and
