@@ -93,6 +93,19 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02q — Card uninstall drops the creds it installed
+- agent_secrets used to survive card removal forever (torontofood kept
+  SHOPIFY_TOKEN with zero shopify tools — reads as "still connected").
+  DELETE /:id/tools/:template now GCs the template's creds: candidates =
+  {{secrets.*}} refs on the removed defs (covers dynamic MCP_<slug>_*
+  names) + the template's produced names via a dummy-field probe of
+  secrets() (covers server-side-only creds like SHOPIFY_STOREFRONT_
+  PASSWORD that never appear in a placeholder).
+- Survivors: names still referenced by remaining tools (shared creds for
+  custom tools) and SHOPIFY_* while a shopifyShops 'linked' row owns the
+  mirror. Mirrors the existing gcUnusedConnections behavior for CONN_*.
+- No template provenance on agent_secrets — operator-added secrets via
+  PUT /:id/secrets are untouched (not candidates).
 ## 2026-11-02p — One sending domain, one management spot
 - A domain already registered on an email channel now pre-populates the
   agent Email sending surfaces: effectiveEmailSending(cfg, channels)
