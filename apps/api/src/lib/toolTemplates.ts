@@ -634,7 +634,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
       credentials: () => ({}),
     },
     oauth_connect: '/api/oauth/zendesk/connect',
-    manual: 'zendesk',
+    manual: 'zendesk-oauth',
     tools: [], // filled from the `zendesk-oauth` template below — same tickets surface
   },
   {
