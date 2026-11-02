@@ -1296,7 +1296,9 @@ WorkOS SSO + Outlook channel (both behind env creds), named per-agent
 API keys (agent_api_keys, migration 0118 — create/list/revoke/last_used
 at /api/agents/:id/api-keys, legacy key revocable), Google files
 connector (see own section), hosted chat page per bubble
-(channelChatUrl /chat/:id/page fallback).
+(channelChatUrl /chat/:id/page fallback), Jira + Linear tool templates
+(issue-tracker escalation — identity-scoped reads, approval-gated
+comments; see HANDOFF 2026-11-02c).
 
 ## Shopify App Store track (started 2026-10-13)
 

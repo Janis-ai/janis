@@ -93,6 +93,30 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02c — Jira + Linear tool templates (issue-tracker escalation)
+- Two new cards in toolTemplates.ts ('Issue tracking' category): jira
+  (search / get_issue / create_issue / add_comment) and linear (teams /
+  search_issues / get_issue / create_issue / add_comment).
+- Reads are identity-bound AND mechanically scoped, not just described:
+  jira_get_issue composes `key = "X" AND (text ~ "email" OR reporter =
+  "email")` server-side; linear_get_issue filters `number eq N AND
+  description contains email`. A public widget can't enumerate internal
+  tickets — the ticket must reference the verified customer or the
+  lookup returns nothing.
+- Creates embed the verified email on the ticket itself (Jira ADF first
+  paragraph, Linear description prefix) — that closes the loop so the
+  scoped reads find Janis-filed issues later.
+- jira_add_comment / linear_add_comment are approval-gated (mutate an
+  existing ticket → teammate approves), same posture as Stripe writes.
+- Gotchas encoded: Jira legacy /rest/api/3/search is REMOVED — must use
+  /search/jql (jql+maxResults+fields params, nextPageToken paging).
+  Linear personal keys go in `Authorization:` RAW — no Bearer (Bearer is
+  OAuth-only). GraphQL bodyTemplates need the ${…} form + a ${noop?}
+  pad var or {word} inside selection sets gets read as placeholders.
+- Next connector lever (agreed with Mike): MCP client > Jira/Linear
+  (done) > Notion knowledge source > Freshdesk; ~20 Fin tiles are MCP
+  long-tail, not bespoke work.
+
 ## 2026-11-02b — Cross-account deep-link leak fixed (sign-in landed on a foreign agent)
 - Reported: signing in as google-review@janis.ai loaded
   /agents/fae34af5-…?rail=ask — an agent in a DIFFERENT workspace ("Agent
