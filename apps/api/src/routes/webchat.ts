@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import type { Context } from 'hono';
+import { streamSSE } from 'hono/streaming';
 import { z } from 'zod';
 import { zValidator } from '@hono/zod-validator';
 import { getCookie } from 'hono/cookie';
@@ -1146,6 +1147,62 @@ export function webchatRoutes(db: Db) {
       agent_typing: await agentWorking(db, conv.id),
       // only meaningful on full-page loads — incremental `after` polls omit it
       ...(afterDate ? {} : { has_more: hasMore }),
+    });
+  });
+
+  // Live event stream for the widget — an SSE poke per bus event on THIS
+  // visitor's conversation. Events carry no message content (the /messages
+  // poll stays the durable read); they just tell the widget to poll now
+  // instead of waiting out the interval. 404s when no thread exists yet —
+  // the widget re-opens the stream once a poll returns a real conversation.
+  app.get('/:token/events', async (c) => {
+    const channel = await findChannel(db, c.req.param('token'));
+    if (!channel) return c.json({ error: 'not found' }, 404);
+    const visitorId = c.req.query('visitor_id') ?? '';
+    const claim: Claim = {
+      id: c.req.query('u_id'),
+      name: c.req.query('u_name'),
+      email: c.req.query('u_email'),
+      sig: c.req.query('u_sig'),
+    };
+    const resolved = simVisitor(channel, visitorId)
+      ? undefined
+      : await resolveIdentity(c, db, channel, claim);
+    const bound =
+      resolved?.verified && resolved.id && (resolved.via === 'session' || resolved.janisUser);
+    if (!bound && !VISITOR_RE.test(visitorId)) {
+      return c.json({ error: 'bad visitor_id' }, 400);
+    }
+    const thread = threadFor(c.req.query('thread'));
+    const participant = participantFor(resolved, visitorId, thread);
+    const conv = await findConversation(db, channel, participant);
+    if (!conv) return c.json({ error: 'no conversation' }, 404);
+    const [agent] = await db
+      .select({ workspaceId: agents.workspaceId })
+      .from(agents)
+      .where(eq(agents.id, channel.agentId))
+      .limit(1);
+    if (!agent) return c.json({ error: 'no agent' }, 404);
+    const convId = conv.id;
+    const workspaceId = agent.workspaceId;
+    return streamSSE(c, async (stream) => {
+      const unsubscribe = bus.subscribe(workspaceId, (event) => {
+        const data = (event.data ?? {}) as Record<string, unknown>;
+        if (data.conversation_id !== convId) return;
+        void stream.writeSSE({ data: event.type }).catch(() => {});
+      });
+      // keepalive — same as the console stream; a silent idle connection is
+      // what proxies close, and a closed stream silently downgrades to the
+      // plain poll interval.
+      const keepalive = setInterval(
+        () => void stream.writeSSE({ event: 'ping', data: '{}' }).catch(() => {}),
+        25_000,
+      );
+      stream.onAbort(() => {
+        clearInterval(keepalive);
+        unsubscribe();
+      });
+      await new Promise<void>(() => {});
     });
   });
 

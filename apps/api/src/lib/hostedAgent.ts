@@ -4966,30 +4966,41 @@ export async function runHostedEvent(
     if ((await llmSpendOverCap(db, agent.workspaceId)) != null) return;
     const llm = await llmFor(db, agent);
     void foldConversationMemory(db, agent, conv, llm);
-    const history = await transcriptFor(db, convId, await fileAnalysisAllowed(db, agent.workspaceId));
+    // Same overlap as the reply path — every independent lookup starts now
+    // instead of queuing behind the transcript load.
+    const fileAnalysisP = fileAnalysisAllowed(db, agent.workspaceId);
+    const identityP = verifiedIdentityFor(db, conv, agent.workspaceId);
+    const campaignP = campaignContextFor(db, convId);
     const draftsOpted =
       ((agent.config ?? {}) as { builder?: { include_drafts_in_test?: boolean } }).builder
         ?.include_drafts_in_test === true;
+    const testConvP = draftsOpted ? isTestConversation(db, conv) : Promise.resolve(false);
+    const secretsP = (async () => {
+      // re-mirrors an expiring shop token before the map loads
+      await freshShopifyToken(db, agent.id);
+      const [map, conn] = await Promise.all([
+        loadSecretsMap(db, agent.id),
+        connectionSecrets(db, agent.id),
+      ]);
+      return { ...map, ...conn };
+    })();
+    const history = await transcriptFor(db, convId, await fileAnalysisP);
     const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history, conv), {
-      includeDrafts: draftsOpted && (await isTestConversation(db, conv)),
+      includeDrafts: draftsOpted && (await testConvP),
       reservedChars: notesReserved(agent),
     });
-    await freshShopifyToken(db, agent.id); // re-mirrors an expiring shop token before the map loads
-    const secrets = {
-      ...(await loadSecretsMap(db, agent.id)),
-      ...(await connectionSecrets(db, agent.id)),
-    };
+    const secrets = await secretsP;
     const ctx: AgentRunContext = {
       db,
       convId,
       workspaceId: agent.workspaceId,
       agent,
       suggesting: true,
-      identity: await verifiedIdentityFor(db, conv, agent.workspaceId),
+      identity: await identityP,
     };
     const prompt =
       systemPrompt(agent, docs, conv, { forSuggestion: true, operator: ctx.identity?.operator }) +
-      ((await campaignContextFor(db, convId)) ?? '');
+      ((await campaignP) ?? '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     const result = await generateReply(
       llm,
@@ -5469,7 +5480,64 @@ async function replyAsHostedAgent(
     // it. Bail quietly rather than 400 the provider and drop a failure
     // line on the customer. Internal notes never count as answers.
     if (!opts?.resume && !(await newestInboundIsPending(db, convId))) return;
-    const fileAnalysis = await fileAnalysisAllowed(db, agent.workspaceId);
+    // Independent lookups overlap — the serial chain stacked ~8 awaited
+    // round-trips in front of the first LLM call. The only real dependency
+    // is knowledge docs ← the transcript's search query.
+    const fileAnalysisP = fileAnalysisAllowed(db, agent.workspaceId);
+    const lastInsP = db
+      .select({ createdAt: messages.createdAt, payload: messages.payload, text: messages.text })
+      .from(messages)
+      .where(and(eq(messages.conversationId, convId), eq(messages.direction, 'in')))
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+    const prevOutP = db
+      .select({ payload: messages.payload })
+      .from(messages)
+      .where(and(eq(messages.conversationId, convId), eq(messages.direction, 'out')))
+      .orderBy(desc(messages.createdAt))
+      .limit(10);
+    const identityP = verifiedIdentityFor(db, conv, agent.workspaceId);
+    const campaignP = campaignContextFor(db, convId);
+    const openEscP = db
+      .select({ type: alerts.type })
+      .from(alerts)
+      .where(
+        and(
+          eq(alerts.conversationId, convId),
+          eq(alerts.status, 'open'),
+          inArray(alerts.type, ['help_request', 'handoff_offer']),
+        ),
+      )
+      .limit(1);
+    const priorOfferP = db
+      .select({ id: alerts.id })
+      .from(alerts)
+      .where(and(eq(alerts.conversationId, convId), eq(alerts.type, 'handoff_offer')))
+      .limit(1);
+    const savedWidgetsP = db
+      .select({
+        name: agentWidgets.name,
+        description: agentWidgets.description,
+        spec: agentWidgets.spec,
+        states: agentWidgets.states,
+        tool: agentWidgets.tool,
+      })
+      .from(agentWidgets)
+      .where(eq(agentWidgets.agentId, agent.id));
+    const draftsOpted =
+      ((agent.config ?? {}) as { builder?: { include_drafts_in_test?: boolean } }).builder
+        ?.include_drafts_in_test === true;
+    const testConvP = draftsOpted ? isTestConversation(db, conv) : Promise.resolve(false);
+    const secretsP = (async () => {
+      // re-mirrors an expiring shop token before the map loads
+      await freshShopifyToken(db, agent.id);
+      const [map, conn] = await Promise.all([
+        loadSecretsMap(db, agent.id),
+        connectionSecrets(db, agent.id),
+      ]);
+      return { ...map, ...conn };
+    })();
+    const fileAnalysis = await fileAnalysisP;
     console.log(`[files] conv=${convId} analysis=${fileAnalysis}`);
     const history = await transcriptFor(db, convId, fileAnalysis);
     // A resume transcript ends on the assistant-side "(teammate approved …)"
@@ -5487,14 +5555,14 @@ async function replyAsHostedAgent(
         content: '(the customer just confirmed SMS consent — answer their earlier message now)',
       });
     }
+    const allDocs: { name: string; text: string }[] = [];
+    const docsP = loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history, conv), {
+      includeDrafts: draftsOpted && (await testConvP),
+      reservedChars: notesReserved(agent),
+      allDocs,
+    });
     {
-      const lastIns = await db
-        .select({ createdAt: messages.createdAt, payload: messages.payload, text: messages.text })
-        .from(messages)
-        .where(and(eq(messages.conversationId, convId), eq(messages.direction, 'in')))
-        .orderBy(desc(messages.createdAt))
-        .limit(1);
-      const lastIn = lastIns[0];
+      const lastIn = (await lastInsP)[0];
       if (lastIn) {
         coversThrough = new Date(lastIn.createdAt).toISOString();
         lastInboundText = lastIn.text ?? undefined;
@@ -5507,20 +5575,8 @@ async function replyAsHostedAgent(
         if (typeof p.market === 'string') shopperMarket = p.market;
       }
     }
-    const draftsOpted =
-      ((agent.config ?? {}) as { builder?: { include_drafts_in_test?: boolean } }).builder
-        ?.include_drafts_in_test === true;
-    const allDocs: { name: string; text: string }[] = [];
-    const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history, conv), {
-      includeDrafts: draftsOpted && (await isTestConversation(db, conv)),
-      reservedChars: notesReserved(agent),
-      allDocs,
-    });
-    await freshShopifyToken(db, agent.id); // re-mirrors an expiring shop token before the map loads
-    const secrets = {
-      ...(await loadSecretsMap(db, agent.id)),
-      ...(await connectionSecrets(db, agent.id)),
-    };
+    const docs = await docsP;
+    const secrets = await secretsP;
     // Card titles from recent outbound messages. `prevCardTitles` is the
     // broad union (repeat-carousel suppression); `chainCardTitles` is the
     // CURRENT pagination chain only — walking back from the newest
@@ -5532,12 +5588,7 @@ async function replyAsHostedAgent(
     let prevEndCursor: string | undefined;
     let prevPageArgs: Record<string, unknown> | undefined;
     {
-      const prevOut = await db
-        .select({ payload: messages.payload })
-        .from(messages)
-        .where(and(eq(messages.conversationId, convId), eq(messages.direction, 'out')))
-        .orderBy(desc(messages.createdAt))
-        .limit(10);
+      const prevOut = await prevOutP;
       const cardWidgets: {
         type?: string;
         items?: { title?: string }[];
@@ -5586,7 +5637,7 @@ async function replyAsHostedAgent(
       convId,
       workspaceId: agent.workspaceId,
       agent,
-      identity: await verifiedIdentityFor(db, conv, agent.workspaceId),
+      identity: await identityP,
       prevCardTitles,
       chainCardTitles,
       prevEndCursor,
@@ -5599,39 +5650,14 @@ async function replyAsHostedAgent(
     };
     // One escalation lookup feeds the prompt (pending offer) AND the
     // post-generation decline check below.
-    const openEsc = await db
-      .select({ type: alerts.type })
-      .from(alerts)
-      .where(
-        and(
-          eq(alerts.conversationId, convId),
-          eq(alerts.status, 'open'),
-          inArray(alerts.type, ['help_request', 'handoff_offer']),
-        ),
-      )
-      .limit(1);
+    const openEsc = await openEscP;
     // Any prior offer — resolved or declined — lives in alert history; the
     // model needs to know so it stops re-offering in prose.
-    const offeredBefore =
-      openEsc.length > 0 ||
-      !!(await db
-        .select({ id: alerts.id })
-        .from(alerts)
-        .where(and(eq(alerts.conversationId, convId), eq(alerts.type, 'handoff_offer')))
-        .limit(1))[0];
+    const offeredBefore = openEsc.length > 0 || !!(await priorOfferP)[0];
     const pendingEscalation = conv.state === 'needs_human' || openEsc.length > 0;
     // Saved components — the prompt catalog teaches WIDGET_REF: emission and
     // the map resolves refs back to their fixed specs below.
-    const savedWidgets = await db
-      .select({
-        name: agentWidgets.name,
-        description: agentWidgets.description,
-        spec: agentWidgets.spec,
-        states: agentWidgets.states,
-        tool: agentWidgets.tool,
-      })
-      .from(agentWidgets)
-      .where(eq(agentWidgets.agentId, agent.id));
+    const savedWidgets = await savedWidgetsP;
     const refSpecs = new Map<string, SavedWidgetDef>();
     // Collect-data forms register as WIDGET_REF targets — the form spec is
     // stamped `collect: <name>` so its submission gets structured handling
@@ -5723,7 +5749,7 @@ async function replyAsHostedAgent(
         })),
         operator: ctx.identity?.operator,
       }) +
-      ((await campaignContextFor(db, convId)) ?? '') +
+      ((await campaignP) ?? '') +
       (merchantAsk
         ? "\nThis operator is a verified staff member of the bound Shopify store, chatting inside the embedded app — their workspace is pinned, so act on it directly without asking which one. Agent-scoped questions ('how is the agent doing', stats, gaps, transcripts) default to the shop's bound agent — the one they're chatting with — unless they ask about the whole workspace or name another agent. Store questions (sales, orders, products) are fair game alongside workspace ops. Keep replies compact — the embed is a narrow panel, and long console links can be shortened to the essentials." +
           "\nThe embedded app itself covers the basics: the Agent tab edits the agent's name, purpose, greeting and quick replies, and the Inbox tab is the shopper inbox — for 'how do I set you up / change the greeting' asks, point at that tab or make the change yourself with an approval card." +

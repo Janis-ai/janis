@@ -82,6 +82,8 @@
     lastTs: null,
     config: null,
     timer: null,
+    timerMs: 0,
+    es: null,      // EventSource poke channel — poll() stays the durable read
     seen: {},
     pollBusy: false,
     pending: [],   // attachments uploaded, not yet sent
@@ -164,6 +166,7 @@
     if (state.timer) { clearInterval(state.timer); state.timer = null; }
     if (state.closedTimer) { clearInterval(state.closedTimer); state.closedTimer = null; }
     if (state.typingTimer) { clearTimeout(state.typingTimer); state.typingTimer = null; }
+    if (state.es) { try { state.es.close(); } catch (e) {} state.es = null; }
     var els = document.querySelectorAll('[id^="janis-"]');
     for (var i = 0; i < els.length; i++) els[i].remove();
   };
@@ -1086,6 +1089,9 @@
   // → signed-in, or logout) means the rendered bubbles, dedupe set and
   // after-cursor all belong to the old thread — reset and fetch it fresh.
   function resetTranscript() {
+    // A conversation switch (new chat, participant rebind) strands the
+    // stream — it was subscribed to the old conversation's events.
+    closeEvents();
     msgs.innerHTML = '';
     state.seen = {};
     state.lastTs = null;
@@ -2364,6 +2370,52 @@
     return entry;
   }
 
+  // SSE is a poke channel layered over the poll — a connected stream means
+  // replies land in ~100ms instead of up to 3s late, and the poll drops to
+  // a slow reconciliation pass. No stream (no conversation yet, a buffering
+  // proxy, no EventSource) → the 3s poll remains the transport as before.
+  function armTimer() {
+    var ms = state.es && state.es.readyState === 1 ? 15000 : 3000;
+    if (state.timer && state.timerMs === ms) return;
+    if (state.timer) { clearInterval(state.timer); state.timer = null; }
+    state.timerMs = ms;
+    if (state.open && !destroyed) state.timer = setInterval(poll, ms);
+  }
+  function openEvents() {
+    if (state.es || destroyed || !panel.isConnected || typeof EventSource !== 'function') return;
+    var url = API + '/chat/' + TOKEN + '/events?visitor_id=' + encodeURIComponent(visitor);
+    // the signed claim rides like it does on the poll — user-bound threads
+    // resolve to the signed identity, not the anonymous visitor id.
+    if (state.user) {
+      url += '&u_id=' + encodeURIComponent(state.user.id || '') +
+        '&u_name=' + encodeURIComponent(state.user.name || '') +
+        '&u_email=' + encodeURIComponent(state.user.email || '') +
+        '&u_sig=' + encodeURIComponent(state.user.sig || '');
+    }
+    var es;
+    try { es = new EventSource(url); } catch (e) { return; }
+    state.es = es;
+    es.onopen = function () {
+      armTimer();
+      // Reconnect gap — events published while we were down are gone (no
+      // replay); one catch-up poll closes it.
+      poll();
+    };
+    es.onmessage = function () { poll(); };
+    es.onerror = function () {
+      // A network drop stays CONNECTING and the browser retries on its own.
+      // A hard refusal (404 — no conversation yet) reaches CLOSED and never
+      // retries: the poll remains the transport until a thread exists.
+      if (es.readyState === 2) closeEvents();
+    };
+  }
+  function closeEvents() {
+    if (!state.es) return;
+    try { state.es.close(); } catch (e) {}
+    state.es = null;
+    armTimer();
+  }
+
   function poll() {
     if (destroyed || !panel.isConnected) return Promise.resolve();
     if (state.pollBusy) return state.pollPromise || Promise.resolve();
@@ -2407,6 +2459,9 @@
           }
         }
         state.convState = d.state;
+        // A thread exists — the stream can bind to it now (it 404s while
+        // the visitor has no conversation, so don't open it earlier).
+        if (!state.es && d.state !== 'new') openEvents();
         if (d.state === 'archived') markEnded();
         if (d.has_more !== undefined) state.hasMore = d.has_more;
         if (!state.greeted) {
@@ -2583,7 +2638,8 @@
       hideJump();
       requestAnimationFrame(function () { scrollBottom(); });
       poll();
-      if (!state.timer) state.timer = setInterval(poll, 3000);
+      armTimer();
+      openEvents();
       // Auto-focus pops the on-screen keyboard on mobile — let them tap in.
       if (typeof matchMedia !== 'function' || !matchMedia('(pointer:coarse)').matches) input.focus();
     }
