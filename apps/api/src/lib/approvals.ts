@@ -397,7 +397,12 @@ export async function decidePendingAction(
   // never resolve. Post a deterministic confirmation line instead. Applies
   // to every decision on a concierge thread, not just builtin executors —
   // webhook-tool cards parked there are decided the same way.
-  if (isConciergeAction(action.workspaceId, conv.userProfile)) {
+  // Concierge threads are self-decided by their verified visitor — a member
+  // approving a card on a customer conv (even on the operator workspace)
+  // must take the resume path so the agent reports the result, not this
+  // deterministic one-liner.
+  const p400 = (conv.userProfile ?? {}) as { external_id?: string };
+  if (isConciergeAction(action.workspaceId, conv.userProfile) && p400.external_id === decidedBy.id) {
     const failed = approve && result !== null && result.startsWith('error:');
     const confirm = !approve
       ? 'Dismissed — no changes made.'

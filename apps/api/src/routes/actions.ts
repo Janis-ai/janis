@@ -62,7 +62,7 @@ export function actionRoutes(db: Db) {
     // cards skip the LLM resume — decidePendingAction already posted a
     // deterministic confirmation, and a resumed turn that took a while or
     // emitted nothing read as typing dots that never resolve.
-    if (!isConciergeAction(decided.action.workspaceId, decided.conv.userProfile)) {
+    if (!conciergeCard) {
       void resumeAfterDecision(db, decided.agent, decided.conv.id).catch(() => {});
     }
 
