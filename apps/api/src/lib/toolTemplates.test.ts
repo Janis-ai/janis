@@ -217,6 +217,57 @@ describe('jira tool template', () => {
   });
 });
 
+describe('oauth-connect template variants', () => {
+  const tpl = (id: string) => TOOL_TEMPLATES.find((t) => t.id === id)!;
+
+  it('every variant exists, connects via /api/oauth, and clones the PAT tool set', () => {
+    for (const [from, to] of [
+      ['jira', 'jira-connect'],
+      ['linear', 'linear-connect'],
+      ['hubspot', 'hubspot-connect'],
+      ['salesforce', 'salesforce-connect'],
+    ]) {
+      const pat = tpl(from);
+      const oauth = tpl(to);
+      expect(oauth.fields).toEqual([]);
+      expect(oauth.oauth_connect).toBe(`/api/oauth/${from}/connect`);
+      expect(oauth.connection?.provider).toBe(from === 'hubspot' ? 'hubspot' : from);
+      expect(oauth.tools.map((t) => t.name)).toEqual(pat.tools.map((t) => t.name));
+      // flags carry over verbatim — identity binding and approval gating
+      // must not silently drop on the OAuth path
+      for (const pt of pat.tools) {
+        const ot = oauth.tools.find((t) => t.name === pt.name)!;
+        expect(ot.method).toBe(pt.method);
+        expect(ot.approval).toBe(pt.approval);
+        expect(ot.identity).toBe(pt.identity);
+      }
+    }
+  });
+
+  it('jira-connect swaps the site host for the 3LO cloudId path', () => {
+    const search = tpl('jira-connect').tools.find((t) => t.name === 'jira_search')!;
+    expect(search.url).toContain('api.atlassian.com/ex/jira/{{secrets.CONN_JIRA_CLOUD_ID}}');
+    expect(search.headers?.authorization).toBe('Bearer {{secrets.CONN_JIRA_TOKEN}}');
+  });
+
+  it('salesforce-connect swaps the secret host for the OAuth instance_url', () => {
+    const q = tpl('salesforce-connect').tools.find((t) => t.name === 'salesforce_query')!;
+    expect(q.url).toContain('{{secrets.CONN_SALESFORCE_INSTANCE_URL}}');
+    expect(q.headers?.authorization).toBe('Bearer {{secrets.CONN_SALESFORCE_TOKEN}}');
+  });
+
+  it('linear/hubspot OAuth tools go Bearer on the connection token', () => {
+    expect(
+      tpl('linear-connect').tools.find((t) => t.name === 'linear_teams')?.headers
+        ?.authorization,
+    ).toBe('Bearer {{secrets.CONN_LINEAR_TOKEN}}');
+    expect(
+      tpl('hubspot-connect').tools.find((t) => t.name === 'hubspot_get_contact')?.headers
+        ?.authorization,
+    ).toBe('Bearer {{secrets.CONN_HUBSPOT_TOKEN}}');
+  });
+});
+
 describe('linear tool template', () => {
   const linear = TOOL_TEMPLATES.find((t) => t.id === 'linear')!;
   const tool = (name: string) => linear.tools.find((t) => t.name === name)! as ToolDef;

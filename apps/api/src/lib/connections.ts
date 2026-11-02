@@ -29,6 +29,16 @@ interface ProviderSpec {
    *  Basic-auth pair (the Janis app's client id/secret), then persists the
    *  rotated refresh token providers hand back. */
   refreshBasic?: () => [string, string];
+  /** Same refresh grant but client_id/secret travel in the POST body —
+   *  Atlassian/HubSpot/Salesforce want them there, not Basic. */
+  refreshBody?: () => { client_id: string; client_secret: string };
+  /** Token endpoint speaks JSON instead of form-encoded (Atlassian). */
+  jsonToken?: boolean;
+  /** Plain-string creds fields also exposed as CONN_<P>_<FIELD> secrets —
+   *  tool URLs need them (Jira's cloud_id, Salesforce's instance_url).
+   *  NEVER list client_secret/refresh_token — they'd leak into tool
+   *  traffic. */
+  exposeSecrets?: string[];
 }
 
 const PROVIDERS: Record<string, ProviderSpec> = {
@@ -38,8 +48,41 @@ const PROVIDERS: Record<string, ProviderSpec> = {
     extra: () => ({ grant_type: 'client_credentials' }),
   },
   salesforce: {
-    tokenUrl: (c) => `https://${c.host}/services/oauth2/token`,
+    // OAuth-connect rows carry a refresh_token + instance_url (minted on
+    // login.salesforce.com); BYO rows carry host + client credentials.
+    tokenUrl: (c) =>
+      c.refresh_token
+        ? 'https://login.salesforce.com/services/oauth2/token'
+        : `https://${c.host}/services/oauth2/token`,
     extra: () => ({ grant_type: 'client_credentials' }),
+    refreshBody: () => ({
+      client_id: env.salesforceClientId,
+      client_secret: env.salesforceClientSecret,
+    }),
+    exposeSecrets: ['instance_url'],
+  },
+  // Janis-owned OAuth apps — routes/oauthConnect.ts runs the
+  // authorization-code flow; the connection stores the granted refresh
+  // token plus whatever host fields the API base needs.
+  jira: {
+    tokenUrl: () => 'https://auth.atlassian.com/oauth/token',
+    refreshBody: () => ({
+      client_id: env.jiraClientId,
+      client_secret: env.jiraClientSecret,
+    }),
+    jsonToken: true,
+    exposeSecrets: ['cloud_id'],
+  },
+  linear: {
+    tokenUrl: () => 'https://api.linear.app/oauth/token',
+    refreshBasic: () => [env.linearClientId, env.linearClientSecret],
+  },
+  hubspot: {
+    tokenUrl: () => 'https://api.hubapi.com/oauth/v1/token',
+    refreshBody: () => ({
+      client_id: env.hubspotClientId,
+      client_secret: env.hubspotClientSecret,
+    }),
   },
   // Janis-owned OAuth app (developer.calendly.com) — the connection stores
   // only the visitor-granted refresh token; access tokens last ~2h.
@@ -74,31 +117,37 @@ export function connectionCreds(conn: ConnRow): ConnectionCreds {
  *  OAuth apps like Calendly. */
 async function mint(db: Db, conn: ConnRow, spec: ProviderSpec): Promise<string> {
   const creds = connectionCreds(conn);
-  const refresh = spec.refreshBasic && creds.refresh_token;
+  const refresh = (spec.refreshBasic || spec.refreshBody) && creds.refresh_token;
   if (!refresh && (!creds.client_id || !creds.client_secret)) {
     throw new Error('connection is missing client credentials');
   }
-  const headers: Record<string, string> = { 'content-type': 'application/x-www-form-urlencoded' };
-  const body = refresh
-    ? new URLSearchParams({
+  const fields = refresh
+    ? {
         grant_type: 'refresh_token',
         refresh_token: creds.refresh_token!,
-      })
-    : new URLSearchParams({
+        // Body-credential providers (Atlassian/HubSpot/Salesforce) want
+        // the app pair in the POST body; Basic providers get it in the
+        // Authorization header instead.
+        ...(spec.refreshBody ? spec.refreshBody() : {}),
+      }
+    : {
         grant_type: 'client_credentials',
         client_id: creds.client_id!,
         client_secret: creds.client_secret!,
         ...(spec.scope ?? creds.scope ? { scope: spec.scope ?? creds.scope! } : {}),
         ...(spec.extra?.(creds) ?? {}),
-      });
-  if (refresh) {
-    const [id, secret] = spec.refreshBasic!();
+      };
+  const headers: Record<string, string> = spec.jsonToken
+    ? { 'content-type': 'application/json' }
+    : { 'content-type': 'application/x-www-form-urlencoded' };
+  if (refresh && spec.refreshBasic) {
+    const [id, secret] = spec.refreshBasic();
     headers.authorization = `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`;
   }
   const res = await fetch(spec.tokenUrl(creds), {
     method: 'POST',
     headers,
-    body: body.toString(),
+    body: spec.jsonToken ? JSON.stringify(fields) : new URLSearchParams(fields).toString(),
     signal: AbortSignal.timeout(10_000),
   });
   const data = (await res.json().catch(() => ({}))) as {
@@ -155,6 +204,15 @@ export async function connectionSecrets(db: Db, agentId: string): Promise<Record
   for (const conn of rows) {
     try {
       map[connectionSecretName(conn.provider)] = await connectionToken(db, conn);
+      const spec = PROVIDERS[conn.provider];
+      if (spec?.exposeSecrets?.length) {
+        const creds = connectionCreds(conn);
+        const base = connectionSecretName(conn.provider).slice(0, -'_TOKEN'.length);
+        for (const f of spec.exposeSecrets) {
+          const v = creds[f];
+          if (v) map[`${base}_${f.toUpperCase()}`] = v;
+        }
+      }
     } catch {
       // leave the placeholder unresolved — the tool call fails with a clear
       // 'unknown secret' error rather than silently leaking a dead token

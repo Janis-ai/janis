@@ -6,7 +6,7 @@ import { eq } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { agentConnections, agents, workspaces } from '../db/schema.js';
-import { connectionCreds, connectionToken } from './connections.js';
+import { connectionCreds, connectionSecrets, connectionToken } from './connections.js';
 import { encryptSecret } from './secrets.js';
 
 let db: Db;
@@ -89,5 +89,110 @@ describe('connectionToken — refresh providers (calendly)', () => {
       })
       .returning();
     await expect(connectionToken(db, conn)).rejects.toThrow('missing client credentials');
+  });
+});
+
+describe('connectionToken — oauth-connect providers', () => {
+  let seedN = 0;
+  const seed = async (provider: string, creds: object) => {
+    const n = ++seedN;
+    const [ws] = await db.insert(workspaces).values({ name: `W-${provider}-${n}` }).returning();
+    const [agent] = await db
+      .insert(agents)
+      .values({ workspaceId: ws.id, name: 'A', apiKeyHash: `h-${provider}-${n}`, apiKeyPreview: 'p' })
+      .returning();
+    const [conn] = await db
+      .insert(agentConnections)
+      .values({
+        agentId: agent.id,
+        workspaceId: ws.id,
+        provider,
+        credentialsEnc: encryptSecret(JSON.stringify(creds)),
+        expiresAt: new Date(Date.now() - 60_000), // expired → forces a mint
+      })
+      .returning();
+    return { ws, agent, conn };
+  };
+  const capture = () => {
+    const calls: { url: string; init?: RequestInit }[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: unknown, init?: RequestInit) => {
+        calls.push({ url: String(url), init });
+        return new Response(
+          JSON.stringify({ access_token: 'a1', expires_in: 3600, refresh_token: 'r2' }),
+          { status: 200 },
+        );
+      }),
+    );
+    return calls;
+  };
+
+  it('jira mints a JSON refresh grant with creds in the body (Atlassian)', async () => {
+    const { conn } = await seed('jira', { refresh_token: 'rj', cloud_id: 'cloud-9' });
+    const calls = capture();
+    try {
+      await connectionToken(db, conn);
+      expect(calls[0].url).toBe('https://auth.atlassian.com/oauth/token');
+      const headers = calls[0].init?.headers as Record<string, string>;
+      expect(headers['content-type']).toBe('application/json');
+      expect(headers.authorization).toBeUndefined();
+      expect(JSON.parse(String(calls[0].init?.body))).toMatchObject({
+        grant_type: 'refresh_token',
+        refresh_token: 'rj',
+      });
+      // rotated refresh persists
+      const [after] = await db
+        .select()
+        .from(agentConnections)
+        .where(eq(agentConnections.id, conn.id));
+      expect(connectionCreds(after).refresh_token).toBe('r2');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('oauth salesforce rows mint on login.salesforce.com; BYO rows keep the instance host', async () => {
+    const { conn: oauth } = await seed('salesforce', {
+      refresh_token: 'rsf',
+      instance_url: 'https://acme.my.salesforce.com',
+    });
+    const { conn: byo } = await seed('salesforce', {
+      host: 'acme.my.salesforce.com',
+      client_id: 'cid',
+      client_secret: 'cs',
+    });
+    const calls = capture();
+    try {
+      await connectionToken(db, oauth);
+      await connectionToken(db, byo);
+      expect(calls[0].url).toBe('https://login.salesforce.com/services/oauth2/token');
+      expect(String(calls[0].init?.body)).toContain('grant_type=refresh_token');
+      expect(calls[1].url).toBe('https://acme.my.salesforce.com/services/oauth2/token');
+      expect(String(calls[1].init?.body)).toContain('grant_type=client_credentials');
+      expect(String(calls[1].init?.body)).toContain('client_id=cid');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('connectionSecrets exposes allowlisted creds fields as CONN_<P>_<FIELD>', async () => {
+    const { agent } = await seed('jira', { refresh_token: 'rj', cloud_id: 'cloud-9' });
+    const { agent: sfAgent } = await seed('salesforce', {
+      refresh_token: 'rsf',
+      instance_url: 'https://acme.my.salesforce.com',
+    });
+    capture();
+    try {
+      const secrets = await connectionSecrets(db, agent.id);
+      expect(secrets.CONN_JIRA_TOKEN).toBe('a1');
+      expect(secrets.CONN_JIRA_CLOUD_ID).toBe('cloud-9');
+      const sf = await connectionSecrets(db, sfAgent.id);
+      expect(sf.CONN_SALESFORCE_INSTANCE_URL).toBe('https://acme.my.salesforce.com');
+      // and nothing else leaks — refresh_token stays inside the vault
+      expect(Object.keys(sf)).not.toContain('CONN_SALESFORCE_REFRESH_TOKEN');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

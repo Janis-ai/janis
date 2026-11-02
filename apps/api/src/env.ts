@@ -189,6 +189,17 @@ export const env = {
   calendlyRedirectUri:
     process.env.CALENDLY_REDIRECT_URI ??
     `${process.env.API_ORIGIN ?? 'http://localhost:8787'}/calendly/callback`,
+  // Janis-owned OAuth apps for the *-connect tool templates
+  // (routes/oauthConnect.ts) — each card's Connect button lights up once
+  // the pair lands; unset = card reports "not configured".
+  jiraClientId: process.env.JIRA_CLIENT_ID ?? '',
+  jiraClientSecret: process.env.JIRA_CLIENT_SECRET ?? '',
+  linearClientId: process.env.LINEAR_CLIENT_ID ?? '',
+  linearClientSecret: process.env.LINEAR_CLIENT_SECRET ?? '',
+  hubspotClientId: process.env.HUBSPOT_CLIENT_ID ?? '',
+  hubspotClientSecret: process.env.HUBSPOT_CLIENT_SECRET ?? '',
+  salesforceClientId: process.env.SALESFORCE_CLIENT_ID ?? '',
+  salesforceClientSecret: process.env.SALESFORCE_CLIENT_SECRET ?? '',
   // Cloudflare OAuth client — auto-configures sending-domain DNS records on
   // the client's zone (zone.read + dns.write scopes).
   cfOauthClientId: process.env.CLOUDFLARE_OAUTH_CLIENT_ID ?? '',

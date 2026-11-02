@@ -489,6 +489,22 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     ],
   },
   {
+    id: 'hubspot-connect',
+    name: 'HubSpot (OAuth)',
+    category: 'CRM',
+    blurb: 'Same HubSpot tools via one-click OAuth — no private-app token to paste.',
+    docs_url: 'https://developers.hubspot.com/docs/api/oauth-quickstart-guide',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'hubspot',
+      label: () => 'HubSpot',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/oauth/hubspot/connect',
+    tools: [], // filled from the `hubspot` template below — one source of truth
+  },
+  {
     id: 'zendesk',
     name: 'Zendesk',
     category: 'Support desk',
@@ -653,6 +669,23 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     ],
   },
   {
+    id: 'salesforce-connect',
+    name: 'Salesforce (OAuth)',
+    category: 'CRM',
+    blurb:
+      'Same Salesforce tools via one-click OAuth — no connected app to configure per org.',
+    docs_url: 'https://help.salesforce.com/s/articleView?id=sf.connected_app_create.htm',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'salesforce',
+      label: () => 'Salesforce',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/oauth/salesforce/connect',
+    tools: [], // filled from the `salesforce` template below — one source of truth
+  },
+  {
     id: 'jira',
     name: 'Jira',
     category: 'Issue tracking',
@@ -736,6 +769,22 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         approval: true,
       },
     ],
+  },
+  {
+    id: 'jira-connect',
+    name: 'Jira (OAuth)',
+    category: 'Issue tracking',
+    blurb: 'Same Jira tools via one-click OAuth — no API token to paste.',
+    docs_url: 'https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'jira',
+      label: () => 'Jira site',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/oauth/jira/connect',
+    tools: [], // filled from the `jira` template below — one source of truth
   },
   {
     id: 'linear',
@@ -834,6 +883,23 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         approval: true,
       },
     ],
+  },
+  {
+    id: 'linear-connect',
+    name: 'Linear (OAuth)',
+    category: 'Issue tracking',
+    blurb:
+      'Same Linear tools via one-click OAuth — issues post as the app, not whoever connected.',
+    docs_url: 'https://linear.app/developers/oauth-2-0-authentication',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'linear',
+      label: () => 'Linear',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/oauth/linear/connect',
+    tools: [], // filled from the `linear` template below — one source of truth
   },
   {
     id: 'brave',
@@ -1464,20 +1530,48 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
   },
 ];
 
-// The OAuth Calendly card shares the PAT card's tool defs with the
-// connection token swapped in — declared once, bound to either secret.
-{
-  const pat = TOOL_TEMPLATES.find((t) => t.id === 'calendly');
-  const oauth = TOOL_TEMPLATES.find((t) => t.id === 'calendly-connect');
-  if (pat && oauth) {
-    oauth.tools = pat.tools.map((t) => ({
+// OAuth cards share the PAT/BYO card's tool defs with the connection
+// token (and host, for 3LO-style APIs) swapped in — declared once, bound
+// to either credential shape.
+for (const v of [
+  { from: 'calendly', to: 'calendly-connect', auth: 'Bearer {{secrets.CONN_CALENDLY_TOKEN}}' },
+  {
+    from: 'hubspot',
+    to: 'hubspot-connect',
+    auth: 'Bearer {{secrets.CONN_HUBSPOT_TOKEN}}',
+  },
+  {
+    from: 'salesforce',
+    to: 'salesforce-connect',
+    // BYO rows store the instance host as a plain secret; OAuth rows
+    // carry instance_url on the connection (exposed via exposeSecrets).
+    urlFrom: 'https://{{secrets.SALESFORCE_HOST}}',
+    urlTo: 'https://{{secrets.CONN_SALESFORCE_INSTANCE_URL}}',
+    auth: 'Bearer {{secrets.CONN_SALESFORCE_TOKEN}}',
+  },
+  {
+    from: 'jira',
+    to: 'jira-connect',
+    // 3LO tokens call api.atlassian.com with the granted site's cloud
+    // id, not the site's own host.
+    urlFrom: 'https://{{secrets.JIRA_HOST}}',
+    urlTo: 'https://api.atlassian.com/ex/jira/{{secrets.CONN_JIRA_CLOUD_ID}}',
+    auth: 'Bearer {{secrets.CONN_JIRA_TOKEN}}',
+  },
+  {
+    from: 'linear',
+    to: 'linear-connect',
+    // OAuth tokens need Bearer — raw-key auth is the personal-API-key path.
+    auth: 'Bearer {{secrets.CONN_LINEAR_TOKEN}}',
+  },
+]) {
+  const src = TOOL_TEMPLATES.find((t) => t.id === v.from);
+  const dst = TOOL_TEMPLATES.find((t) => t.id === v.to);
+  if (src && dst) {
+    dst.tools = src.tools.map((t) => ({
       ...t,
-      headers: Object.fromEntries(
-        Object.entries(t.headers ?? {}).map(([k, v]) => [
-          k,
-          v.replaceAll('{{secrets.CALENDLY_TOKEN}}', '{{secrets.CONN_CALENDLY_TOKEN}}'),
-        ]),
-      ),
+      ...(v.urlFrom ? { url: t.url.replaceAll(v.urlFrom!, v.urlTo!) } : {}),
+      headers: { authorization: v.auth },
     }));
   }
 }

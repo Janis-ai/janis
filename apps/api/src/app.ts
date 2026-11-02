@@ -41,6 +41,7 @@ import { metaApiRoutes, metaPublicRoutes } from './routes/meta.js';
 import { gmailApiRoutes, gmailPublicRoutes } from './routes/gmail.js';
 import { calendlyApiRoutes, calendlyPublicRoutes } from './routes/calendly.js';
 import { googleApiRoutes, googlePublicRoutes } from './routes/googleConnect.js';
+import { oauthApiRoutes, oauthPublicRoutes } from './routes/oauthConnect.js';
 import { shopifyApiRoutes, shopifyPublicRoutes, shopifyWebhookRoutes } from './routes/shopify.js';
 import { outlookApiRoutes, outlookPublicRoutes } from './routes/outlook.js';
 import { voiceRoutes } from './routes/voice.js';
@@ -202,6 +203,7 @@ export function createApp(db: Db) {
   app.route('/gmail', gmailPublicRoutes(db));
   app.route('/calendly', calendlyPublicRoutes(db)); // Calendly OAuth callback
   app.route('/google', googlePublicRoutes(db)); // Google Sheets/Docs OAuth callback
+  app.route('/oauth', oauthPublicRoutes(db)); // *-connect tool templates' OAuth callbacks
   // Shopify embedded app — session-token authed iframe calls under
   // /api/shopify; App-signed webhooks under /shopify.
   app.use('/api/shopify/*', rateLimit({ scope: 'shopify-app', windowMs: 60_000, max: 120 }));
@@ -284,6 +286,7 @@ export function createApp(db: Db) {
   api.route('/gmail', gmailApiRoutes(db));
   api.route('/calendly', calendlyApiRoutes(db));
   api.route('/google', googleApiRoutes(db));
+  api.route('/oauth', oauthApiRoutes(db));
   api.route('/outlook', outlookApiRoutes(db));
   // Console-authed link management — shares the /api/shopify prefix with
   // the iframe's session-token routes; subpaths don't overlap so both

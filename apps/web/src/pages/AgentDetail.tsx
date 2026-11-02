@@ -3613,15 +3613,25 @@ function IntegrationCards({
     return tplId === 'google-drive' ? all : all.filter((f) => f.mimeType === mime);
   };
 
-  const connectProvider = ['calendly', 'google'].find((p) => params.get(`${p}_connect`) != null || params.get(`${p}_error`) != null);
+  const OAUTH_PROVIDERS: Record<string, string> = {
+    calendly: 'Calendly',
+    google: 'Google',
+    jira: 'Jira',
+    linear: 'Linear',
+    hubspot: 'HubSpot',
+    salesforce: 'Salesforce',
+  };
+  const connectProvider = Object.keys(OAUTH_PROVIDERS).find(
+    (p) => params.get(`${p}_connect`) != null || params.get(`${p}_error`) != null,
+  );
   const flash = connectProvider
     ? params.get(`${connectProvider}_connect`) != null
-      ? { kind: 'ok' as const, msg: `${connectProvider === 'google' ? 'Google' : 'Calendly'} connected — ${params.get(`${connectProvider}_connect`)}` }
-      : { kind: 'err' as const, msg: `${connectProvider === 'google' ? 'Google' : 'Calendly'} connect failed — ${params.get(`${connectProvider}_error`)}` }
+      ? { kind: 'ok' as const, msg: `${OAUTH_PROVIDERS[connectProvider]} connected — ${params.get(`${connectProvider}_connect`)}` }
+      : { kind: 'err' as const, msg: `${OAUTH_PROVIDERS[connectProvider]} connect failed — ${params.get(`${connectProvider}_error`)}` }
     : null;
   const clearFlash = () => {
     if (!flash) return;
-    for (const p of ['calendly', 'google']) {
+    for (const p of Object.keys(OAUTH_PROVIDERS)) {
       params.delete(`${p}_connect`);
       params.delete(`${p}_error`);
     }
