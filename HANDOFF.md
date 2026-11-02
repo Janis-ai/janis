@@ -93,6 +93,33 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02h — Dead-tool postmortem: Linear braces, SF URL, Jira discovery
+- Found via a torontofood test chat that reported "no tickets" + deflected
+  on filing. Root causes, all in the 11-02 connector wave:
+  - linear_search_issues / linear_get_issue / linear_add_comment shipped a
+    stray extra `}` in the GraphQL doc → GRAPHQL_PARSE_FAILED every call.
+    New test asserts brace balance on every catalog query doc (fetch-mocked
+    tests only ever saw the JSON envelope).
+  - Salesforce OAuth stores instance_url WITH https:// (token response
+    verbatim); tools prepend https:// again → every call fetch-failed.
+    connectionSecrets now strips scheme + trailing slash on exposed fields.
+  - jira_create_issue's param hint literally suggested "SUP" — model
+    hallucinated it (no grounding tool existed).
+- jira_list_projects added (unbound, read-only) so the agent discovers real
+  project keys. toolsFor now backfills catalog tools added to a stamped
+  template after install — existing OAuth/BYO installs pick up new sibling
+  tools without reconnecting; operator-kept defs (disabled included) never
+  duplicate. Jira scopes already cover it (classic read:jira-work).
+- Create tools now tell the model to confirm the filing WITH a clickable
+  link (Linear url field; Jira compose https://<host>/browse/<key> from
+  `self`). Chat surfaces already linkify markdown + bare URLs.
+- Also seen: the model filed JAN-5 AND JAN-6 (dupes) without mentioning
+  either — description nudge shipped; silent-success is a model-behavior
+  watch item. torontofood's system_prompt now pins project KAN.
+- Note for future tool adds: new catalog tools reach stamped installs via
+  the backfill — no migration needed — but tools REMOVED from a template
+  linger in stored configs (name-merge only adds).
+
 ## 2026-11-02g — Connector wave: GitHub + Slack cards, HubSpot OAuth restored
 - github / github-connect cards (PAT + OAuth) — third escalation target.
   OAuth spec: api.github.com on CONN_GITHUB_TOKEN, repo scope. Mike
