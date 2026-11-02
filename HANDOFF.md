@@ -93,6 +93,27 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02e — Visitor reply latency: parallel pre-LLM setup + widget SSE
+- replyAsHostedAgent + the suggestion path awaited ~11 serial DB/HTTP
+  lookups before the first LLM call (transcript, knowledge docs, secrets,
+  identity, alerts, saved widgets, campaign context). All but the two real
+  dependencies (docs←transcript, secrets←token-refresh) now run
+  concurrently — ~one Cloud SQL round-trip each off the critical path.
+- New GET /chat/:token/events streams an SSE poke per bus event on the
+  visitor's own conversation (payload-free — /messages stays the durable
+  read). 404 while no thread exists; resolves identity exactly like
+  /messages (claim params, simVisitor, thread key).
+- widget.js opens the stream after a poll returns a real conversation,
+  drops its interval to 15s while SSE is live, reverts to 3s on any close,
+  re-polls on (re)connect to close the no-replay gap, and closes the
+  stream on resetTranscript (new chat / participant rebind) since it's
+  bound to the old conv id.
+- Deferred deliberately: token streaming (guard/regen loop can invalidate
+  already-shown text + only webchat could consume it), prompt caching
+  (needs stable prefix measurement; billed storage can lose at low
+  volume), min-instances (only real $ item, ~$60-70/mo). Bus relay adds up
+  to ~500ms on cross-instance events (bus_events POLL_MS).
+
 ## 2026-11-02d — One-click OAuth for Jira, Linear, HubSpot, Salesforce
 - routes/oauthConnect.ts is a GENERIC connect factory — one pair of
   routes (/api/oauth/:provider/connect admin+bounce; /oauth/:provider/
