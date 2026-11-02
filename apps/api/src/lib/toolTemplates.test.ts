@@ -365,3 +365,21 @@ describe('linear tool template', () => {
     expect(sentBody().variables.input).toEqual({ issueId: 'uuid-1', body: 'Customer followed up' });
   });
 });
+
+describe('catalog bodyTemplates', () => {
+  it('every embedded GraphQL document has balanced braces', () => {
+    // fetch-mocked tests only see the JSON envelope — a stray '}' in the
+    // query string still ships and the provider answers GRAPHQL_PARSE_FAILED
+    for (const t of TOOL_TEMPLATES.flatMap((x) => x.tools)) {
+      const m = t.bodyTemplate?.match(/"query":"((?:[^"\\]|\\.)*)"/);
+      if (!m) continue;
+      let depth = 0;
+      for (const ch of m[1]) {
+        if (ch === '{') depth++;
+        if (ch === '}') depth--;
+        expect(depth, `${t.name} query closes early`).toBeGreaterThanOrEqual(0);
+      }
+      expect(depth, `${t.name} query braces unbalanced`).toBe(0);
+    }
+  });
+});

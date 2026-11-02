@@ -188,7 +188,9 @@ describe('connectionToken — oauth-connect providers', () => {
       expect(secrets.CONN_JIRA_TOKEN).toBe('a1');
       expect(secrets.CONN_JIRA_CLOUD_ID).toBe('cloud-9');
       const sf = await connectionSecrets(db, sfAgent.id);
-      expect(sf.CONN_SALESFORCE_INSTANCE_URL).toBe('https://acme.my.salesforce.com');
+      // tools wrap exposed fields in https:// themselves — a stored full
+      // URL would double the scheme and every call would fetch-fail
+      expect(sf.CONN_SALESFORCE_INSTANCE_URL).toBe('acme.my.salesforce.com');
       // and nothing else leaks — refresh_token stays inside the vault
       expect(Object.keys(sf)).not.toContain('CONN_SALESFORCE_REFRESH_TOKEN');
     } finally {

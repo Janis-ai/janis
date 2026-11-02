@@ -257,7 +257,10 @@ export async function connectionSecrets(db: Db, agentId: string): Promise<Record
         const base = connectionSecretName(conn.provider).slice(0, -'_TOKEN'.length);
         for (const f of spec.exposeSecrets) {
           const v = creds[f];
-          if (v) map[`${base}_${f.toUpperCase()}`] = v;
+          // Exposed fields slot into https://<field>/… tool URLs — a
+          // stored full URL (Salesforce instance_url comes back from the
+          // token exchange with its scheme) must shed it or it doubles.
+          if (v) map[`${base}_${f.toUpperCase()}`] = v.replace(/^https?:\/\//, '').replace(/\/+$/, '');
         }
       }
     } catch {

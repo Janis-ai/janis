@@ -743,14 +743,15 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'jira_create_issue',
         label: 'Create issue',
         description:
-          "File a Jira issue for a bug or request the agent could not resolve — records the customer's verified email on the ticket so engineering can follow up and jira_get_issue can find it for them later.",
+          "File a Jira issue for a bug or request the agent could not resolve — records the customer's verified email on the ticket so engineering can follow up and jira_get_issue can find it for them later. When the issue files, tell the customer its key (e.g. ABC-123).",
         method: 'POST',
         url: 'https://{{secrets.JIRA_HOST}}/rest/api/3/issue',
         headers: { authorization: 'Basic {{secrets.JIRA_AUTH}}' },
         bodyTemplate:
           '{"fields":{"project":{"key":{project}},"summary":{summary},"issuetype":{"name":{issue_type}},"description":{"version":1,"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Reported via Janis — customer email: {customer_email:text}"}]},{"type":"paragraph","content":[{"type":"text","text":{description}}]}]}}}',
         params: {
-          project: 'project key, e.g. SUP',
+          project:
+            'project key — only one seen in earlier jira_search/jira_get_issue results or given by the customer/operator; a guessed key always 400s',
           summary: 'one-line issue title',
           issue_type: 'issue type name — "Bug" for defects, "Task" otherwise',
           customer_email: "the verified customer's email — written onto the ticket",
@@ -894,7 +895,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://api.linear.app/graphql',
         headers: { authorization: '{{secrets.LINEAR_API_KEY}}' },
         bodyTemplate:
-          '{"query":"query($f:IssueFilter!){issues(first:10,filter:$f){nodes{id identifier title description state{name type position} priorityLabel assignee{displayName} team{key name} labels{nodes{name}} createdAt updatedAt url}}}}","variables":{"f":${filter}}}',
+          '{"query":"query($f:IssueFilter!){issues(first:10,filter:$f){nodes{id identifier title description state{name type position} priorityLabel assignee{displayName} team{key name} labels{nodes{name}} createdAt updatedAt url}}}","variables":{"f":${filter}}}',
         params: {
           filter:
             'JSON IssueFilter, e.g. {"and":[{"description":{"contains":"customer@email.com"}},{"title":{"contains":"checkout"}}]} — must include the verified customer email',
@@ -910,7 +911,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://api.linear.app/graphql',
         headers: { authorization: '{{secrets.LINEAR_API_KEY}}' },
         bodyTemplate:
-          '{"query":"query($f:IssueFilter!){issues(first:5,filter:$f){nodes{id identifier title description state{name type position} priorityLabel assignee{displayName} team{key name} comments(first:10){nodes{body user{displayName} createdAt}} createdAt updatedAt url}}}}","variables":{"f":{"and":[{"number":{"eq":${number:text}}},{"description":{"contains":"${email:text}"}}]}}}',
+          '{"query":"query($f:IssueFilter!){issues(first:5,filter:$f){nodes{id identifier title description state{name type position} priorityLabel assignee{displayName} team{key name} comments(first:10){nodes{body user{displayName} createdAt}} createdAt updatedAt url}}}","variables":{"f":{"and":[{"number":{"eq":${number:text}}},{"description":{"contains":"${email:text}"}}]}}}',
         params: {
           number: 'numeric part of the issue key — ENG-123 → 123',
           email: "the verified customer's own email address",
@@ -921,7 +922,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'linear_create_issue',
         label: 'Create issue',
         description:
-          "File a Linear issue for a bug or request the agent could not resolve — records the customer's verified email in the description so the team can follow up and linear_get_issue can find it. Get team_id from linear_teams.",
+          "File a Linear issue for a bug or request the agent could not resolve — records the customer's verified email in the description so the team can follow up and linear_get_issue can find it. Get team_id from linear_teams. When the issue files, tell the customer its identifier (e.g. ABC-123).",
         method: 'POST',
         url: 'https://api.linear.app/graphql',
         headers: { authorization: '{{secrets.LINEAR_API_KEY}}' },
@@ -945,7 +946,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://api.linear.app/graphql',
         headers: { authorization: '{{secrets.LINEAR_API_KEY}}' },
         bodyTemplate:
-          '{"query":"mutation($input:CommentCreateInput!){commentCreate(input:$input){success comment{id body createdAt}}}}","variables":{"input":{"issueId":"${issue_id:text}","body":"${comment:text}"}}}',
+          '{"query":"mutation($input:CommentCreateInput!){commentCreate(input:$input){success comment{id body createdAt}}}","variables":{"input":{"issueId":"${issue_id:text}","body":"${comment:text}"}}}',
         params: {
           issue_id:
             'issue UUID — the id field (not the ABC-123 identifier) from linear_search_issues or linear_get_issue',
