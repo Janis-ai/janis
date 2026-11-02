@@ -9,6 +9,7 @@ import {
   forgetLastAgent,
   janisBrain,
   lastAgentId,
+  postLoginTarget,
   setLastAgent,
 } from './agentContext';
 
@@ -176,5 +177,41 @@ describe('per-workspace agent memory', () => {
   it('rejects non-uuid values regardless of source', () => {
     setLastAgent('acme-returns', wsA);
     expect(lastAgentId(wsA)).toBeNull();
+  });
+});
+
+describe('postLoginTarget', () => {
+  const a = '7b90d58b-2253-495e-bc61-a575bf958c5b';
+  const foreign = 'a4b7f9cf-90b8-4e47-8d9f-d5ea4b6f1f9f';
+  const me = { userId: 'u-1', workspaceId: 'w-1' };
+  const stash = (next: string, u: string | null = 'u-1', w: string | null = 'w-1') =>
+    JSON.stringify({ next, u, w });
+
+  it('replays a deep link for the account+workspace that stashed it', () => {
+    expect(postLoginTarget(stash('/conversations/c-1?x=1'), me, [a])).toBe('/conversations/c-1?x=1');
+    expect(postLoginTarget(stash(`/agents/${a}?rail=ask`), me, [a])).toBe(`/agents/${a}?rail=ask`);
+  });
+
+  it('drops a stash captured under another account or workspace', () => {
+    // prod bug: an expired session's agent URL replayed into the next
+    // account to sign in → /agents/<foreign-uuid> "Agent not found".
+    expect(postLoginTarget(stash(`/agents/${a}?rail=ask`, 'u-2', 'w-2'), me, [a])).toBeNull();
+    expect(postLoginTarget(stash('/conversations', 'u-2'), me, [a])).toBeNull();
+    expect(postLoginTarget(stash('/conversations', 'u-1', 'w-2'), me, [a])).toBeNull();
+  });
+
+  it('drops an agent URL the workspace lacks — even when identity matches', () => {
+    // The same-account replay loop: land on a bad agent URL once and every
+    // later 401 re-stashed it under your own identity.
+    expect(postLoginTarget(stash(`/agents/${foreign}`), me, [a])).toBeNull();
+    expect(postLoginTarget(stash(`/agents/${foreign}/inbox?rail=ask`), me, [a])).toBeNull();
+    expect(postLoginTarget(stash(`/agents/new/${foreign}`), me, [a])).toBeNull();
+  });
+
+  it('drops legacy plain-string and non-path stashes', () => {
+    expect(postLoginTarget(`/agents/${a}`, me, [a])).toBeNull();
+    expect(postLoginTarget(stash('//evil.example'), me, [a])).toBeNull();
+    expect(postLoginTarget(stash('https://evil.example/x'), me, [a])).toBeNull();
+    expect(postLoginTarget(null, me, [a])).toBeNull();
   });
 });

@@ -57,7 +57,7 @@ export function useAgentContext() {
   const location = useLocation();
   const navigate = useNavigate();
   const param = agentPathParam(location.pathname);
-  const { data } = useAgents();
+  const { data, isFetching } = useAgents();
   const wsId = useMe().data?.workspace?.id;
   // A non-uuid param is a name-slug — resolve it and swap the URL for the
   // canonical /agents/<uuid>/… so every downstream ?agent_id= call works.
@@ -74,12 +74,47 @@ export function useAgentContext() {
           location.hash,
         { replace: true },
       );
+    } else if (data && !isFetching && !data.agents.some((a) => a.id === resolved)) {
+      // A uuid param absent from the settled list is a foreign or deleted
+      // agent — bounce to the inbox instead of a dead 404, and never let
+      // it into last-agent memory. isFetching gates the just-created race
+      // (invalidate → navigate → refetch in flight); /agents/new/<id> is
+      // the builder's own id and stays put.
+      if (!location.pathname.startsWith('/agents/new/')) {
+        navigate('/conversations', { replace: true });
+      }
+      return;
     }
     // Only real ids persist — a slug or typo stored here would poison the
     // workspace-wide badge/default until something else overwrote it.
     setLastAgent(resolved, wsId);
-  }, [param, resolved, wsId]);
+  }, [param, resolved, wsId, data, isFetching]);
   return resolved ?? param;
+}
+
+/** Where a stashed post-login deep link may replay: only for the account +
+ *  workspace that captured it, and only when an /agents/<uuid> target
+ *  still exists in that workspace's agent list. Returns null to drop —
+ *  storage is per-origin, so an unverified stash replays foreign URLs, and
+ *  an identity-matched stash of a bad URL replays its own 404 forever. */
+export function postLoginTarget(
+  raw: string | null,
+  me: { userId: string; workspaceId: string | null },
+  agentIds: string[],
+): string | null {
+  if (!raw) return null;
+  let s: { next?: string; u?: string | null; w?: string | null };
+  try {
+    s = JSON.parse(raw);
+  } catch {
+    return null; // legacy plain-string stash — no identity to verify
+  }
+  const next = s.next;
+  if (!next || s.u !== me.userId || s.w !== me.workspaceId) return null;
+  if (!next.startsWith('/') || next.startsWith('//')) return null;
+  const agentId = next.match(/^\/agents\/(?:new\/)?([0-9a-f-]{36})(?:\/|$)/i)?.[1];
+  if (agentId && !agentIds.includes(agentId)) return null;
+  return next;
 }
 
 /** A persisted last-agent id is usable only while it names an agent in the

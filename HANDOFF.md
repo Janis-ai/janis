@@ -106,6 +106,13 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   Object.values(m)[0] — literally any workspace's pick. Now keyed by the
   signed-in workspace (lastAgentId) and validated against /api/agents;
   invalid/missing → /welcome as before.
+- Follow-up (same day): the bad landing was self-perpetuating — a 401 on
+  the foreign-agent URL re-stashed it under the user's OWN identity, which
+  the first fix replayed. postLoginTarget (agentContext.ts, unit-tested)
+  now also requires the /agents/<uuid> target to exist in the workspace's
+  agent list, and useAgentContext bounces a settled-foreign uuid param to
+  /conversations instead of persisting it — isFetching gates the
+  just-created-agent race, /agents/new/<id> exempt.
 ## 2026-11-01e — Composer consolidation: always-up box, Pause ⇄ Resume toggle, send-as popover
 - The ops row (Take over / Reply as agent / Internal note / Teach / Archive /
   Delete) is gone. The composer always renders for non-archived threads —
