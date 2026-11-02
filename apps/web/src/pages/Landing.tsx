@@ -250,27 +250,6 @@ const FEATURE_GROUPS: {
       },
     ],
   },
-  {
-    heading: 'Bring your own — agent, bot, or model',
-    sub: 'Janis wraps what you already have; nothing needs a rebuild.',
-    items: [
-      {
-        icon: 'code',
-        title: 'Your agent',
-        body: 'Five lines of the janis npm package — or one webhook — adds approvals, takeover, and transcripts to an agent you already built. LangGraph, custom code, anything.',
-      },
-      {
-        icon: 'bot',
-        title: 'Your bot',
-        body: 'Running Chatfuel or ManyChat today? Connect it as a channel — Janis adds the inbox and approval cards, and goes quiet for the bot while a human owns the thread.',
-      },
-      {
-        icon: 'key',
-        title: 'Your LLM key',
-        body: 'Point Janis at your own OpenAI-compatible key or base URL — tokens run on your provider account and the Janis AI line drops to $0.',
-      },
-    ],
-  },
 ];
 
 const DIFFERENT: [string, string, string][] = [
@@ -715,11 +694,10 @@ export default function Landing() {
       </header>
 
       <section className="landing-hero">
-        <h1>Your AI agent has a help button.</h1>
+        <h1>Customer service that finishes the job.</h1>
         <p>
-          AI handles customer conversations across every channel. When it needs
-          help or approval, your team steps in. Then the agent picks up right
-          where it left off — and finishes the job.
+          AI where it wins, humans where it counts — approvals, takeover and
+          context in the same thread. One conversation, one control plane.
         </p>
         <p className="landing-sub">
           Build a hosted agent in minutes — or bring the agent, bot,
