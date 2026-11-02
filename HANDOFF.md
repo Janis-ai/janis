@@ -93,6 +93,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02f — Ask Janis pane: tall-reply top-anchor fires once, not per commit
+- The every-commit layout effect in AskJanis.tsx re-anchored to the top of
+  a taller-than-pane agent reply whenever `stick` was on — reading a long
+  answer to the bottom re-armed the stick, and the next poll tick (3s)
+  yanked the pane back to the greeting. `snappedFor` now records the last
+  row already snapped so the top-anchor only runs on the delivering
+  commit; later commits bottom-snap. Typing-dot rows are excluded from
+  "newest message" so their mount/unmount doesn't re-fire it.
+- ConversationPage was already correct (every-commit effect bottom-snaps;
+  its top-anchor only runs on Jump-to-latest).
+
 ## 2026-11-02e — Visitor reply latency: parallel pre-LLM setup + widget SSE
 - replyAsHostedAgent + the suggestion path awaited ~11 serial DB/HTTP
   lookups before the first LLM call (transcript, knowledge docs, secrets,
