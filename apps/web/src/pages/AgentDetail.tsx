@@ -3622,6 +3622,7 @@ function IntegrationCards({
     hubspot: 'HubSpot',
     salesforce: 'Salesforce',
     github: 'GitHub',
+    slack: 'Slack',
   };
   const connectProvider = Object.keys(OAUTH_PROVIDERS).find(
     (p) => params.get(`${p}_connect`) != null || params.get(`${p}_error`) != null,

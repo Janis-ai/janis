@@ -225,6 +225,7 @@ describe('oauth-connect template variants', () => {
       ['jira', 'jira-connect'],
       ['confluence', 'confluence-connect'],
       ['linear', 'linear-connect'],
+      ['slack', 'slack-connect'],
       ['hubspot', 'hubspot-connect'],
       ['salesforce', 'salesforce-connect'],
       ['github', 'github-connect'],

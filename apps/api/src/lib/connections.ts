@@ -94,6 +94,15 @@ const PROVIDERS: Record<string, ProviderSpec> = {
     tokenUrl: () => 'https://api.linear.app/oauth/token',
     refreshBasic: () => [env.linearClientId, env.linearClientSecret],
   },
+  // Slack bot tokens don't expire — no refresh path, entry kept so the
+  // provider resolves if mint is ever called on the row.
+  slack: {
+    tokenUrl: () => 'https://slack.com/api/oauth.v2.access',
+    refreshBody: () => ({
+      client_id: env.slackClientId,
+      client_secret: env.slackClientSecret,
+    }),
+  },
   hubspot: {
     tokenUrl: () => 'https://api.hubapi.com/oauth/v1/token',
     refreshBody: () => ({

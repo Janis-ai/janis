@@ -1150,6 +1150,24 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     ],
   },
   {
+    id: 'slack-connect',
+    name: 'Slack (OAuth)',
+    category: 'Communication',
+    blurb:
+      'Same Slack tools via one-click OAuth — Janis installs as a bot into your workspace.',
+    docs_url: 'https://docs.slack.dev/authentication/installing-with-oauth/',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'slack',
+      label: () => 'Slack workspace',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/oauth/slack/connect',
+    manual: 'slack',
+    tools: [], // filled from the `slack` template above — one source of truth
+  },
+  {
     id: 'brave',
     name: 'Brave Search',
     category: 'Web search',
@@ -1820,6 +1838,12 @@ for (const v of [
     to: 'linear-connect',
     // OAuth tokens need Bearer — raw-key auth is the personal-API-key path.
     auth: 'Bearer {{secrets.CONN_LINEAR_TOKEN}}',
+  },
+  {
+    from: 'slack',
+    to: 'slack-connect',
+    // OAuth mints a xoxb bot token — same Bearer header the BYO card uses.
+    auth: 'Bearer {{secrets.CONN_SLACK_TOKEN}}',
   },
   {
     from: 'github',

@@ -216,6 +216,27 @@ const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     },
     label: (_t, extra) => extra.login || 'GitHub',
   },
+  slack: {
+    id: 'slack',
+    templateId: 'slack-connect',
+    // Reuses the existing Janis Slack app — the callback mints a bot
+    // token (xoxb) per install; workspace name rides the token response.
+    envCreds: () => ({ clientId: env.slackClientId, clientSecret: env.slackClientSecret }),
+    authorizeUrl: ({ clientId, redirectUri, state }) =>
+      `https://slack.com/oauth/v2/authorize?${new URLSearchParams({
+        client_id: clientId,
+        scope: 'chat:write,channels:read',
+        redirect_uri: redirectUri,
+        state,
+      })}`,
+    tokenUrl: 'https://slack.com/api/oauth.v2.access',
+    credsIn: 'body',
+    // Slack bot tokens don't expire or rotate (token rotation is an
+    // optional app setting we keep off) — no refresh_token comes back.
+    noRefresh: true,
+    label: (tok) =>
+      ((tok.team as { name?: string } | undefined)?.name ?? '') || 'Slack workspace',
+  },
   salesforce: {
     id: 'salesforce',
     templateId: 'salesforce-connect',
