@@ -3618,7 +3618,6 @@ function IntegrationCards({
     google: 'Google',
     jira: 'Jira',
     linear: 'Linear',
-    hubspot: 'HubSpot',
     salesforce: 'Salesforce',
   };
   const connectProvider = Object.keys(OAUTH_PROVIDERS).find(

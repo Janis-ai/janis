@@ -196,8 +196,7 @@ export const env = {
   jiraClientSecret: process.env.JIRA_CLIENT_SECRET ?? '',
   linearClientId: process.env.LINEAR_CLIENT_ID ?? '',
   linearClientSecret: process.env.LINEAR_CLIENT_SECRET ?? '',
-  hubspotClientId: process.env.HUBSPOT_CLIENT_ID ?? '',
-  hubspotClientSecret: process.env.HUBSPOT_CLIENT_SECRET ?? '',
+  // HubSpot intentionally unconfigured — marketplace-gated installs.
   salesforceClientId: process.env.SALESFORCE_CLIENT_ID ?? '',
   salesforceClientSecret: process.env.SALESFORCE_CLIENT_SECRET ?? '',
   // Cloudflare OAuth client — auto-configures sending-domain DNS records on

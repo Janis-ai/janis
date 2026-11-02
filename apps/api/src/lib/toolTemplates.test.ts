@@ -224,14 +224,13 @@ describe('oauth-connect template variants', () => {
     for (const [from, to] of [
       ['jira', 'jira-connect'],
       ['linear', 'linear-connect'],
-      ['hubspot', 'hubspot-connect'],
       ['salesforce', 'salesforce-connect'],
     ]) {
       const pat = tpl(from);
       const oauth = tpl(to);
       expect(oauth.fields).toEqual([]);
       expect(oauth.oauth_connect).toBe(`/api/oauth/${from}/connect`);
-      expect(oauth.connection?.provider).toBe(from === 'hubspot' ? 'hubspot' : from);
+      expect(oauth.connection?.provider).toBe(from);
       expect(oauth.tools.map((t) => t.name)).toEqual(pat.tools.map((t) => t.name));
       // flags carry over verbatim — identity binding and approval gating
       // must not silently drop on the OAuth path
@@ -256,15 +255,11 @@ describe('oauth-connect template variants', () => {
     expect(q.headers?.authorization).toBe('Bearer {{secrets.CONN_SALESFORCE_TOKEN}}');
   });
 
-  it('linear/hubspot OAuth tools go Bearer on the connection token', () => {
+  it('linear OAuth tools go Bearer on the connection token', () => {
     expect(
       tpl('linear-connect').tools.find((t) => t.name === 'linear_teams')?.headers
         ?.authorization,
     ).toBe('Bearer {{secrets.CONN_LINEAR_TOKEN}}');
-    expect(
-      tpl('hubspot-connect').tools.find((t) => t.name === 'hubspot_get_contact')?.headers
-        ?.authorization,
-    ).toBe('Bearer {{secrets.CONN_HUBSPOT_TOKEN}}');
   });
 });
 
