@@ -34,6 +34,14 @@ interface ProviderSpec {
   refreshBody?: () => { client_id: string; client_secret: string };
   /** Token endpoint speaks JSON instead of form-encoded (Atlassian). */
   jsonToken?: boolean;
+  /** Token endpoint wants Accept: application/json or it answers
+   *  form-encoded (GitHub). */
+  acceptJson?: boolean;
+  /** Access tokens don't expire and there's no refresh grant — the row's
+   *  stored token serves until revoked (GitHub OAuth Apps). If the app
+   *  does hand back refresh_token + expires_in (GitHub-App-style expiring
+   *  user tokens), the normal refresh path mints instead. */
+  staticToken?: boolean;
   /** Plain-string creds fields also exposed as CONN_<P>_<FIELD> secrets —
    *  tool URLs need them (Jira's cloud_id, Salesforce's instance_url).
    *  NEVER list client_secret/refresh_token — they'd leak into tool
@@ -83,6 +91,19 @@ const PROVIDERS: Record<string, ProviderSpec> = {
       client_id: env.hubspotClientId,
       client_secret: env.hubspotClientSecret,
     }),
+  },
+  // Janis-owned OAuth App — the exchange hands back a non-expiring access
+  // token with no refresh_token, so the stored token itself serves. If the
+  // app is a GitHub App with expiring user tokens, refresh_token comes
+  // back too and the refreshBody grant mints here.
+  github: {
+    tokenUrl: () => 'https://github.com/login/oauth/access_token',
+    refreshBody: () => ({
+      client_id: env.githubClientId,
+      client_secret: env.githubClientSecret,
+    }),
+    acceptJson: true,
+    staticToken: true,
   },
   // Janis-owned OAuth app (developer.calendly.com) — the connection stores
   // only the visitor-granted refresh token; access tokens last ~2h.
@@ -140,6 +161,7 @@ async function mint(db: Db, conn: ConnRow, spec: ProviderSpec): Promise<string> 
   const headers: Record<string, string> = spec.jsonToken
     ? { 'content-type': 'application/json' }
     : { 'content-type': 'application/x-www-form-urlencoded' };
+  if (spec.acceptJson) headers.accept = 'application/json';
   if (refresh && spec.refreshBasic) {
     const [id, secret] = spec.refreshBasic();
     headers.authorization = `Basic ${Buffer.from(`${id}:${secret}`).toString('base64')}`;
@@ -187,8 +209,15 @@ export async function connectionToken(db: Db, conn: ConnRow): Promise<string> {
   const spec = PROVIDERS[conn.provider];
   if (!spec) throw new Error(`unknown connection provider: ${conn.provider}`);
   // refresh a minute early so in-flight tool calls never see a stale token
-  if (conn.accessTokenEnc && conn.expiresAt && conn.expiresAt.getTime() > Date.now() + 60_000) {
-    return decryptSecret(conn.accessTokenEnc);
+  if (conn.accessTokenEnc) {
+    if (conn.expiresAt && conn.expiresAt.getTime() > Date.now() + 60_000) {
+      return decryptSecret(conn.accessTokenEnc);
+    }
+    // Non-expiring access tokens (GitHub OAuth Apps) carry no expiry and
+    // nothing to mint with — the stored token serves until revoked.
+    if (!conn.expiresAt && spec.staticToken) {
+      return decryptSecret(conn.accessTokenEnc);
+    }
   }
   return mint(db, conn, spec);
 }

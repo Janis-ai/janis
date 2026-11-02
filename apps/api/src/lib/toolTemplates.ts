@@ -910,6 +910,182 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     tools: [], // filled from the `linear` template below — one source of truth
   },
   {
+    id: 'github',
+    name: 'GitHub',
+    category: 'Issue tracking',
+    blurb:
+      'Check issue status for customers and file GitHub issues on escalation — filed issues carry the customer email so status lookups stay scoped.',
+    docs_url: 'https://docs.github.com/en/rest/issues',
+    fields: [
+      {
+        key: 'token',
+        label: 'Personal access token',
+        placeholder: 'github_pat_… or ghp_…',
+        help: 'github.com → Settings → Developer settings → Personal access tokens → a fine-grained token with Issues read + write on the repo (a classic token needs the repo scope instead).',
+      },
+      {
+        key: 'repo',
+        label: 'Repository',
+        placeholder: 'owner/repo',
+        help: 'The repository the agent searches and files issues in — owner/repo exactly as it appears in the GitHub URL (a pasted URL works too).',
+      },
+    ],
+    secrets: (f) => ({
+      GITHUB_TOKEN: f.token.trim(),
+      GITHUB_REPO: f.repo
+        .trim()
+        .replace(/^https?:\/\/(www\.)?github\.com\//i, '')
+        .replace(/\.git$/, '')
+        .replace(/^\/+|\/+$/g, ''),
+    }),
+    tools: [
+      {
+        name: 'github_search_issues',
+        label: 'Search issues',
+        description:
+          'Search issues in the connected GitHub repository — scoped to the verified customer: their email must appear in the issue body (issues filed through Janis always carry it). Returns issue numbers, titles, states and labels — feed the number to github_get_issue or github_add_comment.',
+        method: 'GET',
+        url: 'https://api.github.com/search/issues?q=repo:{{secrets.GITHUB_REPO}}+is:issue+{query}+{email}+in:body&per_page=10',
+        headers: {
+          authorization: 'Bearer {{secrets.GITHUB_TOKEN}}',
+          accept: 'application/vnd.github+json',
+          'x-github-api-version': '2022-11-28',
+        },
+        params: {
+          query:
+            "keywords to narrow the search — may include GitHub qualifiers like state:open or label:bug; pass an empty string for all of the customer's issues",
+          email: "the verified customer's own email address",
+        },
+        identity: true,
+      },
+      {
+        name: 'github_get_issue',
+        label: 'Get issue',
+        description:
+          'Fetch a GitHub issue by its number — scoped to the verified customer: the issue body must contain their email or nothing returns. Returns full detail including state, labels and comment count.',
+        method: 'GET',
+        url: 'https://api.github.com/search/issues?q=repo:{{secrets.GITHUB_REPO}}+is:issue+{number}+{email}+in:body&per_page=5',
+        headers: {
+          authorization: 'Bearer {{secrets.GITHUB_TOKEN}}',
+          accept: 'application/vnd.github+json',
+          'x-github-api-version': '2022-11-28',
+        },
+        params: {
+          number: 'issue number — the # field from github_search_issues results, e.g. 123',
+          email: "the verified customer's own email address",
+        },
+        identity: true,
+      },
+      {
+        name: 'github_create_issue',
+        label: 'Create issue',
+        description:
+          "File a GitHub issue for a bug or request the agent could not resolve — records the customer's verified email in the body so the team can follow up and github_get_issue can find it for them later.",
+        method: 'POST',
+        url: 'https://api.github.com/repos/{{secrets.GITHUB_REPO}}/issues',
+        headers: {
+          authorization: 'Bearer {{secrets.GITHUB_TOKEN}}',
+          accept: 'application/vnd.github+json',
+          'x-github-api-version': '2022-11-28',
+        },
+        bodyTemplate:
+          '{"title":{title},"body":"Reported via Janis chat — customer email: {customer_email:text}\\n\\n{description:text}"}',
+        params: {
+          title: 'one-line issue title',
+          customer_email: "the verified customer's email — written onto the issue",
+          description:
+            'what the customer reported, steps to reproduce, and what they expected',
+        },
+        identity: true,
+      },
+      {
+        name: 'github_add_comment',
+        label: 'Add comment',
+        description:
+          'Comment on an existing GitHub issue — propose it, a teammate approves before it posts.',
+        method: 'POST',
+        url: 'https://api.github.com/repos/{{secrets.GITHUB_REPO}}/issues/{number}/comments',
+        headers: {
+          authorization: 'Bearer {{secrets.GITHUB_TOKEN}}',
+          accept: 'application/vnd.github+json',
+          'x-github-api-version': '2022-11-28',
+        },
+        bodyTemplate: '{"body":{comment}}',
+        params: {
+          number: 'issue number — from github_search_issues or github_get_issue',
+          comment: 'comment text — the context the team needs',
+        },
+        approval: true,
+      },
+    ],
+  },
+  {
+    id: 'github-connect',
+    name: 'GitHub (OAuth)',
+    category: 'Issue tracking',
+    blurb:
+      'Same GitHub tools via one-click OAuth — no personal access token to paste.',
+    docs_url:
+      'https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps',
+    fields: [],
+    secrets: () => ({}),
+    connection: {
+      provider: 'github',
+      label: () => 'GitHub',
+      credentials: () => ({}),
+    },
+    oauth_connect: '/api/oauth/github/connect',
+    manual: 'github',
+    tools: [], // filled from the `github` template below — one source of truth
+  },
+  {
+    id: 'slack',
+    name: 'Slack',
+    category: 'Communication',
+    blurb:
+      'Post escalations into a Slack channel — the agent can page the team with the conversation context.',
+    docs_url: 'https://api.slack.com/apps',
+    fields: [
+      {
+        key: 'bot_token',
+        label: 'Bot User OAuth Token (xoxb-…)',
+        placeholder: 'xoxb-…',
+        help: 'api.slack.com/apps → your app → OAuth & Permissions → add bot scopes chat:write + channels:read → Install to workspace → copy the Bot User OAuth Token.',
+      },
+    ],
+    secrets: (f) => ({ SLACK_TOKEN: f.bot_token.trim() }),
+    tools: [
+      {
+        name: 'slack_list_channels',
+        label: 'List channels',
+        description:
+          'List public channels in the Slack workspace (id + name) — use to find the channel id slack_post_message needs.',
+        method: 'GET',
+        url: 'https://slack.com/api/conversations.list?limit=200&types=public_channel',
+        headers: { authorization: 'Bearer {{secrets.SLACK_TOKEN}}' },
+        params: {},
+      },
+      {
+        name: 'slack_post_message',
+        label: 'Post message',
+        description:
+          'Post a message to a Slack channel — use to escalate a conversation to the team with the customer context. Propose it, a teammate approves before it posts.',
+        method: 'POST',
+        url: 'https://slack.com/api/chat.postMessage',
+        headers: {
+          authorization: 'Bearer {{secrets.SLACK_TOKEN}}',
+          'content-type': 'application/json',
+        },
+        bodyTemplate: '{"channel":"${channel:text}","text":"${text:text}"}',
+        params: {
+          channel: 'Slack channel ID (C…) from slack_list_channels',
+          text: 'message text — the escalation context the team needs',
+        },
+        approval: true,
+      },
+    ],
+  },
+  {
     id: 'brave',
     name: 'Brave Search',
     category: 'Web search',
@@ -1573,6 +1749,21 @@ for (const v of [
     // OAuth tokens need Bearer — raw-key auth is the personal-API-key path.
     auth: 'Bearer {{secrets.CONN_LINEAR_TOKEN}}',
   },
+  {
+    from: 'github',
+    to: 'github-connect',
+    // One OAuth grant covers every repo the connecting user can reach —
+    // the repo becomes a per-call tool arg instead of a PAT-card secret.
+    urlFrom: '{{secrets.GITHUB_REPO}}',
+    urlTo: '{repo}',
+    params: {
+      repo: 'the repository to search/file in, owner/repo form — e.g. acme/storefront',
+    },
+    // The auth swap replaces the whole headers object — keep the GitHub
+    // REST accept/version headers the PAT tools send.
+    headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' },
+    auth: 'Bearer {{secrets.CONN_GITHUB_TOKEN}}',
+  },
 ]) {
   const src = TOOL_TEMPLATES.find((t) => t.id === v.from);
   const dst = TOOL_TEMPLATES.find((t) => t.id === v.to);
@@ -1580,7 +1771,8 @@ for (const v of [
     dst.tools = src.tools.map((t) => ({
       ...t,
       ...(v.urlFrom ? { url: t.url.replaceAll(v.urlFrom!, v.urlTo!) } : {}),
-      headers: { authorization: v.auth },
+      headers: { ...v.headers, authorization: v.auth },
+      ...(v.params ? { params: { ...t.params, ...v.params } } : {}),
     }));
   }
 }

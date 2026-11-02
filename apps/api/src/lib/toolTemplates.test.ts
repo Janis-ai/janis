@@ -226,6 +226,7 @@ describe('oauth-connect template variants', () => {
       ['linear', 'linear-connect'],
       ['hubspot', 'hubspot-connect'],
       ['salesforce', 'salesforce-connect'],
+      ['github', 'github-connect'],
     ]) {
       const pat = tpl(from);
       const oauth = tpl(to);
@@ -265,6 +266,23 @@ describe('oauth-connect template variants', () => {
       tpl('hubspot-connect').tools.find((t) => t.name === 'hubspot_get_contact')?.headers
         ?.authorization,
     ).toBe('Bearer {{secrets.CONN_HUBSPOT_TOKEN}}');
+    expect(
+      tpl('github-connect').tools.find((t) => t.name === 'github_search_issues')?.headers
+        ?.authorization,
+    ).toBe('Bearer {{secrets.CONN_GITHUB_TOKEN}}');
+  });
+
+  it('github-connect keeps the REST headers and swaps the repo secret for an arg', () => {
+    const search = tpl('github-connect').tools.find((t) => t.name === 'github_search_issues')!;
+    // One OAuth grant covers every repo — the PAT-card's GITHUB_REPO secret
+    // becomes a per-call tool arg.
+    expect(search.url).toContain('repo:{repo}');
+    expect(search.params?.repo).toContain('owner/repo');
+    expect(search.headers?.accept).toBe('application/vnd.github+json');
+    expect(search.headers?.['x-github-api-version']).toBe('2022-11-28');
+    const comment = tpl('github-connect').tools.find((t) => t.name === 'github_add_comment')!;
+    expect(comment.url).toBe('https://api.github.com/repos/{repo}/issues/{number}/comments');
+    expect(comment.headers?.authorization).toBe('Bearer {{secrets.CONN_GITHUB_TOKEN}}');
   });
 });
 

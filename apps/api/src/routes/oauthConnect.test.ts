@@ -52,6 +52,8 @@ beforeAll(async () => {
   process.env.HUBSPOT_CLIENT_SECRET = 'hs_secret';
   process.env.SALESFORCE_CLIENT_ID = 'sf_cid';
   process.env.SALESFORCE_CLIENT_SECRET = 'sf_secret';
+  process.env.GITHUB_CLIENT_ID = 'gh_cid';
+  process.env.GITHUB_CLIENT_SECRET = 'gh_secret';
   const mod = await import('./oauthConnect.js');
   routes = mod.oauthApiRoutes;
   publicRoutes = mod.oauthPublicRoutes;
@@ -122,6 +124,10 @@ describe('oauth connect — consent redirects', () => {
     const sf = new URL(await connect('salesforce'));
     expect(sf.host).toBe('login.salesforce.com');
     expect(sf.searchParams.get('scope')).toContain('refresh_token');
+    const gh = new URL(await connect('github'));
+    expect(gh.origin).toBe('https://github.com');
+    expect(gh.pathname).toBe('/login/oauth/authorize');
+    expect(gh.searchParams.get('scope')).toContain('repo');
   });
 
   it('unknown provider bounces with an error flash', async () => {
@@ -282,6 +288,59 @@ describe('oauth callbacks', () => {
       .from(agentConnections)
       .where(eq(agentConnections.provider, 'hubspot'));
     expect(conn.label).toBe('portal 992211');
+  });
+
+  it('github asks for JSON at the token endpoint and labels the login', async () => {
+    const state = stateOf(await connect('github'));
+    const sent: { url: string; init?: RequestInit }[] = [];
+    stubFetch({
+      'github.com/login/oauth/access_token': (init) => {
+        sent.push({ url: 'token', init });
+        // OAuth App exchange — access_token only, no refresh_token/expiry.
+        return new Response(
+          JSON.stringify({ access_token: 'gho_x', token_type: 'bearer', scope: 'repo' }),
+          { status: 200 },
+        );
+      },
+      'api.github.com/user': (init) => {
+        sent.push({ url: 'user', init });
+        return new Response(JSON.stringify({ login: 'octocat' }), { status: 200 });
+      },
+    });
+    const res = await app.request(`/oauth/github/callback?state=${state}&code=c5`, {
+      redirect: 'manual',
+    });
+    expect(res.headers.get('location')).toContain('github_connect=octocat');
+
+    // Form-encoded exchange carrying Accept: application/json — without it
+    // GitHub answers urlencoded and res.json() would drop the token.
+    const tokenReq = sent.find((s) => s.url === 'token')!;
+    expect((tokenReq.init?.headers as Record<string, string>).accept).toBe(
+      'application/json',
+    );
+    expect(String(tokenReq.init?.body)).toContain('grant_type=authorization_code');
+    expect(String(tokenReq.init?.body)).toContain('client_id=gh_cid');
+
+    const [conn] = await db
+      .select()
+      .from(agentConnections)
+      .where(eq(agentConnections.provider, 'github'));
+    expect(conn.label).toBe('octocat');
+
+    const [agent] = await db.select().from(agents).where(eq(agents.id, agentId));
+    const tools =
+      (agent.config as { tools?: { name: string; headers?: Record<string, string> }[] }).tools ??
+      [];
+    expect(
+      tools.find((t) => t.name === 'github_search_issues')?.headers?.authorization,
+    ).toBe('Bearer {{secrets.CONN_GITHUB_TOKEN}}');
+
+    // Non-expiring token — the stored access token serves directly, no
+    // mint call (fetch is stubbed: a token request would land in `sent`).
+    sent.length = 0;
+    const secrets = await connectionSecrets(db, agentId);
+    expect(secrets.CONN_GITHUB_TOKEN).toBe('gho_x');
+    expect(sent.filter((s) => s.url === 'token')).toHaveLength(0);
   });
 
   it('a forged state bounces with oauth_error and stores nothing', async () => {

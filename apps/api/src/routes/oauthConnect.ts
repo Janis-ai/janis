@@ -32,8 +32,15 @@ interface OAuthProvider {
   tokenUrl: string;
   /** Token exchange posts JSON instead of form-encoded (Atlassian). */
   tokenJson?: boolean;
+  /** Extra headers on the token request — GitHub answers form-encoded
+   *  unless Accept: application/json rides along. */
+  tokenHeaders?: Record<string, string>;
   /** App creds in the POST body vs HTTP Basic — most providers take body. */
   credsIn: 'body' | 'basic';
+  /** The provider's access tokens don't expire/rotate — the exchange
+   *  carries no refresh_token (GitHub OAuth Apps); connections.ts serves
+   *  the stored token via staticToken. */
+  noRefresh?: boolean;
   /** PKCE — the provider requires code_challenge at authorize time
    *  (Salesforce ECAs enforce it) and the verifier at exchange. */
   pkce?: boolean;
@@ -141,6 +148,38 @@ const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
       return { site_name: d?.portalId ? `portal ${d.portalId}` : 'HubSpot account' };
     },
     label: (_t, extra) => extra.site_name || 'HubSpot account',
+  },
+  github: {
+    id: 'github',
+    templateId: 'github-connect',
+    envCreds: () => ({ clientId: env.githubClientId, clientSecret: env.githubClientSecret }),
+    authorizeUrl: ({ clientId, redirectUri, state }) =>
+      `https://github.com/login/oauth/authorize?${new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        scope: 'repo',
+        state,
+      })}`,
+    tokenUrl: 'https://github.com/login/oauth/access_token',
+    // GitHub's token endpoint answers form-encoded unless asked for JSON.
+    tokenHeaders: { accept: 'application/json' },
+    credsIn: 'body',
+    // OAuth App access tokens don't expire or rotate — no refresh_token
+    // comes back; the stored token serves until revoked.
+    noRefresh: true,
+    extraCreds: async (accessToken) => {
+      const res = await fetch('https://api.github.com/user', {
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          accept: 'application/vnd.github+json',
+          'x-github-api-version': '2022-11-28',
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json().catch(() => null)) as { login?: string } | null;
+      return { login: d?.login ?? '' };
+    },
+    label: (_t, extra) => extra.login || 'GitHub',
   },
   salesforce: {
     id: 'salesforce',
@@ -300,6 +339,7 @@ export function oauthPublicRoutes(db: Db) {
     };
     const headers: Record<string, string> = {
       'content-type': spec.tokenJson ? 'application/json' : 'application/x-www-form-urlencoded',
+      ...(spec.tokenHeaders ?? {}),
     };
     if (spec.credsIn === 'basic') {
       headers.authorization = `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`;
@@ -313,7 +353,7 @@ export function oauthPublicRoutes(db: Db) {
     const tok = (await tokenRes.json().catch(() => null)) as Record<string, unknown> | null;
     const accessToken = typeof tok?.access_token === 'string' ? tok.access_token : '';
     const refreshToken = typeof tok?.refresh_token === 'string' ? tok.refresh_token : '';
-    if (!tokenRes.ok || !tok || !accessToken || !refreshToken) {
+    if (!tokenRes.ok || !tok || !accessToken || (!refreshToken && !spec.noRefresh)) {
       return done(
         String(tok?.error_description ?? tok?.error ?? 'token exchange failed'),
       );
