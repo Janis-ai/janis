@@ -258,7 +258,7 @@ const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
         client_id: clientId,
         redirect_uri: redirectUri,
         state,
-        scope: 'read write',
+        scope: 'users:read tickets:read tickets:write',
       })}`,
     tokenUrl: (i) => `https://${i.z}.zendesk.com/oauth/tokens`,
     tokenJson: true,
