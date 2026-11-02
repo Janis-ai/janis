@@ -6,7 +6,7 @@ import { env, requestOrigin, requestWebOrigin } from '../env.js';
 import { AgentConfig } from '@janis/shared';
 import { agentConnections, agents } from '../db/schema.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
-import { connectionToken, type ConnectionCreds } from '../lib/connections.js';
+import { connectionCreds, connectionToken, type ConnectionCreds } from '../lib/connections.js';
 import { registerIssueWebhook } from './providerWebhooks.js';
 import { encryptSecret } from '../lib/secrets.js';
 import { TOOL_TEMPLATES } from '../lib/toolTemplates.js';
@@ -73,7 +73,7 @@ const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
       `https://auth.atlassian.com/authorize?${new URLSearchParams({
         audience: 'api.atlassian.com',
         client_id: clientId,
-        scope: 'read:jira-work write:jira-work offline_access',
+        scope: 'read:jira-work write:jira-work manage:jira-webhook offline_access',
         redirect_uri: redirectUri,
         state,
         response_type: 'code',
@@ -149,7 +149,9 @@ const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
         client_id: clientId,
         redirect_uri: redirectUri,
         response_type: 'code',
-        scope: 'read,issues:create,comments:create',
+        // write also covers webhookCreate (reverse-sync registration) —
+        // the token is server-side only; the tools are the trust boundary
+        scope: 'read,issues:create,comments:create,write',
         state,
         actor: 'app',
         prompt: 'consent',
@@ -465,6 +467,24 @@ export function oauthPublicRoutes(db: Db) {
     }
     const label = spec.label?.(tok, extra) || spec.id;
     const creds: ConnectionCreds = { refresh_token: refreshToken, ...extra };
+    // Reconnect keeps the issue-webhook secret — the provider-side webhook
+    // stays valid (same URL+secret) instead of re-registering on top of the
+    // old one every reconnect.
+    const [existingConn] = await db
+      .select()
+      .from(agentConnections)
+      .where(
+        and(
+          eq(agentConnections.agentId, agent.id),
+          eq(agentConnections.provider, spec.id),
+        ),
+      )
+      .limit(1);
+    if (existingConn) {
+      const prev = connectionCreds(existingConn);
+      if (prev.webhook_secret) creds.webhook_secret = prev.webhook_secret;
+      if (prev.webhook_id) creds.webhook_id = prev.webhook_id;
+    }
     const expiresAt =
       typeof tok.expires_in === 'number'
         ? new Date(Date.now() + tok.expires_in * 1000)
