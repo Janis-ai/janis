@@ -766,7 +766,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'jira_create_issue',
         label: 'Create issue',
         description:
-          "File a Jira issue for a bug or request the agent could not resolve — records the customer's verified email on the ticket so engineering can follow up and jira_get_issue can find it for them later. When the issue files, tell the customer its key (e.g. ABC-123).",
+          "File a Jira issue for a bug or request the agent could not resolve — records the customer's verified email on the ticket so engineering can follow up and jira_get_issue can find it for them later. When the issue files, tell the customer its key with a clickable link — the response's `self` carries the site host, so link https://<host>/browse/<key> (markdown [KEY-123](url) or the bare URL both render).",
         method: 'POST',
         url: 'https://{{secrets.JIRA_HOST}}/rest/api/3/issue',
         headers: { authorization: 'Basic {{secrets.JIRA_AUTH}}' },
@@ -945,7 +945,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         name: 'linear_create_issue',
         label: 'Create issue',
         description:
-          "File a Linear issue for a bug or request the agent could not resolve — records the customer's verified email in the description so the team can follow up and linear_get_issue can find it. Get team_id from linear_teams. When the issue files, tell the customer its identifier (e.g. ABC-123).",
+          "File a Linear issue for a bug or request the agent could not resolve — records the customer's verified email in the description so the team can follow up and linear_get_issue can find it. Get team_id from linear_teams. When the issue files, tell the customer its identifier with a clickable link — the result's url field (markdown [ABC-123](url) or the bare URL both render).",
         method: 'POST',
         url: 'https://api.linear.app/graphql',
         headers: { authorization: '{{secrets.LINEAR_API_KEY}}' },
