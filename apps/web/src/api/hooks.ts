@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
   Agent,
@@ -16,8 +17,26 @@ import type {
 } from '@janis/shared';
 import { api, ApiError } from './client';
 
+const LAST_IDENTITY_KEY = 'janis:last-identity';
+
+/** The last signed-in account + active workspace, remembered across
+ *  sign-out so a stashed post-login deep link can be bound to the session
+ *  that made it. Storage is per-origin, not per-account — a foreign replay
+ *  404s on another workspace's agents. */
+export function lastIdentity(): { u: string | null; w: string | null } {
+  try {
+    const v = JSON.parse(localStorage.getItem(LAST_IDENTITY_KEY) ?? 'null') as {
+      u?: string | null;
+      w?: string | null;
+    } | null;
+    return { u: v?.u ?? null, w: v?.w ?? null };
+  } catch {
+    return { u: null, w: null };
+  }
+}
+
 export function useMe() {
-  return useQuery({
+  const q = useQuery({
     queryKey: ['me'],
     queryFn: () =>
       api<{
@@ -55,6 +74,17 @@ export function useMe() {
     // agent_invites (grants dismissed elsewhere) keep rendering.
     refetchOnWindowFocus: true,
   });
+  const userId = q.data?.user?.id ?? null;
+  const workspaceId = q.data?.workspace?.id ?? null;
+  useEffect(() => {
+    if (!userId) return;
+    try {
+      localStorage.setItem(LAST_IDENTITY_KEY, JSON.stringify({ u: userId, w: workspaceId }));
+    } catch {
+      /* private mode */
+    }
+  }, [userId, workspaceId]);
+  return q;
 }
 
 export interface ConversationsPage {

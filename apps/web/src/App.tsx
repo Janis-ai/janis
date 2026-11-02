@@ -3,7 +3,7 @@ import { BrowserRouter, Navigate, Route, Routes, useLocation, useNavigate, usePa
 import { useQuery } from '@tanstack/react-query';
 import { api, ApiError } from './api/client';
 import type { Channel } from '@janis/shared';
-import { useMe } from './api/hooks';
+import { lastIdentity, useMe } from './api/hooks';
 import { captureUtm, fireUtmAttribution } from './lib/utm';
 import Layout from './components/Layout';
 import Login from './pages/Login';
@@ -71,7 +71,12 @@ function RequireAuth({ children }: { children: ReactElement }) {
   if (error instanceof ApiError && error.status === 401) {
     // Stash the deep link (e.g. a push/toast target) so login can return
     // to it — sessionStorage survives the SPA bounce and OAuth round-trips.
-    sessionStorage.setItem('post-login-next', location.pathname + location.search);
+    // Bound to the last-known account+workspace: a different sign-in
+    // replaying it would land on another workspace's entities and 404.
+    sessionStorage.setItem(
+      'post-login-next',
+      JSON.stringify({ next: location.pathname + location.search, ...lastIdentity() }),
+    );
     return <Navigate to="/login" replace />;
   }
   if (error) return <div className="login-wrap error">{error.message}</div>;

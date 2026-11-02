@@ -1056,14 +1056,28 @@ export default function Layout() {
   const soundOn = data?.user.notify.sound !== false;
 
   // Resume a deep link stashed by RequireAuth before a login round-trip —
-  // e.g. a push click that hit an expired session.
+  // e.g. a push click that hit an expired session. The stash is bound to
+  // the account+workspace that made it: a different sign-in replaying it
+  // would 404 on the other workspace's agents/conversations.
   useEffect(() => {
-    const next = sessionStorage.getItem('post-login-next');
-    if (next && next.startsWith('/') && !next.startsWith('//')) {
-      sessionStorage.removeItem('post-login-next');
-      if (next !== window.location.pathname + window.location.search) navigate(next);
+    const raw = sessionStorage.getItem('post-login-next');
+    if (!raw || !data?.user) return;
+    sessionStorage.removeItem('post-login-next');
+    let next: string | null = null;
+    try {
+      const s = JSON.parse(raw) as { next?: string; u?: string | null; w?: string | null };
+      if (s.next && s.u === data.user.id && s.w === (data.workspace?.id ?? null)) next = s.next;
+    } catch {
+      /* legacy plain-string stash — no identity to verify, drop it */
     }
-  }, [navigate]);
+    if (
+      next?.startsWith('/') &&
+      !next.startsWith('//') &&
+      next !== window.location.pathname + window.location.search
+    ) {
+      navigate(next);
+    }
+  }, [navigate, data]);
 
   // Claim a pending Slack install — the public "Add to Slack" flow can
   // complete OAuth before sign-in; the grant waits on a cookie until an

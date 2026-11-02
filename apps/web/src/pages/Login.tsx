@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ApiError } from '../api/client';
+import { lastAgentId } from '../lib/agentContext';
 import { friendlyError } from '../lib/friendlyError';
 import { usePageTitle } from '../lib/title';
 import { BrandImg } from '../components/bits';
@@ -104,11 +105,18 @@ export default function Login() {
       } catch {
         /* fall through — an unreadable inbox shouldn't trap sign-in */
       }
-      let last: string | undefined;
+      // The last-agent map is per-origin and spans every workspace — only
+      // this workspace's entry is relevant, and only while it still names a
+      // live agent (a foreign or deleted id lands on "Agent not found").
+      let last: string | null = null;
       try {
-        const m = JSON.parse(localStorage.getItem('janis:last-agents') ?? '{}') as Record<string, string>;
-        last = Object.values(m)[0];
-      } catch { /* malformed storage — treat as no selection */ }
+        const [me, list] = await Promise.all([
+          api<{ workspace: { id: string } | null }>('/auth/me'),
+          api<{ agents: { id: string }[] }>('/api/agents'),
+        ]);
+        const stored = me.workspace ? lastAgentId(me.workspace.id) : null;
+        if (stored && list.agents.some((a) => a.id === stored)) last = stored;
+      } catch { /* unreadable — fall back to welcome */ }
       navigate(last ? `/agents/${last}` : '/welcome');
     } catch (err) {
       if (err instanceof ApiError && err.status === 403 && err.message === 'unverified') {

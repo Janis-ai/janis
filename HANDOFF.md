@@ -93,6 +93,19 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02b — Cross-account deep-link leak fixed (sign-in landed on a foreign agent)
+- Reported: signing in as google-review@janis.ai loaded
+  /agents/fae34af5-…?rail=ask — an agent in a DIFFERENT workspace ("Agent
+  not found"). Root cause is storage being per-origin, not per-account.
+- post-login-next (RequireAuth stash → Layout replay) carried no identity:
+  a 401 on an agent page stashed the URL, and whatever account signed in
+  next replayed it. The stash is now {next, u, w} — user+workspace ids
+  persisted to localStorage janis:last-identity by useMe — and Layout
+  replays only on an exact match. Legacy plain-string stashes drop.
+- Login.tsx empty-inbox fallback read janis:last-agents via
+  Object.values(m)[0] — literally any workspace's pick. Now keyed by the
+  signed-in workspace (lastAgentId) and validated against /api/agents;
+  invalid/missing → /welcome as before.
 ## 2026-11-01e — Composer consolidation: always-up box, Pause ⇄ Resume toggle, send-as popover
 - The ops row (Take over / Reply as agent / Internal note / Teach / Archive /
   Delete) is gone. The composer always renders for non-archived threads —
