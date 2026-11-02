@@ -266,6 +266,39 @@ export function SourceList({
     },
   });
 
+  // Which dialog action last failed — the connect-resume retries the same one.
+  const lastMode = useRef<'page' | 'site'>('page');
+
+  // Returned from a mid-add Google connect — the grant exists now, so retry
+  // the exact action that asked for it (page vs whole-site).
+  useEffect(() => {
+    const raw = sessionStorage.getItem('janis:gresume');
+    if (!raw) return;
+    sessionStorage.removeItem('janis:gresume');
+    try {
+      const r = JSON.parse(raw) as { a?: string; u?: string; m?: string };
+      if (r.a !== agentId || typeof r.u !== 'string') return;
+      if (r.m === 'site') importCentre.mutate({ url: r.u, auth: '' });
+      else addUrl.mutate({ url: r.u, auth: '' });
+    } catch {
+      // malformed stash — drop it
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
+
+  // Connect initiated from this dialog: stash the pending link, carry the
+  // current route through the OAuth round-trip, and come straight back here.
+  const startGoogleConnect = () => {
+    if (pendingUrl) {
+      sessionStorage.setItem(
+        'janis:gresume',
+        JSON.stringify({ a: agentId, u: pendingUrl, m: lastMode.current }),
+      );
+    }
+    const ret = `${window.location.pathname}${window.location.search}`;
+    window.location.href = `/api/google/connect?agent_id=${agentId}&tpl=kb&return=${encodeURIComponent(ret)}`;
+  };
+
   const upload = async (list: FileList | null) => {
     if (!list?.length) return;
     setUploading(true);
@@ -453,26 +486,29 @@ export function SourceList({
               <div className="muted" style={{ fontSize: 13, overflowWrap: 'anywhere' }}>
                 {pendingUrl}
               </div>
-              <div style={{ fontSize: 13, marginTop: 10 }}>
-                Crawl just this page, or the whole site under it?
-              </div>
-              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                A whole-site crawl follows the sitemap or the site's own links and
-                lands as one site row with a source per page — re-checked on
-                schedule, so new pages join and dead pages drop on their own.
-              </div>
+              {/docs\.google\.com|drive\.google\.com/i.test(pendingUrl) ? (
+                <div style={{ fontSize: 13, marginTop: 10 }}>
+                  Add this Google file to the knowledge base?
+                </div>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, marginTop: 10 }}>
+                    Crawl just this page, or the whole site under it?
+                  </div>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                    A whole-site crawl follows the sitemap or the site's own links and
+                    lands as one site row with a source per page — re-checked on
+                    schedule, so new pages join and dead pages drop on their own.
+                  </div>
+                </>
+              )}
               {error && (
                 <div className="error" style={{ marginTop: 8 }}>
                   {error}
                   {googleConnect && (
-                    <div style={{ marginTop: 8 }}>
-                      <a
-                        className="btn"
-                        href={`/api/google/connect?agent_id=${agentId}&tpl=google-docs`}
-                      >
-                        Connect Google
-                      </a>
-                    </div>
+                    <button className="btn" style={{ marginTop: 8 }} onClick={startGoogleConnect}>
+                      Connect Google
+                    </button>
                   )}
                 </div>
               )}
@@ -487,17 +523,25 @@ export function SourceList({
                 <button
                   className="btn"
                   disabled={addUrl.isPending || importCentre.isPending}
-                  onClick={() => addUrl.mutate({ url: pendingUrl, auth: authHeader.trim() })}
+                  onClick={() => {
+                    lastMode.current = 'page';
+                    addUrl.mutate({ url: pendingUrl, auth: authHeader.trim() });
+                  }}
                 >
                   {addUrl.isPending ? 'Adding…' : 'Just this page'}
                 </button>
-                <button
-                  className="btn"
-                  disabled={addUrl.isPending || importCentre.isPending}
-                  onClick={() => importCentre.mutate({ url: pendingUrl, auth: authHeader.trim() })}
-                >
-                  {importCentre.isPending ? 'Discovering…' : 'Crawl the whole site'}
-                </button>
+                {!/docs\.google\.com|drive\.google\.com/i.test(pendingUrl) && (
+                  <button
+                    className="btn"
+                    disabled={addUrl.isPending || importCentre.isPending}
+                    onClick={() => {
+                      lastMode.current = 'site';
+                      importCentre.mutate({ url: pendingUrl, auth: authHeader.trim() });
+                    }}
+                  >
+                    {importCentre.isPending ? 'Discovering…' : 'Crawl the whole site'}
+                  </button>
+                )}
               </div>
             </Modal>
           )}

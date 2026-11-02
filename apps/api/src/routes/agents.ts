@@ -1565,7 +1565,7 @@ export function agentRoutes(db: Db) {
           return c.json(
             {
               error:
-                'this Google file isn’t publicly shared — connect Google in Abilities → integrations to grant access to your Docs, Sheets and Slides, or share the file "anyone with the link"',
+                'this Google file isn’t publicly shared — connect Google to read it, or share the file "anyone with the link"',
               google_connect: true,
             },
             422,

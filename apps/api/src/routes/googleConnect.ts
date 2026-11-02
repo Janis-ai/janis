@@ -38,8 +38,9 @@ const SCOPES = [
 interface Intent {
   w: string;
   a: string;
-  t: string; // which google-* template card initiated the connect
+  t: string; // which google-* template card initiated the connect ('kb' = grant only)
   x: number;
+  r?: string; // same-origin path to return to after consent (e.g. back to the KB dialog)
 }
 
 function signIntent(intent: Intent): string {
@@ -102,11 +103,15 @@ export function googleApiRoutes(db: Db) {
       return fail('pick the agent this Google account should serve');
     }
     const tplId = c.req.query('tpl') ?? 'google-sheets';
+    // `return` lets a connect launched mid-flow (the KB link dialog) come back
+    // to where it started — same-origin paths only, no open redirects.
+    const ret = c.req.query('return');
     const state = signIntent({
       w: c.get('workspaceId'),
       a: agentId,
       t: tplId,
       x: Date.now() + STATE_TTL_MS,
+      ...(ret && /^\/[^/]/.test(ret) && ret.length < 300 ? { r: ret } : {}),
     });
     return c.redirect(consentUrl(requestOrigin(c), state));
   });
@@ -303,10 +308,13 @@ export function googlePublicRoutes(db: Db) {
         `${requestWebOrigin(c)}/agents?google_error=${encodeURIComponent('invalid OAuth state')}`,
       );
     }
-    const done = (msg: string, ok = false) =>
-      c.redirect(
-        `${requestWebOrigin(c)}/agents/${intent.a}/integrations?${ok ? 'google_connect' : 'google_error'}=${encodeURIComponent(msg)}${ok ? `&google_tpl=${intent.t}` : ''}`,
+    const done = (msg: string, ok = false) => {
+      const base = intent.r ?? `/agents/${intent.a}/integrations`;
+      const sep = base.includes('?') ? '&' : '?';
+      return c.redirect(
+        `${requestWebOrigin(c)}${base}${sep}${ok ? 'google_connect' : 'google_error'}=${encodeURIComponent(msg)}${ok && intent.t !== 'kb' ? `&google_tpl=${intent.t}` : ''}`,
       );
+    };
 
     const code = c.req.query('code');
     if (!code) return done(c.req.query('error_description') || 'authorization denied');
@@ -402,7 +410,13 @@ export function googlePublicRoutes(db: Db) {
 
     // Install only the template the user clicked — other Google cards add
     // their tools later without re-running OAuth (connection already exists).
-    const tpl = TOOL_TEMPLATES.find((t) => t.id === intent.t) ?? TOOL_TEMPLATES.find((t) => t.id === 'google-sheets');
+    // tpl=kb means the connect came from a knowledge-source flow: the grant
+    // is what was needed, no card installs and no pick prompt on return.
+    const tpl =
+      intent.t === 'kb'
+        ? undefined
+        : (TOOL_TEMPLATES.find((t) => t.id === intent.t) ??
+          TOOL_TEMPLATES.find((t) => t.id === 'google-sheets'));
     if (tpl) {
       const cfg = (agent.config ?? {}) as AgentConfig;
       const names = new Set(tpl.tools.map((t) => t.name));
