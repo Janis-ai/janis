@@ -43,7 +43,15 @@ BASE="https://${SERVICE}-${PROJECT_NUMBER}.${REGION}.run.app"
 
 gcloud builds submit --config cloudbuild.yaml --project "$PROJECT"
 
-python3 - <<'PY'
+# A python with pyyaml — brew's python3 flips to new majors without it
+# (3.15 broke this 2026-11-02); probe rather than assume python3 works.
+PY=''
+for p in python3 python3.14 python3.13 python3.12 python3.11; do
+  command -v "$p" >/dev/null 2>&1 && "$p" -c 'import yaml' 2>/dev/null && { PY=$p; break; }
+done
+[ -n "$PY" ] || { echo "no python interpreter with pyyaml found — pip install pyyaml" >&2; exit 1; }
+
+"$PY" - <<'PY'
 import yaml, subprocess, secrets, os
 
 PROJECT = os.environ['PROJECT']
@@ -167,7 +175,7 @@ SECRETS_FLAG=()
 # probe rolls traffic back to it if the new one is broken.
 PREV_REV=$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$PROJECT" \
   --format='value(status.traffic[0].revisionName)' 2>/dev/null || true)
-if python3 -c "import yaml, os; exit(0 if 'PGLITE_DIR' in yaml.safe_load(open(os.environ['ENV_YAML'])) else 1)"; then
+if "$PY" -c "import yaml, os; exit(0 if 'PGLITE_DIR' in yaml.safe_load(open(os.environ['ENV_YAML'])) else 1)"; then
   gcloud run deploy "$SERVICE" --image "gcr.io/$PROJECT/$SERVICE" \
     --region "$REGION" --project "$PROJECT" --allow-unauthenticated \
     --max-instances 1 --memory 1Gi --no-cpu-throttling \
