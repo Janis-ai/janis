@@ -902,9 +902,18 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
 .card + .card { margin-top: 12px; }
 
-.agent-list { margin-top: 24px; display: flex; flex-direction: column; gap: 16px; }
+.agent-list { margin-top: 24px; display: flex; flex-direction: column; gap: 16px; container-type: inline-size; }
 .agent-list .card { margin-top: 0; }
 .agent-card.alt { background: var(--panel-alt); }
+/* Side-by-side only works when the meta column stays readable — when the
+   row is too narrow to hold it next to the controls, the name/meta takes
+   the full first row and the badge + buttons wrap beneath, right-aligned. */
+@container (max-width: 640px) {
+  /* column-gap 8px keeps badge+3 buttons on one wrapped row at ~390px;
+     .agent-list scope needed — .row's later gap shorthand would win ties. */
+  .agent-list .agent-row { justify-content: flex-end; column-gap: 8px; }
+  .agent-list .agent-row > .grow { flex-basis: 100%; }
+}
 
 /* agent detail — sticky name/save header + tabs */
 /* min-height fills .main's viewport so flex:1 children (e.g. the knowledge
