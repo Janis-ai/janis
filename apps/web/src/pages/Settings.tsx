@@ -475,7 +475,7 @@ export default function Settings() {
                   }
                   onClick={() => saveHook.mutate(hookUrl.trim() || null)}
                 >
-                  <Save size={14} aria-label="Save" />
+                  <Save size={14} /> <span className="save-label">Save</span>
                 </button>
               </div>
               <span className="muted" style={{ fontSize: 12 }}>
@@ -503,7 +503,7 @@ export default function Settings() {
                   }
                   onClick={() => saveDomain.mutate(helpDomain.trim().toLowerCase() || null)}
                 >
-                  <Save size={14} aria-label="Save" />
+                  <Save size={14} /> <span className="save-label">Save</span>
                 </button>
               </div>
               <span className="muted" style={{ fontSize: 12 }}>
@@ -561,7 +561,7 @@ export default function Settings() {
               acctName.trim() === me?.user.name
             }
           >
-            <Save size={14} aria-label="Save" />
+            <Save size={14} /> <span className="save-label">Save</span>
           </button>
         </form>
         <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
@@ -715,7 +715,7 @@ export default function Settings() {
               profile.display_name.trim() === (me?.user.display_name ?? '')
             }
           >
-            <Save size={14} aria-label="Save" />
+            <Save size={14} /> <span className="save-label">Save</span>
           </button>
           <span className="grow" />
           <label
@@ -825,7 +825,7 @@ export default function Settings() {
               className="btn"
               disabled={addReply.isPending || updateReply.isPending || replyUnchanged}
             >
-              {editReplyId ? <Save size={14} aria-label="Save changes" /> : 'Add'}
+              {editReplyId ? <Save size={14} /> <span className="save-label">Save</span> : 'Add'}
             </button>
             {editReplyId && (
               <button
@@ -1140,7 +1140,7 @@ function DefaultLlmCard() {
           disabled={!dirty || save.isPending}
           onClick={() => save.mutate({ llm_config: llm })}
         >
-          <Save size={14} aria-label="Save" />
+          <Save size={14} /> <span className="save-label">Save</span>
         </button>
         {Object.keys(saved ?? {}).length > 0 && (
           <button
@@ -1229,7 +1229,7 @@ function RetentionCard() {
           disabled={!dirty || save.isPending}
           onClick={() => save.mutate()}
         >
-          <Save size={14} aria-label="Save" />
+          <Save size={14} /> <span className="save-label">Save</span>
         </button>
       </div>
       {saved !== null && expiring !== null && expiring !== undefined && (
@@ -1443,7 +1443,7 @@ function HandoffCard() {
           disabled={draft === null || save.isPending}
           onClick={() => save.mutate()}
         >
-          <Save size={14} aria-label="Save" />
+          <Save size={14} /> <span className="save-label">Save</span>
         </button>
         {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
       </div>
@@ -1501,7 +1501,7 @@ function ResolutionCard() {
           disabled={draft === null || save.isPending}
           onClick={() => save.mutate()}
         >
-          <Save size={14} aria-label="Save" />
+          <Save size={14} /> <span className="save-label">Save</span>
         </button>
         {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
       </div>

@@ -926,6 +926,7 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .ov-head .ov-actions { position: absolute; top: 0; right: 0; }
 @media (max-width: 720px) {
   .drop-hint-full { display: none; }
+  .save-label { display: none; }
 }
 
 /* agent detail — sticky name/save header + tabs */

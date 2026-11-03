@@ -709,7 +709,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
               aria-label="Save"
               onClick={() => saveAll()}
             >
-              {savedFlash ? <Check size={14} /> : <Save size={14} />}
+              {savedFlash ? <Check size={14} /> : <Save size={14} />} <span className="save-label">{savedFlash ? 'Saved' : 'Save'}</span>
             </button>
           )}
         </div>
@@ -1283,7 +1283,7 @@ export function InstructionsSection({
         <span className="grow" />
         {isAdmin && onSave && (
           <button className="btn primary sm" disabled={saving || !hasChanges} title="Save" aria-label="Save" onClick={() => onSave()}>
-            {saved ? <Check size={14} /> : <Save size={14} />}
+            {saved ? <Check size={14} /> : <Save size={14} />} <span className="save-label">{saved ? 'Saved' : 'Save'}</span>
           </button>
         )}
       </div>
