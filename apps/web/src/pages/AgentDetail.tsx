@@ -46,7 +46,7 @@ import { useDock } from '../lib/dockContext';
 import { usePageTitle } from '../lib/title';
 import { NOTIFY_EVENT_LABELS } from '../lib/notifyEvents';
 import { useConfirm } from '../components/Prompt';
-import { Check, FlaskConical, Pencil, Save, Trash2, Upload, X } from 'lucide-react';
+import { Check, FlaskConical, Pencil, Save, Split, Trash2, Upload, X } from 'lucide-react';
 
 type RuleKind = AlertRule['kind'];
 /** `defaultOn` kinds ping the workspace even with zero rules — a rule exists
@@ -5513,26 +5513,6 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
         )}
         {tests.length > 0 && (
           <button
-            className="btn icon sm"
-            disabled={running !== null || batch !== null}
-            onClick={() => setAbOpen(true)}
-            title="Try a variant — replay every scenario against different instructions or a different model, before you change the real agent"
-          >
-            <FlaskConical size={14} />
-          </button>
-        )}
-        <button
-          className="btn icon sm"
-          onClick={() => setImportOpen(true)}
-          title="Import scenarios from CSV"
-        >
-          <Upload size={14} />
-        </button>
-        <button className="btn sm" aria-label="New scenario" title="New scenario" onClick={() => setNewOpen(true)}>
-          + <span className="save-label">New</span>
-        </button>
-        {tests.length > 0 && (
-          <button
             className="btn primary sm"
             disabled={running !== null || batch !== null}
             onClick={() => runAll.mutate()}
@@ -5545,6 +5525,30 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
         Save a transcript from any conversation ("Save as scenario") — each point a human
         stepped in becomes its own scenario. Replays never message customers or run tools;
         add an expectation and each run is judged against it.
+      </div>
+      <div className="row" style={{ gap: 8 }}>
+        {tests.length > 0 && (
+          <button
+            className="btn icon sm"
+            disabled={running !== null || batch !== null}
+            onClick={() => setAbOpen(true)}
+            title="Try a variant — replay every scenario against different instructions or a different model, before you change the real agent"
+            aria-label="Try a variant"
+          >
+            <Split size={14} />
+          </button>
+        )}
+        <button
+          className="btn icon sm"
+          onClick={() => setImportOpen(true)}
+          title="Import scenarios from CSV"
+          aria-label="Import scenarios from CSV"
+        >
+          <Upload size={14} />
+        </button>
+        <button className="btn sm" onClick={() => setNewOpen(true)}>
+          + New
+        </button>
       </div>
       {evalSuggestions.length > 0 && (
         <details className="card" style={{ padding: '10px 16px' }}>
