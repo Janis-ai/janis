@@ -184,18 +184,19 @@ export default function AgentOverview() {
 
   return (
     <>
-      <div className="row" style={{ alignItems: 'center', marginBottom: 12 }}>
-        <h1 className="page-title grow">
+      <div className="row ov-head" style={{ alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 12 }}>
+        <h1 className="page-title grow" style={{ minWidth: 0 }}>
           {agent?.name ?? '…'}
-          <span className="muted" style={{ marginLeft: 10, fontSize: 13, fontWeight: 400 }}>
-            {agent?.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
-            {channels.length > 0 && ` · ${[...new Set(channels.map((c) => KIND_LABEL[c.kind] ?? c.name))].join(', ')}`}
-          </span>
+          {channels.length > 0 && (
+            <span className="muted" style={{ marginLeft: 10, fontSize: 13, fontWeight: 400 }}>
+              · {[...new Set(channels.map((c) => KIND_LABEL[c.kind] ?? c.name))].join(', ')}
+            </span>
+          )}
         </h1>
         {agent && !agent.hosted && !agent.webhook_url && <span className="badge warn">unreachable</span>}
-        {/* Actions move to their own line as a unit instead of packing
-            beside the title until it truncates. */}
-        <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
+        {/* Buttons stay on the title row while it can hold them; on narrow
+            screens the title takes row 1 and they drop to the meta row. */}
+        <div className="row ov-actions" style={{ gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
         {agent && hosted && (
           <button
             className="btn"
@@ -213,6 +214,9 @@ export default function AgentOverview() {
         <button className="btn" title="Agent settings" aria-label="Agent settings" onClick={() => navigate(`/agents/${id}/settings`)}>
           <Settings size={14} />
         </button>
+        </div>
+        <div className="muted ov-meta">
+          {agent?.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
         </div>
       </div>
 

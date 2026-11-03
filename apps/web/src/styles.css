@@ -914,6 +914,15 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   .agent-list .agent-row { justify-content: flex-end; column-gap: 8px; }
   .agent-list .agent-row > .grow { flex-basis: 100%; }
 }
+/* Agent overview head: 'last event' is the second row — basis:100% keeps
+   it out of the title row (grow alone can't: wrap is decided before grow
+   distributes). On phones the title claims row 1, so the meta shares row
+   2 with the actions, its top edge aligned to theirs. */
+.ov-head .ov-meta { flex-basis: 100%; }
+@media (max-width: 720px) {
+  .ov-head .ov-meta { order: 2; flex-basis: auto; }
+  .ov-head .ov-actions { order: 3; }
+}
 
 /* agent detail — sticky name/save header + tabs */
 /* min-height fills .main's viewport so flex:1 children (e.g. the knowledge
