@@ -184,8 +184,14 @@ export default function AgentOverview() {
 
   return (
     <>
-      <div className="row" style={{ alignItems: 'center' }}>
-        <h1 className="page-title grow">{agent?.name ?? '…'}</h1>
+      <div className="row" style={{ alignItems: 'center', marginBottom: 12 }}>
+        <h1 className="page-title grow">
+          {agent?.name ?? '…'}
+          <span className="muted" style={{ marginLeft: 10, fontSize: 13, fontWeight: 400 }}>
+            {agent?.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
+            {channels.length > 0 && ` · ${[...new Set(channels.map((c) => KIND_LABEL[c.kind] ?? c.name))].join(', ')}`}
+          </span>
+        </h1>
         {agent && !agent.hosted && !agent.webhook_url && <span className="badge warn">unreachable</span>}
         {/* Actions move to their own line as a unit instead of packing
             beside the title until it truncates. */}
@@ -208,10 +214,6 @@ export default function AgentOverview() {
           <Settings size={14} />
         </button>
         </div>
-      </div>
-      <div className="muted" style={{ marginBottom: 12 }}>
-        {agent?.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
-        {channels.length > 0 && ` · ${[...new Set(channels.map((c) => KIND_LABEL[c.kind] ?? c.name))].join(', ')}`}
       </div>
 
       {/* Lifecycle + build progress — Overview is the home you land on after
