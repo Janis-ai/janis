@@ -1545,16 +1545,16 @@ function StepsEditor({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       {rows.map((s, i) => (
-        <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <span className="muted" style={{ width: 18, fontSize: 12 }}>{i + 1}.</span>
           <input
-            style={{ flex: 1 }}
+            style={{ flex: '1 1 160px' }}
             placeholder="e.g. Ask for the order number"
             value={s.text}
             onChange={(e) => setRow(i, { text: e.target.value })}
           />
           <select
-            style={{ width: 190 }}
+            style={{ width: 190, flexShrink: 0 }}
             value={s.tool ?? ''}
             title="Tool this step must call"
             onChange={(e) => setRow(i, { tool: e.target.value || undefined })}
@@ -1615,14 +1615,8 @@ export function ProceduresSection({
         {procs.map((p, i) => (
           <div
             key={i}
-            style={{
-              border: '1px solid var(--border, #e5e7eb)',
-              borderRadius: 8,
-              padding: 10,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 6,
-            }}
+            className="sub-card"
+            style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
           >
             <div style={{ display: 'flex', gap: 8 }}>
               <input
@@ -1631,10 +1625,15 @@ export function ProceduresSection({
                 value={p.name}
                 onChange={(e) => update(i, { name: e.target.value })}
               />
-              <button className="ghost" type="button" onClick={() =>
-                setCfg({ ...cfg, procedures: procs.filter((_, j) => j !== i) })
-              }>
-                Remove
+              <button
+                className="ghost"
+                type="button"
+                aria-label="Remove procedure"
+                onClick={() =>
+                  setCfg({ ...cfg, procedures: procs.filter((_, j) => j !== i) })
+                }
+              >
+                ×
               </button>
             </div>
             <input
@@ -1706,14 +1705,8 @@ export function CollectSection({
         {forms.map((f, fi) => (
           <div
             key={fi}
-            style={{
-              border: '1px solid var(--border, #e5e7eb)',
-              borderRadius: 8,
-              padding: 10,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 6,
-            }}
+            className="sub-card"
+            style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
           >
             <div style={{ display: 'flex', gap: 8 }}>
               <input
@@ -1722,8 +1715,13 @@ export function CollectSection({
                 value={f.name}
                 onChange={(e) => update(fi, { name: e.target.value })}
               />
-              <button className="ghost" type="button" onClick={() => write(forms.filter((_, j) => j !== fi))}>
-                Remove
+              <button
+                className="ghost"
+                type="button"
+                aria-label="Remove form"
+                onClick={() => write(forms.filter((_, j) => j !== fi))}
+              >
+                ×
               </button>
             </div>
             <input
@@ -1731,30 +1729,30 @@ export function CollectSection({
               value={f.when ?? ''}
               onChange={(e) => update(fi, { when: e.target.value })}
             />
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <input
-                style={{ flex: 2 }}
+                style={{ flex: '2 1 160px' }}
                 placeholder="Form title — shown above the fields"
                 value={f.title ?? ''}
                 onChange={(e) => update(fi, { title: e.target.value })}
               />
               <input
-                style={{ flex: 1 }}
+                style={{ flex: '1 1 120px' }}
                 placeholder="Submit label (Submit)"
                 value={f.submit_label ?? ''}
                 onChange={(e) => update(fi, { submit_label: e.target.value })}
               />
             </div>
             {f.fields.map((fd, i) => (
-              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
                 <input
-                  style={{ flex: 1 }}
+                  style={{ flex: '1 1 90px' }}
                   placeholder="field_name"
                   value={fd.name}
                   onChange={(e) => setField(fi, i, { name: e.target.value })}
                 />
                 <input
-                  style={{ flex: 2 }}
+                  style={{ flex: '2 1 140px' }}
                   placeholder="Label — shown to the visitor"
                   value={fd.label}
                   onChange={(e) => setField(fi, i, { label: e.target.value })}
@@ -3817,6 +3815,12 @@ function IntegrationCards({
         >
           <div className="row" style={{ alignItems: 'center' }}>
             <strong>{t.name}</strong>
+            {installedCount(t) > 0 && !partial(t) && (
+              <span
+                title="Connected"
+                style={{ width: 8, height: 8, borderRadius: '50%', background: 'var(--ok)', flexShrink: 0 }}
+              />
+            )}
             {sugOrder.has(t.id) && !dismissedTpls.has(t.id) && (
               <span className="badge human">
                 suggested
@@ -4051,14 +4055,11 @@ function IntegrationCards({
               )}
               {installedCount(t) > 0 && (
                 <>
-                  {/* 'connected' overstates a credential-less add — 'enabled' */}
-                  <span className={`badge${installed(t) ? ' active' : ''}`}>
-                    {partial(t)
-                      ? `partial — ${installedCount(t)}/${t.tools.length} actions`
-                      : t.fields.length || t.oauth_connect
-                        ? 'connected'
-                        : 'enabled'}
-                  </span>
+                  {partial(t) && (
+                    <span className="badge">
+                      {`partial — ${installedCount(t)}/${t.tools.length} actions`}
+                    </span>
+                  )}
                   <button className="btn" onClick={() => remove.mutate(t)}>Remove</button>
                 </>
               )}

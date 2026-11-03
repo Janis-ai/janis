@@ -924,9 +924,12 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
    meta bottom = buttons bottom. .ov-tight (measured) returns them to
    flow beside the meta, bottom-aligned. */
 .ov-head .ov-actions { position: absolute; top: 0; right: 0; }
+/* Nested edit cards (procedures, collect forms) — sheds padding on phones. */
+.sub-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
 @media (max-width: 720px) {
   .drop-hint-full { display: none; }
   .save-label { display: none; }
+  .sub-card { padding: 7px; }
 }
 
 /* agent detail — sticky name/save header + tabs */
