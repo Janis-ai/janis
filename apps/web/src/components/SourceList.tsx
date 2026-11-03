@@ -449,7 +449,7 @@ export function SourceList({
               type="file"
               multiple
               hidden
-              accept=".txt,.md,.markdown,.csv,.json,.html,.pdf,.png,.jpg,.jpeg,.webp,.gif"
+              accept=".txt,.md,.markdown,.csv,.tsv,.json,.jsonl,.xml,.html,.htm,.log,.yaml,.yml,.ini,.cfg,.rst,.tex,.pdf,.docx,.png,.jpg,.jpeg,.webp,.gif"
               onChange={(e) => {
                 void upload(e.target.files);
                 e.target.value = '';
@@ -459,30 +459,32 @@ export function SourceList({
           <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
             Links become website sources — anything else saves as a note.
           </div>
-          <div className="row" style={{ marginTop: 12, gap: 8, alignItems: 'center' }}>
-            <span className="muted grow" style={{ fontSize: 15 }}>
-              <span className="drop-hint-full">Drop files anywhere on this panel, or </span>
-              <button
-                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontSize: 15, cursor: 'pointer', textDecoration: 'underline' }}
-                disabled={uploading}
-                onClick={() => fileRef.current?.click()}
-              >
-                {uploading ? 'uploading…' : 'browse files'}
-              </button>
-              .
-            </span>
+          <div className="row" style={{ marginTop: 12, gap: 8, alignItems: 'flex-start' }}>
+            <div className="grow">
+              <div className="muted" style={{ fontSize: 15 }}>
+                <span className="drop-hint-full">Drop files anywhere on this panel, or </span>
+                <button
+                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontSize: 15, cursor: 'pointer', textDecoration: 'underline' }}
+                  disabled={uploading}
+                  onClick={() => fileRef.current?.click()}
+                >
+                  {uploading ? 'uploading…' : 'browse files'}
+                </button>
+                .
+              </div>
+              <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                PDF, DOCX, text/markdown, CSV/TSV, JSON, XML, HTML, YAML, logs, images.
+              </div>
+            </div>
             <button
               className="btn"
-              title="Upload files (PDF, text, markdown…)"
+              title="Upload files (PDF, DOCX, text, images…)"
               aria-label="Upload files"
               disabled={uploading}
               onClick={() => fileRef.current?.click()}
             >
               <Paperclip size={14} />
             </button>
-          </div>
-          <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
-            PDF, text, markdown, CSV, JSON, HTML, images.
           </div>
           {importMsg && !error && (
             <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{importMsg}</div>
