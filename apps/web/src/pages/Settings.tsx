@@ -825,7 +825,7 @@ export default function Settings() {
               className="btn"
               disabled={addReply.isPending || updateReply.isPending || replyUnchanged}
             >
-              {editReplyId ? <Save size={14} /> <span className="save-label">Save</span> : 'Add'}
+              {editReplyId ? <><Save size={14} /> <span className="save-label">Save</span></> : 'Add'}
             </button>
             {editReplyId && (
               <button
