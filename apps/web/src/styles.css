@@ -1174,7 +1174,7 @@ input, select, textarea {
   max-width: 100%; min-width: 0;
 }
 /* vertical-only — a horizontal drag can push the box under the rail */
-textarea { resize: vertical; }
+textarea { resize: vertical; font-size: 14px; }
 /* Placeholders are hints, not content — a step down from the input font. */
 input::placeholder, textarea::placeholder { font-size: .85em; }
 input:focus, select:focus { outline: none; border-color: var(--accent); }
