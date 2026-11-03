@@ -358,16 +358,20 @@ is a day on launch)*
     drive.readonly). The Google files connector's sensitive-scope
     verification is separately IN FLIGHT — see #15.
 12. Azure — app reg + MS_* envs DONE (A6). Partner Center account
-    verified 2026-11-03 (business "Janis", Partner One ID 7185524,
-    AI Cloud Partner Program). REMAINING for publisher verification:
-    associate the app reg's Entra tenant under Partner Center →
-    Account settings → Tenants; janis.ai must be a DNS-verified custom
-    domain in that tenant; set Publisher domain on the app reg
-    (Branding & properties); then Publisher verification → 7185524.
-    Also audit: account types vs MS_TENANT=common; Web redirect URIs
-    https://www.janis.ai/outlook/callback +
-    https://app.janis.ai/outlook/callback; delegated Graph Mail.Read/
-    Mail.Send/User.Read; client-secret expiry.
+    verified 2026-11-03 (business "Janis", PartnerGlobal 7185524 —
+    7185525 is the M365/Copilot location ID, NOT usable for
+    publisher verification). App reg RECREATED 2026-11-03 in the
+    Partner Center tenant (old reg lived under a personal-MSA tenant —
+    MSA-registered apps can't be publisher-verified; all connected
+    mailboxes must re-consent once). New app 4939853f, MS_* envs
+    deployed; /.well-known/microsoft-identity-association.json served
+    from apps/web/public. Done: tenant associated to PC account,
+    janis.ai DNS-verified in the tenant (new CLOUDFLARE_API_TOKEN in
+    dev .env — the old cfat one was revoked), publisher domain
+    www.janis.ai set. BLOCKED on Microsoft: portal "Verify and save"
+    + Graph setVerifiedPublisher both error ("temporary problem" /
+    body-not-parsed — known backend bug); retry pane periodically,
+    Partner Center support ticket if still failing 2026-11-04+.
 13. DONE (per Mike 2026-10-29) — LLM pro accounts funded/raised-tier for
     platform-hosted inference. Re-up mechanism = ops alert, not auto-
     reload: first time a workspace pins an agent to a non-default vendor,
