@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ScenarioTest } from './ScenarioRow';
-import { Trash2 } from 'lucide-react';
+import { ChevronsDownUp, ChevronsUpDown, Trash2 } from 'lucide-react';
 import { REVEAL_SCENARIO } from '../lib/scenarioRing';
 
 /** The scenario suite — shared list chrome for the builder's Try-it
@@ -168,20 +168,23 @@ export function ScenarioList({
       ))}
       <button
         className="btn ghost sm"
+        title="Expand all"
+        aria-label="Expand all"
         onClick={() => setFoldAll((s) => ({ seq: s.seq + 1, open: true }))}
       >
-        Expand all
+        <ChevronsUpDown size={13} /> <span className="save-label">Expand</span>
       </button>
       <button
         className="btn ghost sm"
+        title="Collapse all"
+        aria-label="Collapse all"
         onClick={() => setFoldAll((s) => ({ seq: s.seq + 1, open: false }))}
       >
-        Collapse all
+        <ChevronsDownUp size={13} /> <span className="save-label">Collapse</span>
       </button>
       <span className="grow" />
       <label className="row" style={{ gap: 4 }}>
-        <span className="muted">Sort</span>
-        <select value={sort} onChange={(e) => applySort(e.target.value as Sort)}>
+        <select value={sort} title="Sort order" aria-label="Sort order" onChange={(e) => applySort(e.target.value as Sort)}>
           <option value="attention">attention first</option>
           <option value="newest">newest</option>
           <option value="oldest">oldest</option>
