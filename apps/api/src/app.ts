@@ -44,6 +44,7 @@ import { calendlyApiRoutes, calendlyPublicRoutes } from './routes/calendly.js';
 import { googleApiRoutes, googlePublicRoutes } from './routes/googleConnect.js';
 import { oauthApiRoutes, oauthPublicRoutes } from './routes/oauthConnect.js';
 import { mcpDemoRoutes } from './routes/mcpDemo.js';
+import { wooDemoRoutes } from './routes/wooDemo.js';
 import { shopifyApiRoutes, shopifyPublicRoutes, shopifyWebhookRoutes } from './routes/shopify.js';
 import { outlookApiRoutes, outlookPublicRoutes } from './routes/outlook.js';
 import { voiceRoutes } from './routes/voice.js';
@@ -210,6 +211,8 @@ export function createApp(db: Db) {
   app.use('/mcp-demo', rateLimit({ scope: 'mcp-demo', windowMs: 60_000, max: 120 }));
   app.use('/mcp-demo/*', rateLimit({ scope: 'mcp-demo', windowMs: 60_000, max: 120 }));
   app.route('/mcp-demo', mcpDemoRoutes()); // canned-data MCP server for the connector card
+  app.use('/wp-json/*', rateLimit({ scope: 'woo-demo', windowMs: 60_000, max: 120 }));
+  app.route('/wp-json', wooDemoRoutes()); // canned WooCommerce store for the connector card
   // Shopify embedded app — session-token authed iframe calls under
   // /api/shopify; App-signed webhooks under /shopify.
   app.use('/api/shopify/*', rateLimit({ scope: 'shopify-app', windowMs: 60_000, max: 120 }));
