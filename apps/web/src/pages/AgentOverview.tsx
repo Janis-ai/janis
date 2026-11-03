@@ -137,12 +137,15 @@ export default function AgentOverview() {
       t.style.fontSize = '';
       const avail = el.clientWidth - a.offsetWidth - 10;
       const base = parseFloat(getComputedStyle(t).fontSize);
-      const need = t.scrollWidth;
+      const range = document.createRange();
+      range.selectNodeContents(t);
+      const measure = () => range.getBoundingClientRect().width;
+      const need = measure();
       if (need > avail) {
         const scaled = Math.floor((base * avail) / need);
         if (scaled >= 14) t.style.fontSize = `${scaled}px`;
       }
-      const fits = t.scrollWidth <= avail;
+      const fits = measure() <= avail;
       el.classList.toggle('ov-tight', !fits);
       el.style.paddingRight = fits ? `${a.offsetWidth + 12}px` : '0';
       if (!fits) t.style.fontSize = '';
