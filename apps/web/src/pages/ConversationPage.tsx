@@ -445,14 +445,16 @@ export default function ConversationPage() {
   });
 
   // Opening a conversation marks it read — once per open, so the
-  // "Mark unread" toggle can't be undone by a later refetch.
+  // "Mark unread" toggle can't be undone by a later refetch. The ref marks
+  // the initial-load STATE, not the firing: opening an already-read conv
+  // never set it, so the first manual "mark unread" looked exactly like an
+  // unread conv freshly opened and got re-read immediately.
   const markedReadFor = useRef('');
   useEffect(() => {
-    if (data?.conversation.is_unread && markedReadFor.current !== id) {
-      markedReadFor.current = id;
-      patch.mutate({ is_unread: false });
-    }
-  }, [data?.conversation.is_unread, id]);
+    if (!data || markedReadFor.current === id) return;
+    markedReadFor.current = id;
+    if (data.conversation.is_unread) patch.mutate({ is_unread: false });
+  }, [data, id]);
 
   const [confirmEl, confirm] = useConfirm();
   const del = useMutation({
