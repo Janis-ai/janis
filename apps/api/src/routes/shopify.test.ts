@@ -106,8 +106,8 @@ const stubShopifyApi = (
     onResend?: (body: Record<string, unknown>) => void;
     // Every GraphQL body the code sends — lets tests assert on mutations.
     onGraphql?: (query: string) => void;
-    // appSubscription(id:) reply — the billing cycle end the usage sweep
-    // computes overage against. Fixed per test so stored bookkeeping matches.
+    // node(id:) AppSubscription reply — the billing cycle end the usage
+    // sweep computes overage against. Fixed per test so stored bookkeeping matches.
     periodEnd?: string;
   } = {},
 ) =>
@@ -199,11 +199,11 @@ const stubShopifyApi = (
             }),
           );
         }
-        if (q.includes('appSubscription(id:')) {
+        if (q.includes('node(id:')) {
           return Promise.resolve(
             Response.json({
               data: {
-                appSubscription: {
+                node: {
                   currentPeriodEnd:
                     opts.periodEnd ?? new Date(Date.now() + 30 * 86_400_000).toISOString(),
                   lineItems: [{ id: 'li_1' }],
