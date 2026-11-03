@@ -71,14 +71,7 @@ export default function Agents() {
                   )}
                 </div>
                 <div className="muted" style={{ marginTop: 2 }}>
-                  {engine === 'dialogflow'
-                    ? 'dialogflow engine'
-                    : engine === 'monitor'
-                      ? 'monitor only'
-                      : agent.hosted
-                        ? 'hosted by Janis'
-                        : 'external webhook'}
-                  {' · '}
+                  {engine === 'dialogflow' ? 'dialogflow engine · ' : engine === 'monitor' ? 'monitor only · ' : ''}
                   {agent.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
                   {channels.length > 0 && ` · ${channels.map((c) => c.name).join(', ')}`}
                   {!agent.hosted && !agent.webhook_url && (
