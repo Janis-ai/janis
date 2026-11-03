@@ -357,8 +357,17 @@ is a day on launch)*
     NB: this parked item is the RESTRICTED-scope path (Gmail,
     drive.readonly). The Google files connector's sensitive-scope
     verification is separately IN FLIGHT — see #15.
-12. Azure — app reg + MS_* envs DONE (A6); publisher verification in
-    Partner Center may still be open — confirm status.
+12. Azure — app reg + MS_* envs DONE (A6). Partner Center account
+    verified 2026-11-03 (business "Janis", Partner One ID 7185524,
+    AI Cloud Partner Program). REMAINING for publisher verification:
+    associate the app reg's Entra tenant under Partner Center →
+    Account settings → Tenants; janis.ai must be a DNS-verified custom
+    domain in that tenant; set Publisher domain on the app reg
+    (Branding & properties); then Publisher verification → 7185524.
+    Also audit: account types vs MS_TENANT=common; Web redirect URIs
+    https://www.janis.ai/outlook/callback +
+    https://app.janis.ai/outlook/callback; delegated Graph Mail.Read/
+    Mail.Send/User.Read; client-secret expiry.
 13. DONE (per Mike 2026-10-29) — LLM pro accounts funded/raised-tier for
     platform-hosted inference. Re-up mechanism = ops alert, not auto-
     reload: first time a workspace pins an agent to a non-default vendor,
@@ -532,12 +541,25 @@ drizzle-kit/workbox-build, nothing to drop directly).
     slots in as another channel kind. Slice 1 (~day): teams_webhook
     channel kind posting alerts/escalations to customer-configured
     Incoming Webhooks — covers the loudest ask, no install ceremony.
+    DEAD 2026-11-03: connector-based Incoming Webhooks were retired
+    May 18–22 2026; the replacement is a customer-run Power Automate
+    "When a Teams webhook request is received" workflow (posts as the
+    generic Flow bot — no custom icon/name, MessageCard buttons dead).
+    Either ship the bot app directly, or a teams_webhook channel whose
+    setup docs walk the customer through the Workflows path — decide
+    when Teams work starts.
     Slice 2 (on enterprise demand): Bot Framework app — new activity
     webhook (JWT validation, <at>-tag mention strip), Teams manifest +
     per-tenant serviceUrl/conversation-ref storage (no free-form
     proactive DM; post only where a ref was captured), Adaptive Cards
     for approvals (Action.Submit → invoke; richer than Block Kit),
     transcript mirroring into a chosen channel, marketplace review.
+    Store submission: Partner Center "Microsoft 365 and Copilot"
+    program (publisher 7185524, verified 2026-11-03) → Teams app
+    offer; needs manifest zip (192×192 color + 32×32 outline icons,
+    privacy/terms URLs), an Azure Bot resource on the Teams channel,
+    and a bot AAD app id. Commercial Marketplace program = transactable
+    offers only, skip.
     Build alongside #49 — abstract slackWidgetBlocks/slackMrkdwn into
     a generic card model rather than retrofitting.
     Mike explicitly asked 2026-10-29 to "mirror the Slack process on
