@@ -68,12 +68,19 @@ async function transcribeAudio(
     process.env.GOOGLE_LLM_API_KEY ||
     env.llmVendorKeys.google?.api_key ||
     (env.llmBaseUrl.includes('generativelanguage.googleapis.com') ? env.llmApiKey : '');
-  const googleOk = googleKey && GEMINI_AUDIO.test(mime) && engine !== 'openai';
+  // Pick a live Gemini model — never a hardcoded literal (a retired id
+  // 404s silently until this warn fires). No Gemini model → skip the
+  // engine; the Whisper fallback below still transcribes.
+  const model = env.llmModel.startsWith('gemini')
+    ? env.llmModel
+    : env.llmFallbackModel?.startsWith('gemini')
+      ? env.llmFallbackModel
+      : '';
+  const googleOk = googleKey && model && GEMINI_AUDIO.test(mime) && engine !== 'openai';
   if (googleOk) {
     const base = env.llmBaseUrl.includes('generativelanguage.googleapis.com')
       ? env.llmBaseUrl.replace(/\/openai\/?$/, '')
       : 'https://generativelanguage.googleapis.com/v1beta';
-    const model = env.llmModel.startsWith('gemini') ? env.llmModel : 'gemini-2.0-flash';
     const r = await fetch(`${base}/models/${model}:generateContent`, {
       method: 'POST',
       headers: { 'x-goog-api-key': googleKey, 'Content-Type': 'application/json' },
