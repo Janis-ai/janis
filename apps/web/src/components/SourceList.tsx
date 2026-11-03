@@ -141,6 +141,7 @@ export function SourceList({
   const [importMsg, setImportMsg] = useState('');
   // The pasted URL awaiting the "page or whole site?" popup decision.
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+  const [pendingMode, setPendingMode] = useState<'page' | 'site' | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openFiles, setOpenFiles] = useState<Set<string>>(new Set());
   const inputRef = useRef<HTMLInputElement>(null);
@@ -218,6 +219,7 @@ export function SourceList({
       setInput('');
       setAuthHeader('');
       setPendingUrl(null);
+      setPendingMode(null);
       setImportMsg('');
       setGoogleConnect(false);
       invalidate();
@@ -251,6 +253,7 @@ export function SourceList({
       setInput('');
       setAuthHeader('');
       setPendingUrl(null);
+      setPendingMode(null);
       const dup = r.skipped ? ` (${r.skipped} already imported)` : '';
       setImportMsg(
         r.kind === 'zendesk'
@@ -441,14 +444,6 @@ export function SourceList({
             >
               {addUrl.isPending ? 'Adding…' : 'Add'}
             </button>
-            <button
-              className="btn"
-              title="Upload a document (PDF, text, markdown…)"
-              disabled={uploading}
-              onClick={() => fileRef.current?.click()}
-            >
-              {uploading ? 'Uploading…' : '📎 File'}
-            </button>
             <input
               ref={fileRef}
               type="file"
@@ -460,48 +455,34 @@ export function SourceList({
                 e.target.value = '';
               }}
             />
-            <input
-              className="input"
-              style={{ fontSize: 12, maxWidth: 260 }}
-              type="password"
-              name="source-auth-header"
-              autoComplete="new-password"
-              data-1p-ignore
-              data-lpignore="true"
-              placeholder="Auth header (private links)"
-              title="Optional — sent as the Authorization header when the link is crawled; stored encrypted and never shown again"
-              value={authHeader}
-              onChange={(e) => setAuthHeader(e.target.value)}
-            />
           </div>
           <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
             Links become website sources — anything else saves as a note. Drop
-            files anywhere on this panel.
+            files anywhere on this panel, or{' '}
+            <button
+              style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontSize: 11, cursor: 'pointer', textDecoration: 'underline' }}
+              disabled={uploading}
+              onClick={() => fileRef.current?.click()}
+            >
+              {uploading ? 'uploading…' : 'browse files'}
+            </button>
+            .
           </div>
           {importMsg && !error && (
             <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{importMsg}</div>
           )}
           {pendingUrl && (
-            <Modal title="Add this link" onClose={() => setPendingUrl(null)} width={480}>
+            <Modal
+              title={pendingMode ? 'Private link?' : 'Add this link'}
+              onClose={() => {
+                setPendingUrl(null);
+                setPendingMode(null);
+              }}
+              width={480}
+            >
               <div className="muted" style={{ fontSize: 13, overflowWrap: 'anywhere' }}>
                 {pendingUrl}
               </div>
-              {/docs\.google\.com|drive\.google\.com/i.test(pendingUrl) ? (
-                <div style={{ fontSize: 13, marginTop: 10 }}>
-                  Add this Google file to the knowledge base?
-                </div>
-              ) : (
-                <>
-                  <div style={{ fontSize: 13, marginTop: 10 }}>
-                    Crawl just this page, or the whole site under it?
-                  </div>
-                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-                    A whole-site crawl follows the sitemap or the site's own links and
-                    lands as one site row with a source per page — re-checked on
-                    schedule, so new pages join and dead pages drop on their own.
-                  </div>
-                </>
-              )}
               {error && (
                 <div className="error" style={{ marginTop: 8 }}>
                   {error}
@@ -512,37 +493,116 @@ export function SourceList({
                   )}
                 </div>
               )}
-              <div className="row" style={{ marginTop: 14, gap: 8, justifyContent: 'flex-end' }}>
-                <button
-                  className="btn ghost"
-                  onClick={() => setPendingUrl(null)}
-                  disabled={addUrl.isPending || importCentre.isPending}
-                >
-                  Cancel
-                </button>
-                <button
-                  className="btn"
-                  disabled={addUrl.isPending || importCentre.isPending}
-                  onClick={() => {
-                    lastMode.current = 'page';
-                    addUrl.mutate({ url: pendingUrl, auth: authHeader.trim() });
-                  }}
-                >
-                  {addUrl.isPending ? 'Adding…' : 'Just this page'}
-                </button>
-                {!/docs\.google\.com|drive\.google\.com/i.test(pendingUrl) && (
-                  <button
-                    className="btn"
-                    disabled={addUrl.isPending || importCentre.isPending}
-                    onClick={() => {
-                      lastMode.current = 'site';
-                      importCentre.mutate({ url: pendingUrl, auth: authHeader.trim() });
-                    }}
-                  >
-                    {importCentre.isPending ? 'Discovering…' : 'Crawl the whole site'}
-                  </button>
-                )}
-              </div>
+              {!pendingMode ? (
+                <>
+                  {/docs\.google\.com|drive\.google\.com/i.test(pendingUrl) ? (
+                    <div style={{ fontSize: 13, marginTop: 10 }}>
+                      Add this Google file to the knowledge base?
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 13, marginTop: 10 }}>
+                        Crawl just this page, or the whole site under it?
+                      </div>
+                      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                        A whole-site crawl follows the sitemap or the site's own links and
+                        lands as one site row with a source per page — re-checked on
+                        schedule, so new pages join and dead pages drop on their own.
+                      </div>
+                    </>
+                  )}
+                  <div className="row" style={{ marginTop: 14, gap: 8, justifyContent: 'flex-end' }}>
+                    <button
+                      className="btn ghost"
+                      onClick={() => setPendingUrl(null)}
+                      disabled={addUrl.isPending || importCentre.isPending}
+                    >
+                      Cancel
+                    </button>
+                    {/docs\.google\.com|drive\.google\.com/i.test(pendingUrl) ? (
+                      <button
+                        className="btn"
+                        disabled={addUrl.isPending || importCentre.isPending}
+                        onClick={() => {
+                          lastMode.current = 'page';
+                          addUrl.mutate({ url: pendingUrl, auth: authHeader.trim() });
+                        }}
+                      >
+                        {addUrl.isPending ? 'Adding…' : 'Add'}
+                      </button>
+                    ) : (
+                      <>
+                        <button
+                          className="btn"
+                          disabled={addUrl.isPending || importCentre.isPending}
+                          onClick={() => setPendingMode('page')}
+                        >
+                          Just this page
+                        </button>
+                        <button
+                          className="btn"
+                          disabled={addUrl.isPending || importCentre.isPending}
+                          onClick={() => setPendingMode('site')}
+                        >
+                          Crawl the whole site
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div style={{ fontSize: 13, marginTop: 10 }}>
+                    Needs a login to read? Add an Authorization header — sent
+                    when the link is crawled, stored encrypted, never shown again.
+                  </div>
+                  <input
+                    className="input"
+                    style={{ marginTop: 10, width: '100%', boxSizing: 'border-box' }}
+                    type="password"
+                    name="source-auth-header"
+                    autoComplete="new-password"
+                    data-1p-ignore
+                    data-lpignore="true"
+                    placeholder="Authorization: Bearer …"
+                    value={authHeader}
+                    onChange={(e) => setAuthHeader(e.target.value)}
+                    autoFocus
+                  />
+                  <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                    Optional — leave empty for public pages.
+                  </div>
+                  <div className="row" style={{ marginTop: 14, gap: 8, justifyContent: 'flex-end' }}>
+                    <button
+                      className="btn ghost"
+                      onClick={() => setPendingMode(null)}
+                      disabled={addUrl.isPending || importCentre.isPending}
+                    >
+                      Back
+                    </button>
+                    <button
+                      className="btn"
+                      disabled={addUrl.isPending || importCentre.isPending}
+                      onClick={() => {
+                        const auth = authHeader.trim();
+                        if (pendingMode === 'site') {
+                          lastMode.current = 'site';
+                          importCentre.mutate({ url: pendingUrl, auth });
+                        } else {
+                          lastMode.current = 'page';
+                          addUrl.mutate({ url: pendingUrl, auth });
+                        }
+                      }}
+                    >
+                      {addUrl.isPending || importCentre.isPending
+                        ? 'Adding…'
+                        : authHeader.trim()
+                          ? 'Add with header'
+                          : 'Add'}
+                    </button>
+                  </div>
+                </>
+              )}
             </Modal>
           )}
         </>
