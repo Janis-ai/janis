@@ -319,6 +319,9 @@ export function filterLiveModels(providerId: string, ids: string[]): ModelOption
     const id = raw.replace(/^models\//, '');
     const bare = id.slice(id.lastIndexOf('/') + 1);
     const cat = catalogModel(id) ?? catalogModel(bare);
+    // /models keeps listing retired ids long after calls start 404ing —
+    // the catalog flag is the only signal that actually knows they're dead.
+    if (cat?.retired) continue;
     // relabel variants (dates, -latest, -preview) inherit the family's
     // metadata (price, ctx, efforts) — also fills gaps field-by-field for
     // catalogued-but-unpriced entries; version bumps/tiers never inherit
