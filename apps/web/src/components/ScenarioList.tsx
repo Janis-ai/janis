@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ScenarioTest } from './ScenarioRow';
+import { Trash2 } from 'lucide-react';
 import { REVEAL_SCENARIO } from '../lib/scenarioRing';
 
 /** The scenario suite — shared list chrome for the builder's Try-it
@@ -278,7 +279,7 @@ export function ScenarioList({
                   disabled={deletingGroup}
                   onClick={() => onDeleteGroup(convId)}
                 >
-                  {deletingGroup ? 'Deleting…' : 'Delete all'}
+                  <><Trash2 size={13} /> <span className="save-label">{deletingGroup ? 'Deleting…' : 'Delete all'}</span></>
                 </button>
               )}
             </div>

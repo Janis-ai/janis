@@ -795,7 +795,7 @@ export default function Settings() {
             >
               Edit
             </button>
-            <button className="btn danger" onClick={() => removeReply.mutate(r.id)}>Delete</button>
+            <button className="btn danger" aria-label="Delete" onClick={() => removeReply.mutate(r.id)}><Trash2 size={14} /> <span className="save-label">Delete</span></button>
           </div>
         ))}
         <form
@@ -1084,7 +1084,7 @@ export default function Settings() {
               else if (name !== null) setError('Workspace name did not match — nothing deleted.');
             }}
           >
-            {deleteWorkspace.isPending ? 'Deleting…' : 'Delete workspace'}
+            <><Trash2 size={14} /> <span className="save-label">{deleteWorkspace.isPending ? 'Deleting…' : 'Delete workspace'}</span></>
           </button>
         </div>
       )}

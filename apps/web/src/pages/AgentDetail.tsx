@@ -698,7 +698,7 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
                 if (choice) removeAgent.mutate(choice === 'cancel_sub');
               }}
             >
-              Delete agent
+              <Trash2 size={14} /> <span className="save-label">Delete agent</span>
             </button>
           )}
           {hasDrafts && (

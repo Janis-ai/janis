@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Agent, HelpArticle } from '@janis/shared';
 import { api } from '../api/client';
+import { Trash2 } from 'lucide-react';
 import { timeAgo } from './bits';
 import type { KnowledgeFile } from './SourceList';
 
@@ -542,7 +543,7 @@ export function HelpCenter({ agent }: { agent: Agent }) {
             <button className="btn sm" onClick={() => toggle.mutate(a)}>
               {a.status === 'published' ? 'Unpublish' : 'Publish'}
             </button>
-            <button className="btn sm danger" onClick={() => remove.mutate(a)}>Delete</button>
+            <button className="btn sm danger" aria-label="Delete" onClick={() => remove.mutate(a)}><Trash2 size={13} /> <span className="save-label">Delete</span></button>
           </div>
         ),
       )}

@@ -791,7 +791,7 @@ export function SourceList({
               disabled={removeBulk.isPending}
               onClick={() => removeBulk.mutate([...selected])}
             >
-              {removeBulk.isPending ? 'Deleting…' : `Delete ${selected.size} selected`}
+              <><Trash2 size={13} /> <span className="save-label">{removeBulk.isPending ? 'Deleting…' : `Delete ${selected.size} selected`}</span></>
             </button>
           )}
         </div>
