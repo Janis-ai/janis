@@ -1009,9 +1009,10 @@ web_fetch). Fail-closed default.
 `useBillingStatus` typed the response as `{ plan }` but the endpoint
 returns `plan_key` — fixed; free workspaces now get a lock-icon tab,
 dimmed disabled fields, and a visible paid-feature notice. Hosted SMS
-confirmed working via the voice channel's subaccount (same number);
-the real SMS blocker is A2P 10DLC registration (external, awaiting
-Twilio review), not code.
+confirmed working via the voice channel's subaccount (same number).
+A2P 10DLC CLEARED 2026-11-03 — LOW_VOLUME campaign approved, master
+number +16506677708 in service MG68b89899…, test send delivered
+(see AGENTS.md backlog item 5).
 
 **Hosted chat links:** every Bubble channel now gets a shareable
 `{apiOrigin}/chat/{id}/page` link ("Open chat as a customer ↗") even
@@ -1110,7 +1111,7 @@ was the FK that 500'd deletes).
   `voice_number_month` usage events (cost+margin, swept by sweeper);
   paid-plan upsell for free workspaces (tappable locked tab, dimmed
   fields — BYO Twilio stays open on free); Voice/SMS channel sections
-  gated behind `TWILIO_CHANNELS_LIVE` until A2P clears.
+  live under `TWILIO_CHANNELS_LIVE=1` (A2P cleared 2026-11-03).
 - **A2P evidence surface** — static `/sms-optin` page with consent
   disclosures + T&C/privacy links, hosted evidence screenshot,
   `/terms.html` + `/privacy.html` statics for crawlers (Twilio + Google
@@ -1167,8 +1168,9 @@ was the FK that 500'd deletes).
 ## Open work
 
 AGENTS.md §"Open work — competitive gap tracker" is the canonical list.
-External gates (www.janis.ai cutover, Meta/IG app review, Twilio A2P,
+External gates (www.janis.ai cutover, Meta/IG app review,
 Azure app reg, WorkOS, Stripe yearly prices) are Mike's manual track.
+Twilio A2P cleared 2026-11-03 — removed from the gate list.
 
 ## Test-replay context hydration (built 2026-10-27)
 

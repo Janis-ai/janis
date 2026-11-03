@@ -304,16 +304,19 @@ is a day on launch)*
    review (~1 wk). Test account: integration-testing@zapier.com
    (admin in the test workspace, "Zapier review" API key on Demo Agent
    — revoke it after review closes).
-5. Twilio — paid account, A2P 10DLC brand + campaign registration, non-US
-   regulatory bundles. 2026-10-28: account upgraded (paid) + Trust Hub
-   customer profile submitted, awaiting review. Next on approval:
-   brand reg (Starter) → campaign (Customer Care use case) →
-   messaging service → US number → add SMS channel in console
-   (setSmsWebhook auto-wires inbound; TWILIO_* envs already live).
-   2026-10-29: campaign REJECTED 30882 (T&C) — static terms/privacy
-   lacked the CTIA clauses; fixed + live, resubmission filed. NB: until
-   approval, outbound is blocked provider-side (30034 undelivered —
-   inbound + prompt generation verified live, delivery needs the reg).
+5. Twilio — A2P 10DLC DONE 2026-11-03: LOW_VOLUME campaign
+   CM8e0a336681e1e4895395053e82c33bbe approved on brand BNc69f40cc…
+   (service MG68b89899e59ff9db523d61033cdaeee9 "Janis"). Master-account
+   number +16506677708 is in the service and carries the prod "Janis SMS"
+   channel (44fe2e6f); use_inbound_webhook_on_number=true keeps inbound
+   on the number's own SmsUrl. Verified live: test send delivered
+   (SMa924e245…, no 30034). CAVEAT: the voice-channel SMS clone
+   (+16502970236) lives on subaccount ACa957aab4… — subaccount numbers
+   can't join the parent's service, so its outbound stays unregistered;
+   own brand/campaign on the subaccount if that path matters. Remaining:
+   non-US regulatory bundles for voice.
+   History: 2026-10-29 campaign REJECTED 30882 (T&C lacked CTIA clauses);
+   fixed + live, resubmission filed → approved.
 6. DONE 2026-10-19 — Azure app reg + `MS_*` envs live; Outlook channel
    verified end-to-end (Graph /reply threading in lib/outlook.ts).
 7. DONE 2026-10-20 — WorkOS prod env live (API key + client_id verified
