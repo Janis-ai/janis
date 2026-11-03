@@ -438,6 +438,93 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     ],
   },
   {
+    id: 'woocommerce',
+    name: 'WooCommerce',
+    category: 'E-commerce',
+    blurb:
+      'Look up orders and products on a WooCommerce store — answers "where\'s my order" and can leave private notes for the team.',
+    docs_url: 'https://woocommerce.github.io/woocommerce-rest-api-docs/',
+    fields: [
+      { key: 'store_url', label: 'Store URL', placeholder: 'mystore.com' },
+      {
+        key: 'consumer_key',
+        label: 'Consumer key (ck_…)',
+        placeholder: 'ck_…',
+        help: 'WooCommerce admin → Settings → Advanced → REST API → Add key → Read/Write → copy the Consumer key.',
+      },
+      {
+        key: 'consumer_secret',
+        label: 'Consumer secret (cs_…)',
+        placeholder: 'cs_…',
+        help: 'Shown once with the consumer key — copy the Consumer secret.',
+      },
+    ],
+    secrets: (f) => ({
+      WOO_HOST: normHost(f.store_url),
+      WOO_AUTH: Buffer.from(`${f.consumer_key.trim()}:${f.consumer_secret.trim()}`).toString(
+        'base64',
+      ),
+    }),
+    tools: [
+      {
+        name: 'woo_lookup_order',
+        label: 'Look up order',
+        description:
+          'Look up a WooCommerce order by its numeric id for the VERIFIED customer — returns status, line items, totals, shipping/billing and tracking meta when present. The customer must be verified first: signed-in shopper, email-channel sender, or send_verification_email + check_verification_code — and the billing.email on the result must match the verified customer; if it doesn\'t, it\'s not their order — say so, never reveal its contents.',
+        method: 'GET',
+        url: 'https://{{secrets.WOO_HOST}}/wp-json/wc/v3/orders/{order_id}',
+        headers: { authorization: 'Basic {{secrets.WOO_AUTH}}' },
+        params: {
+          order_id: 'the numeric order number the customer gave, e.g. 1042',
+        },
+        identity: true,
+      },
+      {
+        name: 'woo_customer_orders',
+        label: 'Customer orders',
+        description:
+          'List the most recent WooCommerce orders for the verified customer by billing email — use this whenever the customer asks about "my order"/"my purchases" without giving a number, so they can pick the right one. The customer must be verified first — pass only an address they verified (signed-in shopper, email-channel sender, or a code-verified email).',
+        method: 'GET',
+        url: 'https://{{secrets.WOO_HOST}}/wp-json/wc/v3/orders?search={email}&per_page=10',
+        headers: { authorization: 'Basic {{secrets.WOO_AUTH}}' },
+        params: {
+          email: 'a VERIFIED customer email address — never a guessed or unverified one',
+        },
+        identity: true,
+      },
+      {
+        name: 'woo_search_products',
+        label: 'Search products',
+        description:
+          'Search the WooCommerce product catalogue — returns up to 10 published products with name, price, sale price, stock status and permalink. Answer stock questions from each item\'s stock_status (instock/outofstock/onbackorder) — a published product that is outofstock cannot be bought; say so plainly.',
+        method: 'GET',
+        url: 'https://{{secrets.WOO_HOST}}/wp-json/wc/v3/products?search={query}&per_page=10&status=publish',
+        headers: { authorization: 'Basic {{secrets.WOO_AUTH}}' },
+        params: {
+          query: 'product search text — a name, keyword or SKU',
+        },
+      },
+      {
+        name: 'woo_add_order_note',
+        label: 'Add order note',
+        description:
+          'Add a private staff note to a WooCommerce order — use to flag follow-ups for the team (notes are never customer-visible). Propose it, a teammate approves before it posts.',
+        method: 'POST',
+        url: 'https://{{secrets.WOO_HOST}}/wp-json/wc/v3/orders/{order_id}/notes',
+        headers: {
+          authorization: 'Basic {{secrets.WOO_AUTH}}',
+          'content-type': 'application/json',
+        },
+        bodyTemplate: '{"note":{note}}',
+        params: {
+          order_id: 'numeric order id — from woo_lookup_order or woo_customer_orders',
+          note: 'private note text — the context the team needs',
+        },
+        approval: true,
+      },
+    ],
+  },
+  {
     id: 'hubspot',
     name: 'HubSpot',
     category: 'CRM',

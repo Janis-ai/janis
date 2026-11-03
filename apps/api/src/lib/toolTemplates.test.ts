@@ -313,6 +313,29 @@ describe('oauth-connect template variants', () => {
   });
 });
 
+describe('woocommerce tool template', () => {
+  const woo = TOOL_TEMPLATES.find((t) => t.id === 'woocommerce')!;
+
+  it('derives host + basic auth from the consumer pair', () => {
+    const s = woo.secrets({ store_url: 'https://mystore.com/', consumer_key: ' ck_1 ', consumer_secret: 'cs_2' });
+    expect(s.WOO_HOST).toBe('mystore.com');
+    expect(s.WOO_AUTH).toBe(Buffer.from('ck_1:cs_2').toString('base64'));
+    for (const t of woo.tools) {
+      expect(t.headers?.authorization).toBe('Basic {{secrets.WOO_AUTH}}');
+      expect(t.url).toContain('{{secrets.WOO_HOST}}/wp-json/wc/v3');
+    }
+  });
+
+  it('identity-binds order reads and approval-gates the note tool', () => {
+    expect(woo.tools.find((t) => t.name === 'woo_lookup_order')?.identity).toBe(true);
+    expect(woo.tools.find((t) => t.name === 'woo_customer_orders')?.identity).toBe(true);
+    expect(woo.tools.find((t) => t.name === 'woo_search_products')?.identity).toBeUndefined();
+    expect(woo.tools.find((t) => t.name === 'woo_add_order_note')?.approval).toBe(true);
+    // No delete tools — same rule as every ticket/order provider.
+    expect(woo.tools.some((t) => t.name.includes('delete'))).toBe(false);
+  });
+});
+
 describe('linear tool template', () => {
   const linear = TOOL_TEMPLATES.find((t) => t.id === 'linear')!;
   const tool = (name: string) => linear.tools.find((t) => t.name === name)! as ToolDef;
