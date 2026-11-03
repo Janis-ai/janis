@@ -456,9 +456,11 @@ export function SourceList({
               }}
             />
           </div>
-          <div className="row" style={{ marginTop: 10, gap: 8, alignItems: 'center' }}>
+          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+            Links become website sources — anything else saves as a note.
+          </div>
+          <div className="row" style={{ marginTop: 12, gap: 8, alignItems: 'center' }}>
             <span className="muted grow" style={{ fontSize: 15 }}>
-              Links become website sources — anything else saves as a note.
               Drop files anywhere on this panel, or{' '}
               <button
                 style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontSize: 15, cursor: 'pointer', textDecoration: 'underline' }}
