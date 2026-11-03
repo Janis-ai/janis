@@ -145,7 +145,6 @@ export default function AgentOverview() {
 
   const hosted = janisBrain(agent);
   const cfg = agent?.config ?? {};
-  const summary = cfg.builder?.summary?.trim();
   // Lifecycle line: Live once a real conversation has flowed on a public
   // channel (build-status deploy=done); Deployed when a channel exists but
   // nothing has arrived yet; Ready when every ACTIONABLE step is done
@@ -211,10 +210,8 @@ export default function AgentOverview() {
         </div>
       </div>
       <div className="muted" style={{ marginBottom: 12 }}>
-        {summary
-          ? `It will ${summary.replace(/[.\s]+$/, '')}.`
-          : cfg.purpose}
-        {agent?.last_seen_at ? `${summary || cfg.purpose ? ' · ' : ''}last event ${timeAgo(agent.last_seen_at)}` : ''}
+        {agent?.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
+        {channels.length > 0 && ` · ${[...new Set(channels.map((c) => KIND_LABEL[c.kind] ?? c.name))].join(', ')}`}
       </div>
 
       {/* Lifecycle + build progress — Overview is the home you land on after
