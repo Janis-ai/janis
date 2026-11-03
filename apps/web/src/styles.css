@@ -924,6 +924,9 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
    meta bottom = buttons bottom. .ov-tight (measured) returns them to
    flow beside the meta, bottom-aligned. */
 .ov-head .ov-actions { position: absolute; top: 0; right: 0; }
+@media (max-width: 720px) {
+  .drop-hint-full { display: none; }
+}
 
 /* agent detail — sticky name/save header + tabs */
 /* min-height fills .main's viewport so flex:1 children (e.g. the knowledge
