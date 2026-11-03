@@ -16,6 +16,7 @@ const CHANNEL_LABEL: Record<string, string> = {
   instagram: 'Instagram',
   chatfuel: 'Chatfuel',
   manychat: 'ManyChat',
+  webchat: 'Website chat',
 };
 
 export default function Agents() {
