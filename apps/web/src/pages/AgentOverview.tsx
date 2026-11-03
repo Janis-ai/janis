@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { FlaskConical, Inbox, Settings } from 'lucide-react';
@@ -120,6 +121,28 @@ export default function AgentOverview() {
       railBus.publish({ channelId: r.channel_id, label: agent?.name ?? '', agentId: id! }),
   });
 
+  // Buttons ride the title row while it fits. When title+actions would
+  // overflow, .ov-tight drops the actions onto the meta row instead —
+  // measured, not a breakpoint, since the wrap point depends on the
+  // title's length.
+  const headRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = headRef.current;
+    if (!el) return;
+    const check = () => {
+      const t = el.querySelector<HTMLElement>('.page-title');
+      const a = el.querySelector<HTMLElement>('.ov-actions');
+      if (!t || !a) return;
+      el.classList.toggle('ov-tight', t.scrollWidth + a.offsetWidth + 10 > el.clientWidth);
+    };
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    const h1 = el.querySelector('.page-title');
+    if (h1) ro.observe(h1);
+    check();
+    return () => ro.disconnect();
+  }, [agent?.name, channels.length]);
+
   const tab = params.get('tab');
   if (tab && LEGACY_TAB_SECTION[tab]) {
     // Carry the rest of the query through — meta_connect/rail came in on the
@@ -184,8 +207,8 @@ export default function AgentOverview() {
 
   return (
     <>
-      <div className="row ov-head" style={{ alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 12 }}>
-        <h1 className="page-title grow" style={{ minWidth: 0 }}>
+      <div ref={headRef} className="row ov-head" style={{ alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 12 }}>
+        <h1 className="page-title">
           {agent?.name ?? '…'}
           {channels.length > 0 && (
             <span className="muted" style={{ marginLeft: 10, fontSize: 13, fontWeight: 400 }}>
