@@ -1353,6 +1353,14 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   color: var(--muted);
 }
 .model-detail-prices b { color: var(--text); font-weight: 600; }
+/* Inside a modal the absolutely-positioned pop is clipped by the modal's
+   scroll box — float it as a centered overlay instead (mobile keeps the
+   bottom sheet via the ≤900 rule below). */
+.modal .model-picker-pop {
+  position: fixed; top: 50%; left: 50%; right: auto;
+  transform: translate(-50%, -50%);
+  width: min(640px, calc(100vw - 24px)); max-height: 72vh;
+}
 @media (hover: hover) and (min-width: 901px) {
   .model-detail { display: block; }
   /* hover already surfaces details — the ⓘ pin only matters on touch */
@@ -1360,8 +1368,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 }
 @media (max-width: 900px) {
   /* bottom sheet — equivalent mobile picker */
-  .model-picker-pop {
+  .model-picker-pop, .modal .model-picker-pop {
     position: fixed; left: 8px; right: 8px; bottom: 8px; top: auto;
+    transform: none; width: auto;
     max-height: 72dvh; z-index: 80;
   }
   .model-picker-list { max-height: 46dvh; }
