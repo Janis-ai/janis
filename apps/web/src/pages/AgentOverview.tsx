@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
 import { FlaskConical, Inbox, Settings } from 'lucide-react';
@@ -121,28 +120,6 @@ export default function AgentOverview() {
       railBus.publish({ channelId: r.channel_id, label: agent?.name ?? '', agentId: id! }),
   });
 
-  // Buttons ride the title row while it fits. When title+actions would
-  // overflow, .ov-tight drops the actions onto the meta row instead —
-  // measured, not a breakpoint, since the wrap point depends on the
-  // title's length.
-  const headRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = headRef.current;
-    if (!el) return;
-    const check = () => {
-      const t = el.querySelector<HTMLElement>('.page-title');
-      const a = el.querySelector<HTMLElement>('.ov-actions');
-      if (!t || !a) return;
-      el.classList.toggle('ov-tight', t.scrollWidth + a.offsetWidth + 10 > el.clientWidth);
-    };
-    const ro = new ResizeObserver(check);
-    ro.observe(el);
-    const h1 = el.querySelector('.page-title');
-    if (h1) ro.observe(h1);
-    check();
-    return () => ro.disconnect();
-  }, [agent?.name, channels.length]);
-
   const tab = params.get('tab');
   if (tab && LEGACY_TAB_SECTION[tab]) {
     // Carry the rest of the query through — meta_connect/rail came in on the
@@ -207,19 +184,21 @@ export default function AgentOverview() {
 
   return (
     <>
-      <div ref={headRef} className="row ov-head" style={{ alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 12 }}>
-        <h1 className="page-title">
-          {agent?.name ?? '…'}
-          {channels.length > 0 && (
-            <span className="muted" style={{ marginLeft: 10, fontSize: 13, fontWeight: 400 }}>
-              · {[...new Set(channels.map((c) => KIND_LABEL[c.kind] ?? c.name))].join(', ')}
-            </span>
-          )}
-        </h1>
-        {agent && !agent.hosted && !agent.webhook_url && <span className="badge warn">unreachable</span>}
-        {/* Buttons stay on the title row while it can hold them; on narrow
-            screens the title takes row 1 and they drop to the meta row. */}
-        <div className="row ov-actions" style={{ gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
+      <h1 className="page-title ov-title">
+        {agent?.name ?? '…'}
+        {channels.length > 0 && (
+          <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>
+            {` · ${[...new Set(channels.map((c) => KIND_LABEL[c.kind] ?? c.name))].join(', ')}`}
+          </span>
+        )}
+        <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>
+          {` · ${agent?.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}`}
+        </span>
+        {agent && !agent.hosted && !agent.webhook_url && <span className="badge warn" style={{ marginLeft: 8 }}>unreachable</span>}
+        {/* The float lands right-aligned on the text's last line — one line
+            when everything fits, its own right-aligned row when it doesn't,
+            with the text wrapping above/into the same row on the left. */}
+        <span className="ov-actions">
         {agent && hosted && (
           <button
             className="btn"
@@ -237,11 +216,8 @@ export default function AgentOverview() {
         <button className="btn" title="Agent settings" aria-label="Agent settings" onClick={() => navigate(`/agents/${id}/settings`)}>
           <Settings size={14} />
         </button>
-        </div>
-        <div className="muted ov-meta">
-          {agent?.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
-        </div>
-      </div>
+        </span>
+      </h1>
 
       {/* Lifecycle + build progress — Overview is the home you land on after
           Create, so "where am I / what's next" is the first thing it says. */}

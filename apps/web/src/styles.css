@@ -914,15 +914,14 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   .agent-list .agent-row { justify-content: flex-end; column-gap: 8px; }
   .agent-list .agent-row > .grow { flex-basis: 100%; }
 }
-/* Agent overview head: the title keeps its natural width (shrink:0) so
-   when title+buttons can't share the row, the BUTTONS drop — the title
-   never wraps because of them. 'last event' is the second row; .ov-tight
-   (measured in JS) puts it beside the actions, top-aligned to them. */
-.ov-head .page-title { flex: 0 0 auto; max-width: 100%; }
-.ov-head .ov-meta { flex-basis: 100%; }
-.ov-head.ov-tight .page-title { flex-basis: 100%; }
-.ov-head.ov-tight .ov-meta { order: 2; flex-basis: auto; }
-.ov-head.ov-tight .ov-actions { order: 3; }
+/* Agent overview head: one flowing line — title · channels · last event,
+   with the actions floated right at the end of the text. The float lands
+   right-aligned on the last text line: everything shares one line when it
+   fits, and when it doesn't the buttons hold their own right-aligned row
+   while the text wraps above/into it on the left. overflow:hidden (from
+   .page-title) contains the float; white-space must allow wrapping. */
+.ov-title { white-space: normal; text-overflow: clip; }
+.ov-title .ov-actions { float: right; display: flex; flex-wrap: nowrap; gap: 8px; margin: 2px 0 6px 12px; }
 
 /* agent detail — sticky name/save header + tabs */
 /* min-height fills .main's viewport so flex:1 children (e.g. the knowledge
