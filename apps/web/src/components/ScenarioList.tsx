@@ -170,6 +170,7 @@ export function ScenarioList({
         className="btn ghost sm"
         title="Expand all"
         aria-label="Expand all"
+        style={{ marginLeft: 'auto' }}
         onClick={() => setFoldAll((s) => ({ seq: s.seq + 1, open: true }))}
       >
         <ChevronsUpDown size={13} /> <span className="save-label">Expand</span>
@@ -182,7 +183,6 @@ export function ScenarioList({
       >
         <ChevronsDownUp size={13} /> <span className="save-label">Collapse</span>
       </button>
-      <span className="grow" />
       <label className="row" style={{ gap: 4 }}>
         <select value={sort} title="Sort order" aria-label="Sort order" onChange={(e) => applySort(e.target.value as Sort)}>
           <option value="attention">attention first</option>
