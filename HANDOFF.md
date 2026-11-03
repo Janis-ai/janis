@@ -93,6 +93,26 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02t — AWS account fully decommissioned (was billing $42/mo)
+- Mike got an AWS invoice: $39.61 Lambda + $2.45 CloudWatch, API GW $0.
+  Root cause: 4 ENABLED EventBridge cron rules from the OLD system still
+  firing every 1–5 min into janis-api-* lambdas — updateSubscriptions ran
+  every 3 min averaging 167s (hanging on the dead Mongo) ≈ 90% of the bill.
+- NOTHING in the reboot calls AWS. The only wires were JANIS_AWS_API_URL
+  env vars on wordhopapi/wordhop-slack/janis-web (dead code — every
+  API-facing lambda showed 0 October invocations).
+- Torn down via temp IAM user devin-audit (deleted after): 5 EventBridge
+  rules, 3 CFN stacks (janis-api, serverlessrepo-janis-api-toolchain,
+  serverless-react-foil-test-dev, aws-sam-cli-managed-default), 30 lambdas,
+  4 API Gateways (incl. kaklluzeld + cjx0ezfxv4 the apps pointed at),
+  5 S3 buckets, all /aws/lambda/* + codebuild log groups, stuck IAM
+  roles/policies. JANIS_AWS_API_URL unset on all three Heroku apps.
+- Left standing (all $0 idle): 5 SES identities (janis.ai, support@janis.ai,
+  jottoplay.com, tangerinetorpedo.com) and AWS-managed KMS keys. No EC2,
+  RDS, Route53 zones/domains, NAT, or ELB anywhere — Nov bill ≈ $1.30
+  prorated, then ~$0.
+- Gotcha for next time: PowerUserAccess can't delete IAM roles; deleting
+  a stack's service role first forces a recreate-then-delete dance.
 ## 2026-11-02s — WooCommerce connector card
 - Second e-commerce provider after Shopify. Credential card only —
   WooCommerce's auth is consumer key/secret (Basic auth against the
