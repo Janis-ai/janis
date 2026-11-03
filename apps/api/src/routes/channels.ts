@@ -7,6 +7,7 @@ import {
   mountEmailDomainRoutes,
   type EmailDomainBag,
 } from '../lib/emailDomainRoutes.js';
+import { checkDomainEntitlement } from '../lib/domainBilling.js';
 import { and, eq, ne, sql } from 'drizzle-orm';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
@@ -787,6 +788,7 @@ export function channelApiRoutes(db: Db) {
   mountEmailDomainRoutes(app, db, {
     stateKey: 'ch',
     inboundFromAllowed: true,
+    checkDomain: (ws, d) => checkDomainEntitlement(db, ws, d),
     load: async (workspaceId, id) => {
       const [row] = await db
         .select()

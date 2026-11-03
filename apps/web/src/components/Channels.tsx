@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Sun, Moon, Monitor } from 'lucide-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { api } from '../api/client';
+import { api, ApiError } from '../api/client';
 import type { Agent, Channel } from '@janis/shared';
 import { useAgents, useChannels, useMe } from '../api/hooks';
 import { CodeBlock } from './bits';
@@ -2323,6 +2323,25 @@ export function EmailDomainCard({
   removeWarn?: string;
 }) {
   const [confirmEl, confirm] = useConfirm();
+  const [addonOffer, setAddonOffer] = useState(false);
+  const [addonBusy, setAddonBusy] = useState(false);
+  const buyAddon = async () => {
+    setAddonBusy(true);
+    try {
+      const r = await api<{ added?: boolean; url?: string }>('/api/billing/domain-addon', {
+        method: 'POST',
+        body: '{}',
+      });
+      if (r.url) window.location.href = r.url;
+      else {
+        setAddonOffer(false);
+        setMsg('Add-on active — register your domain again.');
+      }
+    } catch (e) {
+      setMsg(friendlyError(e instanceof Error ? e.message : 'failed').text);
+    }
+    setAddonBusy(false);
+  };
   const removeDomain = async () => {
     if (removeWarn && !(await confirm(removeWarn, undefined, true))) return;
     void act('/email-domain', undefined, 'Domain removed.').then(() => {
@@ -2368,6 +2387,8 @@ export function EmailDomainCard({
         return true;
       })
       .catch((e) => {
+        if (e instanceof ApiError && e.status === 402 && e.data?.domain_addon === true)
+          setAddonOffer(true);
         setMsg(friendlyError(e instanceof Error ? e.message : 'failed').text);
         return false;
       });
@@ -2569,6 +2590,16 @@ export function EmailDomainCard({
           </button>
         </div>
       ) : null}
+      {addonOffer && (
+        <div className="row" style={{ marginTop: 8, alignItems: 'center', gap: 8 }}>
+          <span className="muted" style={{ fontSize: 12 }}>
+            Each custom sending domain is billed to your workspace.
+          </span>
+          <button className="btn sm primary" disabled={addonBusy} onClick={() => void buyAddon()}>
+            {addonBusy ? 'Opening billing…' : 'Add domain — $5/mo'}
+          </button>
+        </div>
+      )}
       {msg && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{msg}</div>}
       {confirmEl}
     </div>

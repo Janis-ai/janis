@@ -92,6 +92,9 @@ export function mountEmailDomainRoutes(
     /** After a domain delete — receives the PRE-delete bag. Agents use it to
      *  strip the same domain off email channels: one management spot. */
     onDelete?: (owner: EmailDomainOwner, removed: EmailDomainBag) => Promise<void>;
+    /** Plan/add-on gate before a new registration — returns an upsell
+     *  message to 402 back, or null to proceed. Adopts don't re-charge. */
+    checkDomain?: (workspaceId: string, domain: string) => Promise<string | null>;
   },
 ) {
   const admin = async (c: Context<SessionEnv>, agentId: string) =>
@@ -142,6 +145,8 @@ export function mountEmailDomainRoutes(
         return c.json({ error: 'enter a domain you own — e.g. mail.acme.com' }, 400);
       if (!env.resendCustomDomains)
         return c.json({ error: 'custom sending domains are not available on this deployment' }, 400);
+      const denied = await opts.checkDomain?.(c.get('workspaceId'), domain);
+      if (denied) return c.json({ error: denied, domain_addon: true }, 402);
       const bag = owner.bag;
       let d;
       try {

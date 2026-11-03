@@ -93,6 +93,25 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02r — Custom domains as an upsell; RESEND_CUSTOM_DOMAINS flipped on
+- RESEND_CUSTOM_DOMAINS had been =0 on prod since Oct 20 — flipped to 1
+  (untracked deploy-consumed file) when the feature went live. Account is
+  on Resend FREE: 3 domain slots, all ours (janis.ai/mail/inbound) — the
+  Resend plan needs upgrading before ANY client registration succeeds.
+- Domain cost is passed to the client: lib/domainBilling.ts — Pro/Scale
+  include 1 domain; anyone buys more via POST /api/billing/domain-addon
+  ($5/mo/domain, DOMAIN_ADDON_USD). Price self-heals via Stripe
+  lookup_key janis_domain_addon (live+test, no env IDs). Paid sub →
+  prorated item; free workspace → checkout session (metadata addon:domain
+  keeps plan-flip webhooks from treating it as a plan sub).
+- Gate lives in the email-domain mounter's register (checkDomain opt —
+  one spot covers channel+agent): counts distinct domains across the
+  workspace's channel creds + agent email_sending bags, 402s with
+  domain_addon flag → the card renders an "Add domain — $5/mo" CTA that
+  buys and retries. Re-register/adopt doesn't consume a slot.
+- Remove on a domain that feeds an email channel now asks first —
+  EmailDomainCard.removeWarn + useConfirm names the affected channels.
+
 ## 2026-11-02q — Card uninstall drops the creds it installed
 - agent_secrets used to survive card removal forever (torontofood kept
   SHOPIFY_TOKEN with zero shopify tools — reads as "still connected").

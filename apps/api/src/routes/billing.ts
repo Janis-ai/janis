@@ -6,6 +6,7 @@ import { agents, channels, usageEvents, workspaces } from '../db/schema.js';
 import { allRates, billingConfig, currentPeriod, rateFor } from '../lib/billing.js';
 import { effectivePlanKey, invalidateCapCache, messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
 import { ensureStripeCustomer, planForPrice, stripe } from '../lib/stripe.js';
+import { purchaseDomainAddon } from '../lib/domainBilling.js';
 import { disableSsoIfUngated } from '../lib/workos.js';
 import { env, requestWebOrigin } from '../env.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -247,6 +248,23 @@ export function billingRoutes(db: Db) {
     planChanged(c.get('workspaceId'));
     await disableSsoIfUngated(db, c.get('workspaceId'));
     return c.json({ plan });
+  });
+
+  // POST /api/billing/domain-addon → one custom sending domain slot.
+  // Existing plan sub → prorated item, else a checkout session for the
+  // add-on alone (metadata marks it — it never carries a plan price).
+  app.post('/domain-addon', adminOnly, async (c) => {
+    if (!stripe()) return c.json({ error: 'billing not configured' }, 400);
+    try {
+      const res = await purchaseDomainAddon(
+        db,
+        c.get('workspaceId'),
+        c.get('user')?.email ?? '',
+      );
+      return c.json(res);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : 'purchase failed' }, 502);
+    }
   });
 
   // POST /api/billing/checkout {plan} → Stripe Checkout Session URL

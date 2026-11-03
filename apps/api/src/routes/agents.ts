@@ -60,6 +60,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { effectiveMeteredModel } from '../lib/llm.js';
 import { llmModelsResult } from '../lib/llmModels.js';
 import { mountEmailDomainRoutes, type EmailDomainBag } from '../lib/emailDomainRoutes.js';
+import { checkDomainEntitlement } from '../lib/domainBilling.js';
 import { agentRoleFor, agentScopeCond, isAdminRole } from '../lib/access.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { processEvents } from '../services/ingest.js';
@@ -622,6 +623,7 @@ export function agentRoutes(db: Db) {
   mountEmailDomainRoutes(app, db, {
     stateKey: 'ag',
     inboundFromAllowed: false,
+    checkDomain: (ws, d) => checkDomainEntitlement(db, ws, d),
     load: async (workspaceId, id) => {
       const [row] = await db
         .select()
