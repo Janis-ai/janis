@@ -93,6 +93,22 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-02s — WooCommerce connector card
+- Second e-commerce provider after Shopify. Credential card only —
+  WooCommerce's auth is consumer key/secret (Basic auth against the
+  store's own host), self-serve in WC admin with no marketplace gate.
+  Tools: woo_lookup_order + woo_customer_orders (identity-bound — order
+  reads only against verified emails), woo_search_products,
+  woo_add_order_note (approval-gated, private staff notes).
+- wc-auth DOES have an app-approval flow upstream but it POSTs creds to
+  a callback rather than exchanging an auth code — doesn't fit the
+  generic OAuth factory; credential card is the v1.
+- Fin-catalog gap review (their 60 tiles): we natively cover ~15 of the
+  45 API tiles + MCP-extend to ~25. True remaining gaps: Freshdesk,
+  BigCommerce, DB connectors (pg/mongo/snowflake — MCP-able),
+  knowledge-source imports (Guru/Slite/Notion→KB), product/marketing
+  reads (Segment/PostHog/Mailchimp/SendGrid), accounting (QB/Xero),
+  Discord channel, Statuspage.
 ## 2026-11-02r — Custom domains as an upsell; RESEND_CUSTOM_DOMAINS flipped on
 - RESEND_CUSTOM_DOMAINS had been =0 on prod since Oct 20 — flipped to 1
   (untracked deploy-consumed file) when the feature went live. Account is
