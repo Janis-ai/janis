@@ -1168,6 +1168,7 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 input, select, textarea {
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px;
+  font-size: 13px;
   /* controls must never outgrow their column — an overflow ends up painting
      under the docked Ask rail (z-index 81) and reading as clipped text */
   max-width: 100%; min-width: 0;
