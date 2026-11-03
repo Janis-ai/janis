@@ -1281,7 +1281,14 @@ export function InstructionsSection({
       <div className="row" style={{ alignItems: 'center' }}>
         <strong>Instructions</strong>
         <span className="grow" />
-        {isAdmin && agentId && (
+        {isAdmin && onSave && (
+          <button className="btn primary sm" disabled={saving || !hasChanges} title="Save" aria-label="Save" onClick={() => onSave()}>
+            {saved ? <Check size={14} /> : <Save size={14} />}
+          </button>
+        )}
+      </div>
+      {isAdmin && agentId && (
+        <div className="row" style={{ gap: 8 }}>
           <button
             className="btn ghost sm"
             disabled={check?.pending}
@@ -1290,8 +1297,6 @@ export function InstructionsSection({
           >
             {check?.pending ? 'Checking…' : 'Check for conflicts'}
           </button>
-        )}
-        {isAdmin && agentId && (
           <button
             className="btn ghost sm"
             disabled={rewrite?.pending}
@@ -1300,13 +1305,8 @@ export function InstructionsSection({
           >
             {rewrite?.pending ? 'Rewriting…' : 'Suggest rewrite'}
           </button>
-        )}
-        {isAdmin && onSave && (
-          <button className="btn primary sm" disabled={saving || !hasChanges} title="Save" aria-label="Save" onClick={() => onSave()}>
-            {saved ? <Check size={14} /> : <Save size={14} />}
-          </button>
-        )}
-      </div>
+        </div>
+      )}
       <InstructionHistory
         agentId={agentId}
         isAdmin={isAdmin}
