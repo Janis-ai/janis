@@ -10,7 +10,7 @@ import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { MemberGroups } from '../components/MemberGroups';
 import { usePrompt, useConfirm } from '../components/Prompt';
-import { Pencil, Trash2, X } from 'lucide-react';
+import { Pencil, Save, Trash2, X } from 'lucide-react';
 import { NOTIFY_EVENT_LABELS } from '../lib/notifyEvents';
 import { MemberCell, TeamRow, TeamTable, teamTd } from '../components/TeamTable';
 import { AutosizeText } from '../components/bits';
@@ -475,7 +475,7 @@ export default function Settings() {
                   }
                   onClick={() => saveHook.mutate(hookUrl.trim() || null)}
                 >
-                  {saveHook.isPending ? 'Saving…' : 'Save'}
+                  <Save size={14} aria-label="Save" />
                 </button>
               </div>
               <span className="muted" style={{ fontSize: 12 }}>
@@ -503,7 +503,7 @@ export default function Settings() {
                   }
                   onClick={() => saveDomain.mutate(helpDomain.trim().toLowerCase() || null)}
                 >
-                  {saveDomain.isPending ? 'Saving…' : 'Save'}
+                  <Save size={14} aria-label="Save" />
                 </button>
               </div>
               <span className="muted" style={{ fontSize: 12 }}>
@@ -561,7 +561,7 @@ export default function Settings() {
               acctName.trim() === me?.user.name
             }
           >
-            Save
+            <Save size={14} aria-label="Save" />
           </button>
         </form>
         <div className="muted" style={{ marginTop: 8, fontSize: 13 }}>
@@ -715,7 +715,7 @@ export default function Settings() {
               profile.display_name.trim() === (me?.user.display_name ?? '')
             }
           >
-            Save
+            <Save size={14} aria-label="Save" />
           </button>
           <span className="grow" />
           <label
@@ -825,7 +825,7 @@ export default function Settings() {
               className="btn"
               disabled={addReply.isPending || updateReply.isPending || replyUnchanged}
             >
-              {editReplyId ? 'Save changes' : 'Add'}
+              {editReplyId ? <Save size={14} aria-label="Save changes" /> : 'Add'}
             </button>
             {editReplyId && (
               <button
@@ -1140,7 +1140,7 @@ function DefaultLlmCard() {
           disabled={!dirty || save.isPending}
           onClick={() => save.mutate({ llm_config: llm })}
         >
-          {save.isPending ? 'Saving…' : 'Save default'}
+          <Save size={14} aria-label="Save" />
         </button>
         {Object.keys(saved ?? {}).length > 0 && (
           <button
@@ -1229,7 +1229,7 @@ function RetentionCard() {
           disabled={!dirty || save.isPending}
           onClick={() => save.mutate()}
         >
-          {save.isPending ? 'Saving…' : 'Save'}
+          <Save size={14} aria-label="Save" />
         </button>
       </div>
       {saved !== null && expiring !== null && expiring !== undefined && (
@@ -1443,7 +1443,7 @@ function HandoffCard() {
           disabled={draft === null || save.isPending}
           onClick={() => save.mutate()}
         >
-          {save.isPending ? 'Saving…' : 'Save'}
+          <Save size={14} aria-label="Save" />
         </button>
         {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
       </div>
@@ -1501,7 +1501,7 @@ function ResolutionCard() {
           disabled={draft === null || save.isPending}
           onClick={() => save.mutate()}
         >
-          {save.isPending ? 'Saving…' : 'Save'}
+          <Save size={14} aria-label="Save" />
         </button>
         {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
       </div>

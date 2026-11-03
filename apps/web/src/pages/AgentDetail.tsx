@@ -46,7 +46,7 @@ import { useDock } from '../lib/dockContext';
 import { usePageTitle } from '../lib/title';
 import { NOTIFY_EVENT_LABELS } from '../lib/notifyEvents';
 import { useConfirm } from '../components/Prompt';
-import { FlaskConical, Pencil, Trash2, Upload, X } from 'lucide-react';
+import { Check, FlaskConical, Pencil, Save, Trash2, Upload, X } from 'lucide-react';
 
 type RuleKind = AlertRule['kind'];
 /** `defaultOn` kinds ping the workspace even with zero rules — a rule exists
@@ -705,9 +705,11 @@ function AgentEditor({ agent, section }: { agent: Agent; section: Section }) {
             <button
               className="btn primary"
               disabled={update.isPending || !dirty}
+              title="Save"
+              aria-label="Save"
               onClick={() => saveAll()}
             >
-              {update.isPending ? 'Saving…' : savedFlash ? 'Saved ✓' : 'Save'}
+              {savedFlash ? <Check size={14} /> : <Save size={14} />}
             </button>
           )}
         </div>
@@ -1300,8 +1302,8 @@ export function InstructionsSection({
           </button>
         )}
         {isAdmin && onSave && (
-          <button className="btn primary sm" disabled={saving || !hasChanges} onClick={() => onSave()}>
-            {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save'}
+          <button className="btn primary sm" disabled={saving || !hasChanges} title="Save" aria-label="Save" onClick={() => onSave()}>
+            {saved ? <Check size={14} /> : <Save size={14} />}
           </button>
         )}
       </div>
