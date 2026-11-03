@@ -9,6 +9,15 @@ import { useConfirm } from '../components/Prompt';
 import { friendlyError } from '../lib/friendlyError';
 import { usePageTitle } from '../lib/title';
 
+// Meta-connected channel names are the FB page name (or @handle) — the
+// card wants the platform, not the page.
+const CHANNEL_LABEL: Record<string, string> = {
+  messenger: 'Messenger',
+  instagram: 'Instagram',
+  chatfuel: 'Chatfuel',
+  manychat: 'ManyChat',
+};
+
 export default function Agents() {
   usePageTitle('Agents');
   const { data } = useAgents();
@@ -73,7 +82,7 @@ export default function Agents() {
                 <div className="muted" style={{ marginTop: 2 }}>
                   {engine === 'dialogflow' ? 'dialogflow engine · ' : engine === 'monitor' ? 'monitor only · ' : ''}
                   {agent.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}
-                  {channels.length > 0 && ` · ${channels.map((c) => (c.kind === 'messenger' ? 'Messenger' : c.name)).join(', ')}`}
+                  {channels.length > 0 && ` · ${[...new Set(channels.map((c) => CHANNEL_LABEL[c.kind] ?? c.name))].join(', ')}`}
                   {!agent.hosted && !agent.webhook_url && (
                     <div style={{ color: '#fde047', marginTop: 2 }}>
                       Not reachable — no webhook URL and not hosted by Janis. Inbound messages will go unanswered.
