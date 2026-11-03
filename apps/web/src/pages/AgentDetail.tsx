@@ -13,7 +13,7 @@ import type {
 import { DEFAULT_INTENTS } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgentMembers, useAgents, useAlertRules, useChannels, useDeliveries, useGroups, useMe, useSavedReplies, useSlackChannels, useSlackStatus, useUsers } from '../api/hooks';
-import { AgentChannels, effectiveEmailSending } from '../components/AgentChannels';
+import { AgentChannels, effectiveEmailSending, needsVerificationEmail } from '../components/AgentChannels';
 import { EmailDomainCard, useEmailDomainEnabled } from '../components/Channels';
 import { MemberGroups } from '../components/MemberGroups';
 import { MemberCell, TeamRow, TeamTable, teamTd } from '../components/TeamTable';
@@ -3468,9 +3468,7 @@ function EmailSendingNudge({ cfg, agentId }: { cfg: AgentConfig; agentId: string
         sharedChans.length > 1 ? 's' : ''
       } (${sharedChans.map((c) => c.name).join(', ')}) — replies there stop sending from this address.`
     : undefined;
-  const needsVerifyMail = (cfg.tools ?? []).some(
-    (t) => (t as { identity?: boolean }).identity === true,
-  );
+  const needsVerifyMail = needsVerificationEmail(cfg);
   if (!needsVerifyMail || verified || enabled === false) return null;
   return (
     <div className="card" style={{ padding: 14, background: 'var(--panel-2)' }}>

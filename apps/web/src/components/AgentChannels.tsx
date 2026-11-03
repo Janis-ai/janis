@@ -34,6 +34,18 @@ export function effectiveEmailSending(
     : es;
 }
 
+/** True when the agent can fire send_verification_email — an identity-bound
+ *  customer-record tool is installed. Template defs stamp `identity`; the
+ *  commerce builtins (embedded Shopify, Stripe account tools, Cal.com)
+ *  enforce it server-side without appearing in config.tools. */
+const IDENTITY_BUILTIN = /^(shopify|stripe|zendesk|hubspot|salesforce|woo|cal)_/;
+export function needsVerificationEmail(cfg: Agent['config']): boolean {
+  return (
+    (cfg.tools ?? []).some((t) => (t as { identity?: boolean }).identity === true) ||
+    (cfg.builtin_tools ?? []).some((id) => IDENTITY_BUILTIN.test(id))
+  );
+}
+
 /** Agent-level sending identity — verification codes and other
  *  agent-originated customer mail send from the client's verified domain.
  *  Works with or without an email channel; shares the email channel's
@@ -57,9 +69,8 @@ function AgentEmailSending({ agent }: { agent: Agent }) {
   // Customer-record tools (order lookups etc.) email the shopper a 6-digit
   // code to prove who they are — if any are installed and no domain is
   // verified, that code still arrives as Janis. Nudge toward setup.
-  const needsVerifyMail = (agent.config.tools ?? []).some(
-    (t) => (t as { identity?: boolean }).identity === true,
-  );
+  const needsVerifyMail = needsVerificationEmail(agent.config);
+  const hasEmailChannel = (chData?.channels ?? []).some((c) => c.kind === 'email');
   const [fromName, setFromName] = useState(es.from_name ?? '');
   const [fromAddr, setFromAddr] = useState(es.from_address ?? '');
   const [msg, setMsg] = useState('');
@@ -78,6 +89,9 @@ function AgentEmailSending({ agent }: { agent: Agent }) {
   // Feature off on this deployment (platform Resend quota) — hide the whole
   // card unless a domain is already registered, so Remove stays reachable.
   if (enabled === false && !es.email_domain) return null;
+  // Pointless clutter otherwise: nothing on this agent sends customer email
+  // — no identity-bound tools, no email channel, no domain to manage.
+  if (!es.email_domain && !needsVerifyMail && !hasEmailChannel) return null;
   return (
     <div className="card" style={{ marginTop: 16 }}>
       <strong style={{ fontSize: 15 }}>Email sending</strong>
