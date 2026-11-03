@@ -1,5 +1,6 @@
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery } from '@tanstack/react-query';
+import { FlaskConical, Inbox, Settings } from 'lucide-react';
 import { MODEL_CATALOG, type Conversation } from '@janis/shared';
 import { api } from '../api/client';
 import { useAgents, useBuildStatus, useChannels } from '../api/hooks';
@@ -186,11 +187,7 @@ export default function AgentOverview() {
     <>
       <div className="row" style={{ alignItems: 'center' }}>
         <h1 className="page-title grow">{agent?.name ?? '…'}</h1>
-        {agent && (
-          <span className={`badge ${agent.hosted ? 'active' : agent.webhook_url ? '' : 'warn'}`}>
-            {agent.hosted ? 'hosted' : agent.webhook_url ? 'external' : 'unreachable'}
-          </span>
-        )}
+        {agent && !agent.hosted && !agent.webhook_url && <span className="badge warn">unreachable</span>}
         {/* Actions move to their own line as a unit instead of packing
             beside the title until it truncates. */}
         <div className="row" style={{ gap: 8, flexWrap: 'wrap', marginLeft: 'auto' }}>
@@ -198,32 +195,26 @@ export default function AgentOverview() {
           <button
             className="btn"
             disabled={testChat.isPending}
-            title="Chat with this agent in the side rail — real pipeline, test channel"
+            title={testChat.isPending ? 'Opening test chat…' : 'Test agent — chat in the side rail, real pipeline'}
+            aria-label="Test agent"
             onClick={() => testChat.mutate()}
           >
-            {testChat.isPending ? 'Opening…' : 'Test agent'}
+            <FlaskConical size={14} />
           </button>
         )}
-        <button className="btn" onClick={() => navigate(`/agents/${id}/inbox`)}>
-          Inbox
+        <button className="btn" title="Inbox" aria-label={`${agent?.name ?? 'Agent'} inbox`} onClick={() => navigate(`/agents/${id}/inbox`)}>
+          <Inbox size={14} />
         </button>
-        <button
-          className="btn primary"
-          title="Channels, widget, embed — put this agent to work"
-          onClick={() => navigate(`/agents/${id}/channels`)}
-        >
-          Channels
-        </button>
-        <button className="btn" onClick={() => navigate(`/agents/${id}/settings`)}>
-          Agent settings
+        <button className="btn" title="Agent settings" aria-label="Agent settings" onClick={() => navigate(`/agents/${id}/settings`)}>
+          <Settings size={14} />
         </button>
         </div>
       </div>
       <div className="muted" style={{ marginBottom: 12 }}>
         {summary
           ? `It will ${summary.replace(/[.\s]+$/, '')}.`
-          : cfg.purpose || (agent?.hosted ? 'hosted by Janis' : 'external webhook')}
-        {agent?.last_seen_at ? ` · last event ${timeAgo(agent.last_seen_at)}` : ''}
+          : cfg.purpose}
+        {agent?.last_seen_at ? `${summary || cfg.purpose ? ' · ' : ''}last event ${timeAgo(agent.last_seen_at)}` : ''}
       </div>
 
       {/* Lifecycle + build progress — Overview is the home you land on after
