@@ -222,3 +222,16 @@ if [ -n "$BAD" ]; then
   exit 1
 fi
 echo "Deployed: $BASE"
+
+# Prune gcr history — every build leaves a digest and gcr never expires
+# them (~$8/mo of dead digests accumulated before the 2026-11-02 manual
+# prune). Keep the newest 10: the serving image + rollback runway.
+# Best-effort — a failed prune must not fail a good deploy.
+OLD=$(gcloud container images list-tags "gcr.io/$PROJECT/$SERVICE" \
+  --project "$PROJECT" --format 'value(digest)' --sort-by ~timestamp 2>/dev/null \
+  | tail -n +11 | sed 's/^/sha256:/')
+if [ -n "$OLD" ]; then
+  echo "$OLD" | xargs -P 8 -n 10 -I{} sh -c \
+    'for d in {}; do gcloud container images delete "gcr.io/'"$PROJECT"'/'"$SERVICE"'@$d" \
+       --force-delete-tags --quiet --project '"$PROJECT"' 2>/dev/null; done' || true
+fi
