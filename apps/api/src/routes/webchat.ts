@@ -12,7 +12,7 @@ import { agents, agentWidgets, channelBindings, channels, conversations, helpArt
 import { SESSION_COOKIE } from '../middleware/sessionAuth.js';
 import { sha256 } from '../lib/crypto.js';
 import type { QuickReply } from '@janis/shared';
-import { mathToUnicode } from '@janis/shared';
+import { mathToUnicode, MODEL_CATALOG } from '@janis/shared';
 import type { ChannelCredentials, InboundMessage } from '../lib/channels.js';
 import { resolveGreeting } from '../lib/greeting.js';
 import { emitHookEvent } from '../lib/hooks.js';
@@ -75,7 +75,8 @@ async function transcribeAudio(
     ? env.llmModel
     : env.llmFallbackModel?.startsWith('gemini')
       ? env.llmFallbackModel
-      : '';
+      : (MODEL_CATALOG.find((m) => m.vendor === 'google' && !m.retired && m.id.includes('flash-lite')) ??
+         MODEL_CATALOG.find((m) => m.vendor === 'google' && !m.retired && m.id.startsWith('gemini')))?.id ?? '';
   const googleOk = googleKey && model && GEMINI_AUDIO.test(mime) && engine !== 'openai';
   if (googleOk) {
     const base = env.llmBaseUrl.includes('generativelanguage.googleapis.com')
