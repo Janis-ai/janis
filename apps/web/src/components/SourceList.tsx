@@ -461,8 +461,8 @@ export function SourceList({
           </div>
           <div className="row" style={{ marginTop: 12, gap: 8, alignItems: 'flex-start' }}>
             <div className="grow">
-              <div className="muted" style={{ fontSize: 15 }}>
-                <span className="drop-hint-full">Drop files anywhere on this panel, or </span>
+              <div className="muted drop-hint-full" style={{ fontSize: 15 }}>
+                Drop files anywhere on this panel, or{' '}
                 <button
                   style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontSize: 15, cursor: 'pointer', textDecoration: 'underline' }}
                   disabled={uploading}
