@@ -1138,6 +1138,13 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .sendas-opt:hover { background: var(--panel-2); }
 .sendas-opt .ck { margin-left: auto; color: var(--accent); }
 .sendas-on { color: var(--accent); }
+/* Suggest sparkles pressed-in while its card is open/generating — same
+   accent treatment as .filter-on/.verdict-on; .btn is defined later in
+   this file, so this needs the .btn.* form to out-specify it. */
+.btn.suggest-on {
+  border-color: var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
 .emoji-pop {
   position: absolute; bottom: calc(100% + 6px); left: 0; z-index: 10;
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;

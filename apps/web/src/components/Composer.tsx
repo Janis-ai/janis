@@ -12,6 +12,7 @@ export default function Composer({
   onResume,
   onTakeover,
   onSuggest,
+  suggestActive,
   sendAs,
   setSendAs,
   showModeSelect,
@@ -31,6 +32,8 @@ export default function Composer({
   onTakeover?: () => void;
   /** AI draft suggestion — lives in the bar as a sparkles icon. */
   onSuggest?: () => void;
+  /** Pressed-in look while the suggestion card is open or generating. */
+  suggestActive?: boolean;
   sendAs: 'human' | 'agent' | 'note' | 'teach';
   setSendAs: (m: 'human' | 'agent' | 'note' | 'teach') => void;
   showModeSelect: boolean;
@@ -223,7 +226,21 @@ export default function Composer({
             <button type="button" className="btn icon" title="Saved replies" aria-label="Saved replies" onClick={() => setRepliesOpen((o) => !o)}><FileText size={16} /></button>
           )}
           {onSuggest && (
-            <button type="button" className="btn icon" title="Suggest a reply" aria-label="Suggest a reply" onClick={onSuggest}><Sparkles size={16} /></button>
+            <button
+              type="button"
+              className={`btn icon${suggestActive && sendAs !== 'note' && sendAs !== 'teach' ? ' suggest-on' : ''}`}
+              title={
+                sendAs === 'note' || sendAs === 'teach'
+                  ? 'Suggestions apply to visitor replies'
+                  : 'Suggest a reply'
+              }
+              aria-label="Suggest a reply"
+              aria-pressed={suggestActive && sendAs !== 'note' && sendAs !== 'teach'}
+              disabled={sendAs === 'note' || sendAs === 'teach'}
+              onClick={onSuggest}
+            >
+              <Sparkles size={16} />
+            </button>
           )}
           <input
             ref={fileRef}

@@ -806,7 +806,10 @@ export default function ConversationPage() {
     const mid = alertAnchor.get(a.id);
     if (mid) msgAlert.set(mid, a);
   }
-  const canSend = c.state === 'human' || sendAs === 'agent' || sendAs === 'note' || sendAs === 'teach';
+  // Suggestions draft a VISITOR-FACING reply — they fit the human/agent
+  // reply modes (even before takeover), never an internal note or teach.
+  const canSuggest =
+    c.state !== 'archived' && (sendAs === 'human' || sendAs === 'agent');
   const canTeach = me?.user.role === 'admin';
 
   // Reconcile: an outbox entry drops once its server echo lands in the
@@ -1658,7 +1661,7 @@ export default function ConversationPage() {
 
         {error && <div className="error">{error}</div>}
 
-        {canSend && (suggestOpen || suggestions?.length > 0) && (
+        {canSuggest && (suggestOpen || suggestions?.length > 0) && (
           <div className="card suggestion">
             {suggestions?.length > 0 ? (
               <>
@@ -1721,7 +1724,12 @@ export default function ConversationPage() {
               pingTyping();
             }}
             onSend={send}
-            onSuggest={suggestOpen || suggestions?.length > 0 ? undefined : askSuggestion}
+            onSuggest={
+              suggestOpen || suggestions?.length > 0
+                ? () => { setSuggestOpen(false); void dismissSuggestions(); }
+                : askSuggestion
+            }
+            suggestActive={suggestOpen || (suggestions?.length ?? 0) > 0}
             onResume={c.state === 'human' ? () => act.mutate('resume') : undefined}
             onTakeover={
               c.state !== 'human'
@@ -1732,7 +1740,15 @@ export default function ConversationPage() {
                 : undefined
             }
             sendAs={sendAs}
-            setSendAs={setSendAs}
+            setSendAs={(m) => {
+              setSendAs(m);
+              // Notes/teaches have no visitor reply to suggest — an open
+              // card is dismissed, not just hidden behind the mode swap.
+              if (m === 'note' || m === 'teach') {
+                setSuggestOpen(false);
+                void dismissSuggestions();
+              }
+            }}
             showModeSelect={true}
             canTeach={canTeach}
             sending={outbox.some((o) => o.status === 'pending')}
