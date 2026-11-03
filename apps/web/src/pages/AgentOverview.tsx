@@ -186,11 +186,11 @@ export default function AgentOverview() {
     <>
       <h1 className="page-title ov-title">
         {agent?.name ?? '…'}
-        {/* inline-block: the whole meta moves to line 2 as a unit the moment
-            it can't sit beside the name — text never wraps mid-meta. */}
         <span className="muted ov-meta" style={{ fontSize: 13, fontWeight: 400 }}>
-          {channels.length > 0 && ` · ${[...new Set(channels.map((c) => KIND_LABEL[c.kind] ?? c.name))].join(', ')}`}
-          {` · ${agent?.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}`}
+          {[
+            ...(channels.length ? [[...new Set(channels.map((c) => KIND_LABEL[c.kind] ?? c.name))].join(', ')] : []),
+            agent?.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet',
+          ].join(' · ')}
         </span>
         {agent && !agent.hosted && !agent.webhook_url && <span className="badge warn" style={{ marginLeft: 8 }}>unreachable</span>}
         {/* The float lands right-aligned on the text's last line — one line
