@@ -3851,6 +3851,11 @@ export async function complete(
           continue;
         }
         if (res.ok) break;
+        // Surface upstream failures in logs — silent retries make a bad
+        // model/endpoint invisible (a 404 model_not_found burns until the
+        // fallback rescues it with no trace of the offending id).
+        if (res.status !== 429 && res.status < 500)
+          console.warn('[llm] upstream', res.status, cand.model, cand.baseUrl);
         // Gemini 3 requires echoed thought_signatures on functionCall parts;
         // when the shim omits one, the round-trip is a permanent 400. Flatten
         // the tool turns into a plain assistant note and retry once.
