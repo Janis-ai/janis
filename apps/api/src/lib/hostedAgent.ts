@@ -2935,7 +2935,9 @@ export function applyVerifiedAnchors(
   args: Record<string, unknown>,
   identity?: { emails: Set<string>; operator: boolean; ids?: Set<string> },
 ): void {
-  const tpl = tool.bodyTemplate ?? '';
+  // Scan the url too — GET tools carry the anchor in the path/query
+  // (woo_lookup_order's ?verified_email={email}), not a body template.
+  const tpl = `${tool.bodyTemplate ?? ''}\n${tool.url ?? ''}`;
   const cid =
     identity?.ids && identity.ids.size === 1 ? [...identity.ids][0] : undefined;
   if (cid && tpl.includes('{customer_id')) {

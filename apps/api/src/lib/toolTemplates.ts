@@ -472,10 +472,14 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         description:
           'Look up a WooCommerce order by its numeric id for the VERIFIED customer — returns status, line items, totals, shipping/billing and tracking meta when present. The customer must be verified first: signed-in shopper, email-channel sender, or send_verification_email + check_verification_code — and the billing.email on the result must match the verified customer; if it doesn\'t, it\'s not their order — say so, never reveal its contents.',
         method: 'GET',
-        url: 'https://{{secrets.WOO_HOST}}/wp-json/wc/v3/orders/{order_id}',
+        // verified_email rides as an ignored query param — it exists purely
+        // as the identity anchor the gate binds the verified address into.
+        url: 'https://{{secrets.WOO_HOST}}/wp-json/wc/v3/orders/{order_id}?verified_email={email}',
         headers: { authorization: 'Basic {{secrets.WOO_AUTH}}' },
         params: {
           order_id: 'the numeric order number the customer gave, e.g. 1042',
+          'email?':
+            'optional — a VERIFIED customer address; the verified identity binds automatically for signed-in/code-verified customers, so omit it unless the customer proved a different address',
         },
         identity: true,
       },
