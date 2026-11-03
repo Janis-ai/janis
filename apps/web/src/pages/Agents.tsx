@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { Inbox, Settings, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import { useAgents, useChannels, useMe } from '../api/hooks';
 import { timeAgo } from '../components/bits';
@@ -87,41 +88,35 @@ export default function Agents() {
                   )}
                 </div>
               </div>
-              <span
-                className={`badge ${
-                  engine === 'monitor' ? 'warn' : agent.hosted ? 'active' : agent.webhook_url ? '' : 'warn'
-                }`}
-              >
-                {engine === 'dialogflow'
-                  ? 'dialogflow'
-                  : engine === 'monitor'
-                    ? 'monitor'
-                    : agent.hosted
-                      ? 'hosted'
-                      : agent.webhook_url
-                        ? 'external'
-                        : 'unreachable'}
-              </span>
+              {(engine === 'monitor' || (!agent.hosted && !agent.webhook_url && engine !== 'dialogflow')) && (
+                <span className="badge warn">{engine === 'monitor' ? 'monitor' : 'unreachable'}</span>
+              )}
               <button
                 className="btn"
+                title="Inbox"
+                aria-label={`${agent.name} inbox`}
                 onClick={() => navigate(`/agents/${agent.id}/inbox`)}
               >
-                Inbox
+                <Inbox size={14} />
               </button>
               <button
                 className="btn"
+                title="Manage"
+                aria-label={`Manage ${agent.name}`}
                 onClick={() => navigate(`/agents/${agent.id}`)}
               >
-                Manage
+                <Settings size={14} />
               </button>
               {isAdmin && (
                 <button
                   className="btn danger"
+                  title="Delete"
+                  aria-label={`Delete ${agent.name}`}
                   onClick={async () => {
                     if (await confirm(`Delete agent "${agent.name}"? Its channels, conversations, and settings are removed.`, [{ key: 'ok', label: 'Delete', danger: true }])) removeAgent.mutate(agent.id);
                   }}
                 >
-                  Delete
+                  <Trash2 size={14} />
                 </button>
               )}
             </div>
