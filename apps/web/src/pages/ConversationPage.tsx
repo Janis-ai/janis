@@ -18,7 +18,7 @@ import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { Bot, Brain, ChevronLeft, FlaskConical, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
+import { BookmarkPlus, Bot, Brain, ChevronLeft, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -1077,7 +1077,7 @@ export default function ConversationPage() {
               aria-label="Save this transcript as a scenario"
               onClick={() => setTestSaveOpen((v) => !v)}
             >
-              <FlaskConical size={15} />
+              <BookmarkPlus size={15} />
               <span className="btn-label">Save as scenario</span>
             </button>
           )}
