@@ -35,6 +35,9 @@ export interface CatalogModel {
   /** Reasoning-effort levels the model accepts (omit = non-reasoning
    *  model — effort params are never sent). */
   efforts?: LlmEffort[];
+  /** Vendor retired the model — calls 404 even though /models may still
+   *  list it. Kept for historical pricing/rate display, never offered. */
+  retired?: boolean;
 }
 
 /** OpenRouter prefixes model ids by vendor slug. */
@@ -102,9 +105,9 @@ export const MODEL_CATALOG: CatalogModel[] = [
   { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', vendor: 'google', ctx: M1, efforts: REASONING, price: { input: 2, output: 12, cached: 0.2 } },
   { id: 'gemini-3.1-flash-lite', name: 'Gemini 3.1 Flash-Lite', vendor: 'google', ctx: M1, efforts: REASONING, price: { input: 0.25, output: 1.5, cached: 0.025 } },
   { id: 'gemini-3-flash', name: 'Gemini 3 Flash', vendor: 'google', ctx: M1, efforts: REASONING, price: { input: 0.3, output: 2.5, cached: 0.03 } },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', vendor: 'google', ctx: M1, efforts: REASONING, price: { input: 1.25, output: 10, cached: 0.31 } },
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', vendor: 'google', ctx: M1, efforts: REASONING, price: { input: 0.3, output: 2.5, cached: 0.075 } },
-  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash-Lite', vendor: 'google', ctx: M1, efforts: REASONING, price: { input: 0.1, output: 0.4, cached: 0.01 } },
+  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', vendor: 'google', ctx: M1, efforts: REASONING, retired: true, price: { input: 1.25, output: 10, cached: 0.31 } },
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', vendor: 'google', ctx: M1, efforts: REASONING, retired: true, price: { input: 0.3, output: 2.5, cached: 0.075 } },
+  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash-Lite', vendor: 'google', ctx: M1, efforts: REASONING, retired: true, price: { input: 0.1, output: 0.4, cached: 0.01 } },
   // --- xAI ---
   { id: 'grok-4.6', name: 'Grok 4.6 (beta)', vendor: 'xai', ctx: 256_000, efforts: ['low', 'high'] },
   { id: 'grok-4.5', name: 'Grok 4.5', vendor: 'xai', ctx: 256_000, efforts: ['low', 'high'], price: { input: 3, output: 15 } },

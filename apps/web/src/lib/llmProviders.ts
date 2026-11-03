@@ -158,7 +158,7 @@ export function catalogPrefixFor(id: string): CatalogModel | undefined {
 
 /** Picker options straight from the catalog — optionally vendor-scoped. */
 export function catalogOptions(vendors?: LlmVendor[]): ModelOption[] {
-  return MODEL_CATALOG.filter((m) => !vendors || vendors.includes(m.vendor)).map((m) => ({
+  return MODEL_CATALOG.filter((m) => !m.retired && (!vendors || vendors.includes(m.vendor))).map((m) => ({
     id: m.id,
     name: m.name,
     vendor: m.vendor,
