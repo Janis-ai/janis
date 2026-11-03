@@ -18,6 +18,7 @@ import {
   type ResendDnsRecord,
 } from './resendDomains.js';
 import { detectDnsSetup } from './dnsSetup.js';
+import { sendEmail } from './notify.js';
 
 /**
  * Custom sending domain (Resend-verified) — the route family an email-domain
@@ -155,9 +156,16 @@ export function mountEmailDomainRoutes(
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         // Resend's raw "your plan" message reads as the customer's plan —
-        // it's actually the platform account's domain quota.
-        if (/domain limit/i.test(msg))
+        // it's actually the platform account's domain quota. No upgrade
+        // API exists — page ops so the cap gets raised before the next try.
+        if (/domain limit/i.test(msg)) {
+          void sendEmail(
+            [env.opsNotifyEmail],
+            'Resend domain cap hit — upgrade the account',
+            `A workspace tried to register "${domain}" and Resend refused at the account's domain limit. The account needs a plan bump (Pro/Scale or the +100-domain add-on) — there's no API for it, this is a dashboard action.`,
+          ).catch(() => {});
           return c.json({ error: 'custom sending domains are temporarily unavailable — try again later' }, 503);
+        }
         return c.json({ error: `resend: ${msg}` }, 502);
       }
       const next = {
