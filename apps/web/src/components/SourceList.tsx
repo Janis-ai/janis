@@ -457,6 +457,18 @@ export function SourceList({
             />
           </div>
           <div className="row" style={{ marginTop: 10, gap: 8, alignItems: 'center' }}>
+            <span className="muted grow" style={{ fontSize: 15 }}>
+              Links become website sources — anything else saves as a note.
+              Drop files anywhere on this panel, or{' '}
+              <button
+                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontSize: 15, cursor: 'pointer', textDecoration: 'underline' }}
+                disabled={uploading}
+                onClick={() => fileRef.current?.click()}
+              >
+                {uploading ? 'uploading…' : 'browse files'}
+              </button>
+              .
+            </span>
             <button
               className="btn"
               title="Upload files (PDF, text, markdown…)"
@@ -466,18 +478,6 @@ export function SourceList({
             >
               <Paperclip size={14} />
             </button>
-            <span className="muted" style={{ fontSize: 13 }}>
-              Links become website sources — anything else saves as a note.
-              Drop files anywhere on this panel, or{' '}
-              <button
-                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontSize: 13, cursor: 'pointer', textDecoration: 'underline' }}
-                disabled={uploading}
-                onClick={() => fileRef.current?.click()}
-              >
-                {uploading ? 'uploading…' : 'browse files'}
-              </button>
-              .
-            </span>
           </div>
           {importMsg && !error && (
             <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{importMsg}</div>
