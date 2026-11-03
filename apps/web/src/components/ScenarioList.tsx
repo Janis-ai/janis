@@ -184,7 +184,7 @@ export function ScenarioList({
         <ChevronsDownUp size={13} /> <span className="save-label">Collapse</span>
       </button>
       <label className="row" style={{ gap: 4 }}>
-        <select value={sort} title="Sort order" aria-label="Sort order" onChange={(e) => applySort(e.target.value as Sort)}>
+        <select value={sort} title="Sort order" aria-label="Sort order" style={{ padding: '5px 12px' }} onChange={(e) => applySort(e.target.value as Sort)}>
           <option value="attention">attention first</option>
           <option value="newest">newest</option>
           <option value="oldest">oldest</option>

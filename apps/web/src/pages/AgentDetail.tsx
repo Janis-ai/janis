@@ -5507,6 +5507,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
             <select
               value={agent.config?.eval_interval_hours ?? 0}
               disabled={setSchedule.isPending}
+              style={{ padding: '5px 12px' }}
               onChange={(e) => setSchedule.mutate(Number(e.target.value))}
             >
               <option value={0}>off</option>
