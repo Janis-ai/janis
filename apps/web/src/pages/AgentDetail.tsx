@@ -18,7 +18,7 @@ import { EmailDomainCard, useEmailDomainEnabled } from '../components/Channels';
 import { MemberGroups } from '../components/MemberGroups';
 import { MemberCell, TeamRow, TeamTable, teamTd } from '../components/TeamTable';
 import { SourceList } from '../components/SourceList';
-import { AutosizeText, timeAgo } from '../components/bits';
+import { AutosizeText, MenuSelect, timeAgo } from '../components/bits';
 import { SlackChannelSelect } from '../components/SlackChannelSelect';
 import { LlmEditor, type LlmBlock } from '../components/LlmEditor';
 import { ModelPicker } from '../components/ModelPicker';
@@ -5498,28 +5498,18 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           )}
         </div>
         {tests.length > 0 && (
-          <>
-            <span
-              className="muted save-label"
-              style={{ fontSize: 12, whiteSpace: 'nowrap' }}
-              title="Replay the suite on a schedule — the workspace is alerted when a run regresses"
-            >
-              Auto-run
-            </span>
-            <select
-              value={agent.config?.eval_interval_hours ?? 0}
-              disabled={setSchedule.isPending}
-              aria-label="Auto-run schedule"
-              title="Replay the suite on a schedule — the workspace is alerted when a run regresses"
-              style={{ padding: '5px 12px' }}
-              onChange={(e) => setSchedule.mutate(Number(e.target.value))}
-            >
-              <option value={0}>off</option>
-              <option value={6}>every 6h</option>
-              <option value={24}>daily</option>
-              <option value={168}>weekly</option>
-            </select>
-          </>
+          <MenuSelect
+            value={agent.config?.eval_interval_hours ?? 0}
+            label="Auto-run"
+            title="Replay the suite on a schedule — the workspace is alerted when a run regresses"
+            options={[
+              { value: 0, label: 'manual' },
+              { value: 6, label: 'every 6h' },
+              { value: 24, label: 'daily' },
+              { value: 168, label: 'weekly' },
+            ]}
+            onChange={(v) => setSchedule.mutate(v)}
+          />
         )}
         {tests.length > 0 && (
           <button

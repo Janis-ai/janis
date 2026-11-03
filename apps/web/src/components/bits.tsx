@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ImgHTMLAttributes, type InputHTMLAttributes } from 'react';
 import { Link } from 'react-router-dom';
+import { ChevronDown } from 'lucide-react';
 import type { Conversation, ConversationState, UserProfile } from '@janis/shared';
 import { friendlyName } from '@janis/shared';
 import { currentTheme, THEME_CHANGE_EVENT } from '../lib/theme';
@@ -427,5 +428,60 @@ export function AutosizeText(props: { value: string; placeholder: string; onChan
       onChange={(e) => props.onChange(e.target.value)}
       onInput={grow}
     />
+  );
+}
+
+/** Compact dropdown built on .menu-pop — replaces native <select> in
+ *  toolbars (the OS popup lands wherever it wants in flex rows; this
+ *  anchors under the trigger). The optional muted `label` prefix keeps
+ *  bare values like 'off' readable when the control's name isn't shown. */
+export function MenuSelect<T extends string | number>({
+  value,
+  options,
+  onChange,
+  label,
+  title,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (v: T) => void;
+  label?: string;
+  title?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const cur = options.find((o) => o.value === value);
+  return (
+    <span className="src-menu-wrap">
+      <button
+        type="button"
+        className="btn sm"
+        title={title}
+        aria-label={title}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {label && <span className="muted">{label}&nbsp;</span>}
+        {cur?.label} <ChevronDown size={12} style={{ verticalAlign: '-2px' }} />
+      </button>
+      {open && (
+        <>
+          <div className="menu-backdrop" onClick={() => setOpen(false)} />
+          <div className="menu-pop">
+            {options.map((o) => (
+              <button
+                key={String(o.value)}
+                type="button"
+                onClick={() => {
+                  onChange(o.value);
+                  setOpen(false);
+                }}
+              >
+                {o.value === value ? '✓ ' : ''}
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </span>
   );
 }

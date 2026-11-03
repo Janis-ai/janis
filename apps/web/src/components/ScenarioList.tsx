@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ScenarioTest } from './ScenarioRow';
 import { ChevronsDownUp, ChevronsUpDown, Trash2 } from 'lucide-react';
+import { MenuSelect } from './bits';
 import { REVEAL_SCENARIO } from '../lib/scenarioRing';
 
 /** The scenario suite — shared list chrome for the builder's Try-it
@@ -183,11 +184,16 @@ export function ScenarioList({
       >
         <ChevronsDownUp size={13} /> <span className="save-label">Collapse</span>
       </button>
-      <select value={sort} title="Sort order" aria-label="Sort order" style={{ padding: '5px 12px' }} onChange={(e) => applySort(e.target.value as Sort)}>
-        <option value="attention">attention first</option>
-        <option value="newest">newest</option>
-        <option value="oldest">oldest</option>
-      </select>
+      <MenuSelect
+        value={sort}
+        title="Sort order"
+        options={[
+          { value: 'attention', label: 'attention first' },
+          { value: 'newest', label: 'newest' },
+          { value: 'oldest', label: 'oldest' },
+        ]}
+        onChange={applySort}
+      />
     </div>
   );
 
