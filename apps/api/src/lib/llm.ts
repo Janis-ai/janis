@@ -187,8 +187,11 @@ export async function effectiveMeteredModel(
     ...(await workspaceLlm(db, workspaceId)),
     ...(((config ?? {}) as { llm?: LlmConfigBlock }).llm ?? {}),
   };
-  const byok = llm.api_key || llm.base_url || (llm.provider && llm.provider !== 'janis');
-  return byok ? null : llm.model || env.llmModel;
+  // provider:'janis' is authoritative — stale api_key/base_url kept for
+  // BYOK switching convenience don't turn the agent BYOK (same rule
+  // meteredModelOf/llmFor use).
+  const metered = llm.provider === 'janis' || (!llm.api_key && !llm.base_url && !llm.provider);
+  return metered ? llm.model || env.llmModel : null;
 }
 
 /** Per-agent LLM config: agent override over workspace default over env
