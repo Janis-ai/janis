@@ -5498,15 +5498,19 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
           )}
         </div>
         {tests.length > 0 && (
-          <label
-            className="row"
-            style={{ gap: 4, fontSize: 12, whiteSpace: 'nowrap' }}
-            title="Replay the suite on a schedule — the workspace is alerted when a run regresses"
-          >
-            <span className="muted">Auto-run</span>
+          <>
+            <span
+              className="muted save-label"
+              style={{ fontSize: 12, whiteSpace: 'nowrap' }}
+              title="Replay the suite on a schedule — the workspace is alerted when a run regresses"
+            >
+              Auto-run
+            </span>
             <select
               value={agent.config?.eval_interval_hours ?? 0}
               disabled={setSchedule.isPending}
+              aria-label="Auto-run schedule"
+              title="Replay the suite on a schedule — the workspace is alerted when a run regresses"
               style={{ padding: '5px 12px' }}
               onChange={(e) => setSchedule.mutate(Number(e.target.value))}
             >
@@ -5515,7 +5519,7 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
               <option value={24}>daily</option>
               <option value={168}>weekly</option>
             </select>
-          </label>
+          </>
         )}
         {tests.length > 0 && (
           <button
@@ -5534,8 +5538,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
         >
           <Upload size={14} />
         </button>
-        <button className="btn sm" onClick={() => setNewOpen(true)}>
-          + New
+        <button className="btn sm" aria-label="New scenario" title="New scenario" onClick={() => setNewOpen(true)}>
+          + <span className="save-label">New</span>
         </button>
         {tests.length > 0 && (
           <button
