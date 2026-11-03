@@ -372,6 +372,11 @@ is a day on launch)*
     + Graph setVerifiedPublisher both error ("temporary problem" /
     body-not-parsed — known backend bug); retry pane periodically,
     Partner Center support ticket if still failing 2026-11-04+.
+    Remaining audits: confirm both https://www.janis.ai/outlook/callback
+    and https://app.janis.ai/outlook/callback in the new app's
+    Authentication blade (Overview showed 3 web URIs), and re-consent
+    each connected mailbox once — old-app refresh tokens are dead,
+    channels re-link by email_address on reconnect.
 13. DONE (per Mike 2026-10-29) — LLM pro accounts funded/raised-tier for
     platform-hosted inference. Re-up mechanism = ops alert, not auto-
     reload: first time a workspace pins an agent to a non-default vendor,
