@@ -902,18 +902,15 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .card { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
 .card + .card { margin-top: 12px; }
 
-.agent-list { margin-top: 24px; display: flex; flex-direction: column; gap: 16px; container-type: inline-size; }
+.agent-list { margin-top: 24px; display: flex; flex-direction: column; gap: 16px; }
 .agent-list .card { margin-top: 0; }
 .agent-card.alt { background: var(--panel-alt); }
-/* Side-by-side only works when the meta column stays readable — when the
-   row is too narrow to hold it next to the controls, the name/meta takes
-   the full first row and the badge + buttons wrap beneath, right-aligned. */
-@container (max-width: 640px) {
-  /* column-gap 8px keeps badge+3 buttons on one wrapped row at ~390px;
-     .agent-list scope needed — .row's later gap shorthand would win ties. */
-  .agent-list .agent-row { justify-content: flex-end; column-gap: 8px; }
-  .agent-list .agent-row > .grow { flex-basis: 100%; }
-}
+/* Agent card: actions pin top-right of the row; the name scales/truncates
+   to avoid overlap (measured in JS — see Agents.tsx) and the meta wraps
+   inside the padded main column. */
+.agent-row { position: relative; }
+.agent-actions { position: absolute; top: 50%; right: 14px; transform: translateY(-50%); display: flex; align-items: center; gap: 8px; }
+.agent-name-line { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Agent overview head: title row 1 with actions top-aligned to it; the
    meta is always the second row. When the title would overlap the
    buttons (.ov-tight, measured in JS — flips both ways on resize), the

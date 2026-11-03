@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Gauge, Inbox, Trash2 } from 'lucide-react';
@@ -27,6 +27,42 @@ export default function Agents() {
 
   const refresh = () => void qc.invalidateQueries({ queryKey: ['agents'] });
 
+  // Per-row layout, same as the overview head: buttons pin top-right;
+  // the name scales down (floor 13) to avoid overlap, then the name-line
+  // ellipsis truncates. Measured per row via one ResizeObserver.
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    const range = document.createRange();
+    const check = () => {
+      el.querySelectorAll<HTMLElement>('.agent-row').forEach((row) => {
+        const main = row.querySelector<HTMLElement>('.agent-main');
+        const t = row.querySelector<HTMLElement>('.agent-name');
+        const line = row.querySelector<HTMLElement>('.agent-name-line');
+        const a = row.querySelector<HTMLElement>('.agent-actions');
+        if (!main || !t || !line || !a) return;
+        t.style.fontSize = '';
+        // clientWidth of the padded main feeds back into itself — measure
+        // the row and subtract card padding + the actions column.
+        const cs = getComputedStyle(row);
+        const avail = row.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - a.offsetWidth - 10;
+        const base = parseFloat(getComputedStyle(t).fontSize);
+        range.selectNodeContents(t);
+        const need = range.getBoundingClientRect().width;
+        if (need > avail) {
+          t.style.fontSize = `${Math.max(13, Math.min(base, Math.floor((base * avail) / need)))}px`;
+        }
+        line.style.maxWidth = `${avail}px`;
+        main.style.paddingRight = `${a.offsetWidth + 12}px`;
+      });
+    };
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    check();
+    return () => ro.disconnect();
+  }, [data?.agents.length, channelsData?.channels.length]);
+
   const removeAgent = useMutation({
     mutationFn: (id: string) => api(`/api/agents/${id}`, { method: 'DELETE' }),
     onSuccess: refresh,
@@ -49,7 +85,7 @@ export default function Agents() {
 
       {error && <div className="error">{error}</div>}
 
-      <div className="agent-list">
+      <div className="agent-list" ref={listRef}>
         {[...(data?.agents ?? [])]
           .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
           .map((agent) => {
@@ -62,12 +98,17 @@ export default function Agents() {
               className="card row agent-row"
               style={{ alignItems: 'center' }}
             >
-              <div className="grow" style={{ minWidth: 0 }}>
-                <div style={{ fontWeight: 700 }}>
-                  {agent.name}
+              <div className="grow agent-main" style={{ minWidth: 0 }}>
+                <div className="agent-name-line" style={{ fontWeight: 700 }}>
+                  <span className="agent-name">{agent.name}</span>
                   {migrated && (
                     <span className="badge" style={{ marginLeft: 8, verticalAlign: 'middle' }}>
                       migrated
+                    </span>
+                  )}
+                  {(engine === 'monitor' || (!agent.hosted && !agent.webhook_url && engine !== 'dialogflow')) && (
+                    <span className="badge warn" style={{ marginLeft: 8, verticalAlign: 'middle' }}>
+                      {engine === 'monitor' ? 'monitor' : 'unreachable'}
                     </span>
                   )}
                 </div>
@@ -82,9 +123,7 @@ export default function Agents() {
                   )}
                 </div>
               </div>
-              {(engine === 'monitor' || (!agent.hosted && !agent.webhook_url && engine !== 'dialogflow')) && (
-                <span className="badge warn">{engine === 'monitor' ? 'monitor' : 'unreachable'}</span>
-              )}
+              <div className="agent-actions">
               <button
                 className="btn"
                 title="Inbox"
@@ -113,6 +152,7 @@ export default function Agents() {
                   <Trash2 size={14} />
                 </button>
               )}
+              </div>
             </div>
           );
         })}
