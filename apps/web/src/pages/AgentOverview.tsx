@@ -132,7 +132,20 @@ export default function AgentOverview() {
       const t = el.querySelector<HTMLElement>('.ov-name');
       const a = el.querySelector<HTMLElement>('.ov-actions');
       if (!t || !a) return;
-      el.classList.toggle('ov-tight', t.offsetWidth + a.offsetWidth + 10 > el.clientWidth);
+      // Scale the title down to keep the buttons top-aligned; below the
+      // floor it stops looking like a title, so the buttons drop instead.
+      t.style.fontSize = '';
+      const avail = el.clientWidth - a.offsetWidth - 10;
+      const base = parseFloat(getComputedStyle(t).fontSize);
+      const need = t.scrollWidth;
+      if (need > avail) {
+        const scaled = Math.floor((base * avail) / need);
+        if (scaled >= 14) t.style.fontSize = `${scaled}px`;
+      }
+      const fits = t.scrollWidth <= avail;
+      el.classList.toggle('ov-tight', !fits);
+      el.style.paddingRight = fits ? `${a.offsetWidth + 12}px` : '0';
+      if (!fits) t.style.fontSize = '';
     };
     const ro = new ResizeObserver(check);
     ro.observe(el);
