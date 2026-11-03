@@ -123,9 +123,24 @@ export async function searchVoiceNumbers(
   country: string,
   opts: { areaCode?: string; contains?: string } = {},
 ): Promise<AvailableNumber[]> {
+  return searchNumbers(country, { ...opts, capability: 'VoiceEnabled' });
+}
+
+/** Search buyable SMS-capable numbers on the master account. */
+export async function searchSmsNumbers(
+  country: string,
+  opts: { areaCode?: string; contains?: string } = {},
+): Promise<AvailableNumber[]> {
+  return searchNumbers(country, { ...opts, capability: 'SmsEnabled' });
+}
+
+async function searchNumbers(
+  country: string,
+  opts: { areaCode?: string; contains?: string; capability: 'VoiceEnabled' | 'SmsEnabled' },
+): Promise<AvailableNumber[]> {
   const master = hostedVoiceCreds();
   if (!master) throw new Error('hosted voice is not configured');
-  const qs = new URLSearchParams({ VoiceEnabled: 'true', PageSize: '20' });
+  const qs = new URLSearchParams({ [opts.capability]: 'true', PageSize: '20' });
   if (opts.areaCode) qs.set('AreaCode', opts.areaCode);
   if (opts.contains) qs.set('Contains', opts.contains);
   const data = await twilioApi(
@@ -206,4 +221,107 @@ export async function deprovisionVoiceNumber(subSid: string, numberSid?: string)
     method: 'POST',
     params: { Status: 'closed' },
   }).catch(() => {});
+}
+
+/** Messaging API lives on messaging.twilio.com — same Basic auth +
+ * form-encoded pattern as twilioApi, different host. */
+async function messagingApi(
+  sid: string,
+  token: string,
+  path: string,
+  opts: { method?: string; params?: Record<string, string> } = {},
+): Promise<Record<string, unknown>> {
+  const res = await fetch(`https://messaging.twilio.com${path}`, {
+    method: opts.method ?? 'GET',
+    headers: {
+      authorization: `Basic ${Buffer.from(`${sid}:${token}`).toString('base64')}`,
+      ...(opts.params ? { 'content-type': 'application/x-www-form-urlencoded' } : {}),
+    },
+    ...(opts.params ? { body: new URLSearchParams(opts.params).toString() } : {}),
+  });
+  if (res.status === 404 && opts.method === 'DELETE') return {};
+  const data = (await res.json().catch(() => ({}))) as Record<string, unknown> & TwilioError;
+  if (!res.ok) {
+    const err = new Error(data.message ?? `twilio messaging ${res.status}`) as Error & TwilioError;
+    err.code = data.code;
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+/**
+ * Provision a hosted SMS number: bought ON the master account (not a
+ * subaccount — subaccount numbers can't join the parent's messaging
+ * service, and only numbers inside a campaign-linked service get
+ * carrier-registered A2P treatment) with the inbound webhook prewired,
+ * then enrolled in the A2P messaging service. Channel creds are the
+ * master creds — same as the shared platform SMS number.
+ */
+export async function provisionSmsNumber(
+  channelId: string,
+  phoneNumber: string,
+): Promise<{ number: string; numberSid: string }> {
+  const master = hostedVoiceCreds();
+  if (!master) throw new Error('hosted sms is not configured');
+  if (!env.twilioMessagingServiceSid) {
+    throw new Error('no A2P messaging service configured (TWILIO_MESSAGING_SERVICE_SID)');
+  }
+
+  const bought = await twilioApi(
+    master.sid,
+    master.token,
+    `/Accounts/${master.sid}/IncomingPhoneNumbers.json`,
+    {
+      method: 'POST',
+      params: {
+        PhoneNumber: phoneNumber,
+        SmsUrl: `${env.apiOrigin}/sms/${channelId}`,
+        SmsMethod: 'POST',
+      },
+    },
+  );
+  const numberSid = bought.sid as string;
+  if (!numberSid) throw new Error('twilio: number purchase returned no sid');
+
+  try {
+    await messagingApi(
+      master.sid,
+      master.token,
+      `/v1/Services/${env.twilioMessagingServiceSid}/PhoneNumbers`,
+      { method: 'POST', params: { PhoneNumberSid: numberSid } },
+    );
+  } catch (err) {
+    // Not in the service = unregistered A2P = carrier-filtered sends —
+    // don't leave a billed number behind.
+    await twilioApi(
+      master.sid,
+      master.token,
+      `/Accounts/${master.sid}/IncomingPhoneNumbers/${numberSid}.json`,
+      { method: 'DELETE' },
+    ).catch(() => {});
+    throw err;
+  }
+  return { number: phoneNumber, numberSid };
+}
+
+/** Release a hosted SMS channel's number (drops out of the messaging
+ *  service with it; the explicit remove is belt-and-suspenders). */
+export async function deprovisionSmsNumber(numberSid?: string): Promise<void> {
+  const master = hostedVoiceCreds();
+  if (!master || !numberSid) return;
+  if (env.twilioMessagingServiceSid) {
+    await messagingApi(
+      master.sid,
+      master.token,
+      `/v1/Services/${env.twilioMessagingServiceSid}/PhoneNumbers/${numberSid}`,
+      { method: 'DELETE' },
+    ).catch(() => {});
+  }
+  await twilioApi(
+    master.sid,
+    master.token,
+    `/Accounts/${master.sid}/IncomingPhoneNumbers/${numberSid}.json`,
+    { method: 'DELETE' },
+  ).catch(() => {});
 }

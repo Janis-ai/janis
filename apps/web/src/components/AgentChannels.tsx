@@ -465,28 +465,63 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     onError: (e) => setError(e.message),
   });
 
-  // SMS — clone a voice channel's number/creds (from_voice_channel_id), or
-  // BYO Twilio account sid + token + SMS-capable number.
+  // SMS — clone a voice channel's number/creds (from_voice_channel_id),
+  // Janis-hosted number (A2P-registered), or BYO Twilio account.
   const [smsForm, setSmsForm] = useState({ sid: '', token: '', number: '' });
+  const [smsMode, setSmsMode] = useState<'hosted' | 'byo'>('hosted');
+  const smsHostedFree = smsMode === 'hosted' && plan === 'free';
+  const [smsAreaCode, setSmsAreaCode] = useState('');
+  const [smsNumbers, setSmsNumbers] = useState<
+    { phone_number: string; friendly_name: string; locality?: string; region?: string }[] | null
+  >(null);
+  const [smsHostedConfigured, setSmsHostedConfigured] = useState(true);
+  const [smsPicked, setSmsPicked] = useState('');
+  const searchSmsNumbers = useMutation({
+    mutationFn: () =>
+      api<{ configured: boolean; paid: boolean; numbers: typeof smsNumbers }>(
+        `/api/channels/sms-numbers?area_code=${encodeURIComponent(smsAreaCode)}`,
+      ),
+    onSuccess: (r) => {
+      if (!r.configured) {
+        setSmsHostedConfigured(false);
+        setSmsMode('byo');
+        setError('Hosted numbers are not enabled on this deployment — use your own Twilio creds.');
+        return;
+      }
+      if (r.paid === false) {
+        setSmsNumbers([]);
+        setError('Hosted numbers need a paid plan — upgrade on the Billing page, or use your own Twilio creds below.');
+        return;
+      }
+      setSmsNumbers(r.numbers);
+      setSmsPicked(r.numbers?.[0]?.phone_number ?? '');
+      setError('');
+    },
+    onError: (e) => setError(e.message),
+  });
   const createSms = useMutation({
-    mutationFn: (fromVoiceId?: string) =>
+    mutationFn: (opts: { fromVoiceId?: string; hosted?: boolean } = {}) =>
       api<{ channel: Channel }>('/api/channels', {
         method: 'POST',
         body: JSON.stringify({
           kind: 'sms',
           name: `${agent.name} SMS`,
           agent_id: agentId,
-          ...(fromVoiceId
-            ? { from_voice_channel_id: fromVoiceId }
-            : {
-                twilio_account_sid: smsForm.sid,
-                twilio_auth_token: smsForm.token,
-                phone_number: smsForm.number,
-              }),
+          ...(opts.fromVoiceId
+            ? { from_voice_channel_id: opts.fromVoiceId }
+            : opts.hosted
+              ? { hosted: true, phone_number: smsPicked }
+              : {
+                  twilio_account_sid: smsForm.sid,
+                  twilio_auth_token: smsForm.token,
+                  phone_number: smsForm.number,
+                }),
         }),
       }),
     onSuccess: (r) => {
       setSmsForm({ sid: '', token: '', number: '' });
+      setSmsNumbers(null);
+      setSmsPicked('');
       setError('');
       void qc.invalidateQueries({ queryKey: ['channels'] });
       void qc.invalidateQueries({ queryKey: ['build-status'] });
@@ -1193,7 +1228,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
               <summary>
                 <span className="details-title">SMS — text messaging{sTag && <> — {sTag}</>}</span>
                 <span className="details-sub">
-                  needs: a Twilio number — texts to it become conversations here
+                  needs: nothing (hosted provisions a number) or your Twilio account — texts to
+                  it become conversations here
                 </span>
               </summary>
               {!me?.twilio_channels_live ? (
@@ -1218,7 +1254,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                             <button
                               className="btn"
                               disabled={createSms.isPending}
-                              onClick={() => createSms.mutate(v.id)}
+                              onClick={() => createSms.mutate({ fromVoiceId: v.id })}
                             >
                               Enable SMS
                             </button>
@@ -1233,43 +1269,133 @@ export function AgentChannels({ agent }: { agent: Agent }) {
                 </div>
               ) : (
                 <div className="muted" style={{ marginTop: 12, fontSize: 13 }}>
-                  No voice number yet — get one above, or bring your own Twilio SMS number:
+                  No voice number yet — get a Janis-hosted SMS number below, or bring your own
+                  Twilio number:
                 </div>
               )}
+              <div className="seg" style={{ marginTop: 12 }}>
+                <button
+                  type="button"
+                  className={smsMode === 'hosted' ? 'active' : ''}
+                  onClick={() => setSmsMode('hosted')}
+                  disabled={!smsHostedConfigured}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                >
+                  {plan === 'free' && <Lock size={12} />}
+                  Janis-hosted
+                </button>
+                <button
+                  type="button"
+                  className={smsMode === 'byo' ? 'active' : ''}
+                  onClick={() => setSmsMode('byo')}
+                >
+                  Use my Twilio account
+                </button>
+              </div>
               <form
                 style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 10, maxWidth: 520 }}
                 onSubmit={(e) => {
                   e.preventDefault();
-                  createSms.mutate(undefined);
+                  createSms.mutate(smsMode === 'hosted' ? { hosted: true } : {});
                 }}
               >
-                <input
-                  placeholder="Twilio Account SID (AC…)"
-                  value={smsForm.sid}
-                  onChange={(e) => setSmsForm({ ...smsForm, sid: e.target.value })}
-                  required
-                />
-                <input
-                  placeholder="Twilio Auth Token"
-                  value={smsForm.token}
-                  onChange={(e) => setSmsForm({ ...smsForm, token: e.target.value })}
-                  required
-                />
-                <input
-                  placeholder="SMS-capable phone number — E.164, e.g. +15551234567"
-                  value={smsForm.number}
-                  onChange={(e) => setSmsForm({ ...smsForm, number: e.target.value })}
-                  required
-                />
+                {smsHostedFree ? (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: '10px 12px',
+                      fontSize: 14.5,
+                      fontWeight: 600,
+                      border: '1px solid var(--border)',
+                      borderRadius: 8,
+                      background: 'var(--panel-2)',
+                    }}
+                  >
+                    <Lock size={14} style={{ verticalAlign: -2, marginRight: 6 }} />
+                    Janis-hosted numbers are a paid-plan feature —{' '}
+                    <a href="/billing">upgrade on the Billing page</a>, or use your own Twilio
+                    account below.
+                  </div>
+                ) : smsMode === 'hosted' ? (
+                  <>
+                    <div className="row" style={{ gap: 8 }}>
+                      <input
+                        style={{ width: 130 }}
+                        placeholder="Area code (e.g. 415)"
+                        value={smsAreaCode}
+                        onChange={(e) => setSmsAreaCode(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="btn"
+                        disabled={searchSmsNumbers.isPending}
+                        onClick={() => searchSmsNumbers.mutate()}
+                      >
+                        {searchSmsNumbers.isPending ? 'Searching…' : 'Find numbers'}
+                      </button>
+                    </div>
+                    {smsNumbers !== null &&
+                      (smsNumbers.length ? (
+                        <select
+                          value={smsPicked}
+                          onChange={(e) => setSmsPicked(e.target.value)}
+                        >
+                          {smsNumbers.map((n) => (
+                            <option key={n.phone_number} value={n.phone_number}>
+                              {n.friendly_name}
+                              {n.locality ? ` — ${n.locality}` : ''}
+                              {n.region ? `, ${n.region}` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="muted">No numbers in that area code — try another.</div>
+                      ))}
+                  </>
+                ) : (
+                  <>
+                    <input
+                      placeholder="Twilio Account SID (AC…)"
+                      value={smsForm.sid}
+                      onChange={(e) => setSmsForm({ ...smsForm, sid: e.target.value })}
+                      required
+                    />
+                    <input
+                      placeholder="Twilio Auth Token"
+                      value={smsForm.token}
+                      onChange={(e) => setSmsForm({ ...smsForm, token: e.target.value })}
+                      required
+                    />
+                    <input
+                      placeholder="SMS-capable phone number — E.164, e.g. +15551234567"
+                      value={smsForm.number}
+                      onChange={(e) => setSmsForm({ ...smsForm, number: e.target.value })}
+                      required
+                    />
+                  </>
+                )}
                 <div>
-                  <button className="btn" disabled={createSms.isPending}>
-                    Add SMS channel
+                  <button
+                    className="btn"
+                    disabled={
+                      smsHostedFree ||
+                      createSms.isPending ||
+                      (smsMode === 'hosted' && !smsPicked)
+                    }
+                  >
+                    {smsMode === 'hosted' ? 'Get this number' : 'Add SMS channel'}
                   </button>
+                  {smsMode === 'hosted' && !smsPicked && !smsHostedFree && (
+                    <span className="muted" style={{ marginLeft: 8 }}>
+                      search an area code and pick a number first
+                    </span>
+                  )}
                 </div>
               </form>
               <div className="muted" style={{ marginTop: 10 }}>
-                We wire the number's inbound-message webhook automatically — texts arrive as
-                conversations and replies send from the same number.
+                {smsMode === 'hosted'
+                  ? 'Janis provisions the number and registers it for carrier-approved texting (A2P) — texts arrive as conversations and replies send from the same number. Billed on your plan’s usage meter: ~$1.15/mo for the number.'
+                  : 'We wire the number\'s inbound-message webhook automatically — texts arrive as conversations and replies send from the same number.'}
               </div>
               </>)}
             </details>

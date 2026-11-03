@@ -462,13 +462,14 @@ export async function sweepVoiceNumberBilling(db: Db): Promise<void> {
   if (new Date().getUTCMinutes() !== 0) return;
   const period = new Date().toISOString().slice(0, 7);
   const rows = await db
-    .select({ id: channels.id, workspaceId: channels.workspaceId, agentId: channels.agentId, credentials: channels.credentials })
+    .select({ id: channels.id, workspaceId: channels.workspaceId, agentId: channels.agentId, kind: channels.kind, credentials: channels.credentials })
     .from(channels)
-    .where(eq(channels.kind, 'voice'));
-  const { recordVoiceNumberUsage } = await import('../lib/usage.js');
+    .where(inArray(channels.kind, ['voice', 'sms']));
+  const { recordVoiceNumberUsage, recordSmsNumberUsage } = await import('../lib/usage.js');
   for (const ch of rows) {
     if (!(ch.credentials as { hosted?: boolean } | null)?.hosted) continue;
-    await recordVoiceNumberUsage(db, {
+    const record = ch.kind === 'sms' ? recordSmsNumberUsage : recordVoiceNumberUsage;
+    await record(db, {
       workspaceId: ch.workspaceId,
       agentId: ch.agentId,
       channelId: ch.id,

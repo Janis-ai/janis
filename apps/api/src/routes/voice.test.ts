@@ -25,6 +25,7 @@ import { env } from '../env.js';
 vi.hoisted(() => {
   process.env.TWILIO_ACCOUNT_SID = 'ACmaster';
   process.env.TWILIO_AUTH_TOKEN = 'mastertoken';
+  process.env.TWILIO_MESSAGING_SERVICE_SID = 'MGtest';
 });
 
 const AUTH_TOKEN = 'testtwilioauthtoken';
@@ -219,6 +220,9 @@ describe('hosted voice provisioning', () => {
       if (url.includes('/IncomingPhoneNumbers.json')) {
         return Response.json({ sid: 'PN1', phone_number: params.PhoneNumber });
       }
+      if (url.includes('messaging.twilio.com')) {
+        return Response.json({ sid: 'svc1' });
+      }
       return Response.json({}, { status: 404 });
     });
   });
@@ -321,5 +325,74 @@ describe('hosted voice provisioning', () => {
       }),
     });
     expect(res.status).toBe(429);
+  });
+
+  it('provisions a hosted sms number on the master account + enrolls it in the service', async () => {
+    // The daily-cap test above leaves a full day of provision attempts —
+    // clear them so this provision isn't rejected out of hand.
+    const { usageEvents } = await import('../db/schema.js');
+    const { inArray } = await import('drizzle-orm');
+    await db
+      .delete(usageEvents)
+      .where(inArray(usageEvents.kind, ['voice_provision', 'sms_provision']));
+    const res = await api.request('/api/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        kind: 'sms',
+        name: 'SMS line',
+        agent_id: agentId,
+        hosted: true,
+        phone_number: '+15550606060',
+      }),
+    });
+    expect(res.status).toBe(201);
+    const { channel: ch } = (await res.json()) as { channel: { id: string; meta: { phone_number?: string } } };
+    expect(ch.meta.phone_number).toBe('+15550606060');
+
+    // Bought on the MASTER account (not a subaccount) with the sms webhook.
+    const buy = calls.find((x) => x.url.includes('/Accounts/ACmaster/IncomingPhoneNumbers'));
+    expect(buy?.params.SmsUrl).toBe(`${ORIGIN}/sms/${ch.id}`);
+    // And enrolled in the A2P messaging service.
+    const enroll = calls.find((x) => x.url.includes('messaging.twilio.com'));
+    expect(enroll?.params.PhoneNumberSid).toBe('PN1');
+
+    const [row] = await db.select().from(channels).where(eq(channels.id, ch.id));
+    const creds = row.credentials as Record<string, unknown>;
+    expect(creds.hosted).toBe(true);
+    expect(creds.twilio_account_sid).toBe('ACmaster');
+    expect(creds.twilio_number_sid).toBe('PN1');
+
+    // Deleting the channel releases the master number.
+    const del = await api.request(`/api/channels/${ch.id}`, {
+      method: 'DELETE',
+      headers: { cookie },
+    });
+    expect(del.status).toBe(200);
+    await new Promise((r) => setTimeout(r, 50)); // deprovision is fire-and-forget
+    expect(
+      calls.some(
+        (x) => x.method === 'DELETE' && x.url.includes('/Accounts/ACmaster/IncomingPhoneNumbers/PN1'),
+      ),
+    ).toBe(true);
+  });
+
+  it('rejects hosted sms provisioning on the free plan', async () => {
+    const before = calls.filter((x) => x.url.includes('IncomingPhoneNumbers')).length;
+    await db.update(workspaces).set({ plan: 'free' }).where(eq(workspaces.id, wsId));
+    const res = await api.request('/api/channels', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({
+        kind: 'sms',
+        name: 'Free SMS',
+        agent_id: agentId,
+        hosted: true,
+        phone_number: '+15550707070',
+      }),
+    });
+    expect(res.status).toBe(402);
+    await db.update(workspaces).set({ plan: 'pro' }).where(eq(workspaces.id, wsId));
+    expect(calls.filter((x) => x.url.includes('IncomingPhoneNumbers'))).toHaveLength(before);
   });
 });

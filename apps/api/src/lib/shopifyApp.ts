@@ -1360,6 +1360,7 @@ async function billShopifyUsage(db: Db, row: ShopRow, plan: Plan): Promise<void>
           'llm_tokens',
           'voice_seconds',
           'voice_number_month',
+          'sms_number_month',
           'stt_seconds',
         ]),
         gte(usageEvents.createdAt, periodStart),

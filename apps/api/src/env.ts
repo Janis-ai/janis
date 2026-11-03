@@ -61,6 +61,11 @@ export const env = {
   // Feature gate — '1' once the Twilio account clears Trust Hub/A2P.
   // Console Voice/SMS channel sections render "coming soon" until then.
   twilioChannelsLive: process.env.TWILIO_CHANNELS_LIVE === '1',
+  // A2P-registered messaging service hosted SMS numbers join on provision —
+  // carrier filtering only clears for numbers inside a campaign's service,
+  // and subaccount numbers can't join a parent-account service, so hosted
+  // SMS provisions on the master account.
+  twilioMessagingServiceSid: process.env.TWILIO_MESSAGING_SERVICE_SID ?? '',
   voiceNumberCostMicrosPerMonth: Number(
     process.env.VOICE_NUMBER_COST_MICROS_PER_MONTH ?? 1_150_000,
   ),

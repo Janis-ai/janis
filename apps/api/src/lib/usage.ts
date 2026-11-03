@@ -160,14 +160,32 @@ export async function recordVoiceNumberUsage(
   db: Db,
   args: { workspaceId: string; agentId?: string | null; channelId: string; period: string },
 ): Promise<void> {
+  await recordHostedNumberUsage(db, args, 'voice_number_month', 'voice_number');
+}
+
+/**
+ * Meter one month of a hosted SMS number. Same Twilio monthly cost as a
+ * voice number; reports through janis.voice_micros — the telephony meter.
+ */
+export async function recordSmsNumberUsage(
+  db: Db,
+  args: { workspaceId: string; agentId?: string | null; channelId: string; period: string },
+): Promise<void> {
+  await recordHostedNumberUsage(db, args, 'sms_number_month', 'sms_number');
+}
+
+async function recordHostedNumberUsage(
+  db: Db,
+  args: { workspaceId: string; agentId?: string | null; channelId: string; period: string },
+  kind: 'voice_number_month' | 'sms_number_month',
+  prefix: string,
+): Promise<void> {
   try {
-    const externalId = `voice_number:${args.channelId}:${args.period}`;
+    const externalId = `${prefix}:${args.channelId}:${args.period}`;
     const existing = await db
       .select({ id: usageEvents.id })
       .from(usageEvents)
-      .where(
-        and(eq(usageEvents.externalId, externalId), eq(usageEvents.kind, 'voice_number_month')),
-      )
+      .where(and(eq(usageEvents.externalId, externalId), eq(usageEvents.kind, kind)))
       .limit(1);
     if (existing.length) return;
     const costMicros = env.voiceNumberCostMicrosPerMonth;
@@ -176,7 +194,7 @@ export async function recordVoiceNumberUsage(
       .values({
         workspaceId: args.workspaceId,
         agentId: args.agentId ?? null,
-        kind: 'voice_number_month',
+        kind,
         externalId,
         quantity: 1,
         costMicros,

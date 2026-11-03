@@ -1012,7 +1012,10 @@ dimmed disabled fields, and a visible paid-feature notice. Hosted SMS
 confirmed working via the voice channel's subaccount (same number).
 A2P 10DLC CLEARED 2026-11-03 — LOW_VOLUME campaign approved, master
 number +16506677708 in service MG68b89899…, test send delivered
-(see AGENTS.md backlog item 5).
+(see AGENTS.md backlog item 5). Hosted SMS provisioning shipped the
+same day: `hosted: true` sms channels buy the number on the master
+account + enroll it in the A2P service (subaccount numbers can't
+join — forced design, no per-channel subaccount like voice).
 
 **Hosted chat links:** every Bubble channel now gets a shareable
 `{apiOrigin}/chat/{id}/page` link ("Open chat as a customer ↗") even

@@ -315,11 +315,13 @@ is a day on launch)*
    number +16506677708 is in the service and carries the prod "Janis SMS"
    channel (44fe2e6f); use_inbound_webhook_on_number=true keeps inbound
    on the number's own SmsUrl. Verified live: test send delivered
-   (SMa924e245…, no 30034). CAVEAT: the voice-channel SMS clone
-   (+16502970236) lives on subaccount ACa957aab4… — subaccount numbers
-   can't join the parent's service, so its outbound stays unregistered;
-   own brand/campaign on the subaccount if that path matters. Remaining:
-   non-US regulatory bundles for voice.
+   (SMa924e245…, no 30034). Hosted SMS provisioning shipped same day —
+   new numbers buy on the MASTER account + enroll in the service at
+   provision time (see SMS channel bullet). CAVEAT: the voice-channel
+   SMS clone (+16502970236) lives on subaccount ACa957aab4… — subaccount
+   numbers can't join the parent's service, so its outbound stays
+   unregistered; own brand/campaign on the subaccount if that path
+   matters. Remaining: non-US regulatory bundles for voice.
    History: 2026-10-29 campaign REJECTED 30882 (T&C lacked CTIA clauses);
    fixed + live, resubmission filed → approved.
 6. DONE 2026-10-19 — Azure app reg + `MS_*` envs live; Outlook channel
@@ -750,9 +752,23 @@ drizzle-kit/workbox-build, nothing to drop directly).
   replies via Messages API (sendSmsReply in lib/channels.ts — >1600-char
   newline split, attachments → MMS, buttons → numbered list). MMS inbound
   rehosts through Twilio basic-auth creds (rehostAttachments basicAuth arg).
-  Create: BYO sid/token/number or `from_voice_channel_id` (clones creds,
-  setSmsWebhook auto-wires SmsUrl by number-SID lookup — hosted + BYO).
+  Create: BYO sid/token/number, `from_voice_channel_id` (clones creds,
+  setSmsWebhook auto-wires SmsUrl by number-SID lookup — hosted + BYO),
+  or `hosted: true` + a number picked from GET /channels/sms-numbers.
   Deleting a hosted voice channel cascades its SMS sibling.
+  Hosted SMS (2026-11-03, post-A2P): the number is bought ON the master
+  account — subaccount numbers CANNOT join the parent's messaging service
+  (verified: 20404), and only numbers inside a campaign-linked service get
+  registered A2P treatment. provisionSmsNumber buys with SmsUrl prewired +
+  POSTs the PN sid to TWILIO_MESSAGING_SERVICE_SID's service (failure
+  releases the number — a hosted channel that can't send registered is
+  broken by design). Channel creds are the master sid/token (webhook sigs
+  validate against them); no per-channel subaccount like voice. Same
+  gates: paid plan, VOICE_HOSTED_MAX per-ws cap, shared daily provision
+  cap (voice_provision + sms_provision usage rows counted together).
+  Billing: sms_number_month events (voice micros meter, same ~$1.15/mo),
+  swept by sweepVoiceNumberBilling; delete → deprovisionSmsNumber drops
+  the service membership + releases the number.
   A2P evidence surface (2026-10-29): static /sms-optin consent page +
   hosted evidence screenshot, /terms.html + /privacy.html statics for
   crawler review (Twilio AND Google verify), widget 'Text us' footer

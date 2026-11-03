@@ -8,7 +8,7 @@ import {
   type EmailDomainBag,
 } from '../lib/emailDomainRoutes.js';
 import { checkDomainEntitlement } from '../lib/domainBilling.js';
-import { and, eq, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import { env, requestOrigin, requestWebOrigin } from '../env.js';
@@ -283,10 +283,31 @@ export function channelApiRoutes(db: Db) {
     }
   });
 
+  // Hosted SMS: same picker, SMS-capable numbers. Also gated on the A2P
+  // messaging service — without it a hosted number can't send registered.
+  app.get('/sms-numbers', async (c) => {
+    const { hostedVoiceCreds, searchSmsNumbers } = await import('../lib/twilio.js');
+    if (!hostedVoiceCreds() || !env.twilioMessagingServiceSid) {
+      return c.json({ configured: false, paid: true, numbers: [] });
+    }
+    const planKey = await effectivePlanKey(db, c.get('workspaceId'));
+    if (planKey === 'free') return c.json({ configured: true, paid: false, numbers: [] });
+    try {
+      const numbers = await searchSmsNumbers(
+        (c.req.query('country') ?? env.twilioVoiceCountry).toUpperCase(),
+        { areaCode: c.req.query('area_code'), contains: c.req.query('contains') },
+      );
+      return c.json({ configured: true, paid: true, numbers });
+    } catch (err) {
+      const e = err as { message?: string };
+      return c.json({ error: e.message ?? 'number search failed' }, 400);
+    }
+  });
+
   // A non-uuid :id ("/channels/bubble" from an invented console link) hits
   // the uuid cast as a 500 — reject early. Registered after /voice-numbers
   // so that static route isn't caught as an id; SKIP covers any added later.
-  const STATIC_SEG = new Set(['voice-numbers']);
+  const STATIC_SEG = new Set(['voice-numbers', 'sms-numbers']);
   const idGuard = async (c: Context<SessionEnv>, next: Next) => {
     const id = c.req.param('id') ?? '';
     if (!STATIC_SEG.has(id) && !z.string().uuid().safeParse(id).success)
@@ -341,13 +362,16 @@ export function channelApiRoutes(db: Db) {
     if (body.kind === 'voice' && body.hosted && !body.phone_number) {
       return c.json({ error: 'phone_number required — pick one from /channels/voice-numbers' }, 400);
     }
-    if (body.kind === 'sms' && !body.from_voice_channel_id) {
+    if (body.kind === 'sms' && !body.from_voice_channel_id && !body.hosted) {
       if (!body.twilio_account_sid || !body.twilio_auth_token || !body.phone_number) {
         return c.json(
           { error: 'twilio_account_sid, twilio_auth_token and phone_number required for sms' },
           400,
         );
       }
+    }
+    if (body.kind === 'sms' && body.hosted && !body.phone_number) {
+      return c.json({ error: 'phone_number required — pick one from /channels/sms-numbers' }, 400);
     }
     if (body.kind === 'messenger' || body.kind === 'instagram') {
       if (!body.page_id) {
@@ -423,7 +447,7 @@ export function channelApiRoutes(db: Db) {
         .where(
           and(
             eq(usageEvents.workspaceId, c.get('workspaceId')),
-            eq(usageEvents.kind, 'voice_provision'),
+            inArray(usageEvents.kind, ['voice_provision', 'sms_provision']),
             sql`${usageEvents.createdAt} > now() - interval '24 hours'`,
           ),
         );
@@ -469,6 +493,80 @@ export function channelApiRoutes(db: Db) {
       // monthly (deduped per channel+period) until the channel is deleted.
       const { recordVoiceNumberUsage } = await import('../lib/usage.js');
       void recordVoiceNumberUsage(db, {
+        workspaceId: c.get('workspaceId'),
+        agentId: body.agent_id,
+        channelId: row.id,
+        period: new Date().toISOString().slice(0, 7),
+      });
+      return c.json({ channel: toChannel(row, agent.name) }, 201);
+    }
+    if (body.kind === 'sms' && body.hosted) {
+      // Same gates as hosted voice: paid plan (numbers burn real Twilio
+      // balance), per-workspace number cap, daily attempt cap.
+      const planKey = await effectivePlanKey(db, c.get('workspaceId'));
+      if (planKey === 'free') {
+        return c.json({ error: 'hosted numbers require a paid plan' }, 402);
+      }
+      const existing = await db
+        .select({ credentials: channels.credentials })
+        .from(channels)
+        .where(and(eq(channels.workspaceId, c.get('workspaceId')), eq(channels.kind, 'sms')));
+      const hostedCount = existing.filter(
+        (r) => (r.credentials as ChannelCredentials).hosted,
+      ).length;
+      if (hostedCount >= env.voiceHostedMax) {
+        return c.json({ error: `hosted number limit reached (${env.voiceHostedMax} per workspace)` }, 400);
+      }
+      const [{ attempts }] = await db
+        .select({ attempts: sql<number>`count(*)::int` })
+        .from(usageEvents)
+        .where(
+          and(
+            eq(usageEvents.workspaceId, c.get('workspaceId')),
+            inArray(usageEvents.kind, ['voice_provision', 'sms_provision']),
+            sql`${usageEvents.createdAt} > now() - interval '24 hours'`,
+          ),
+        );
+      if (attempts >= env.voiceProvisionDaily) {
+        return c.json({ error: 'too many provisioning attempts — try again tomorrow' }, 429);
+      }
+      await db.insert(usageEvents).values({
+        workspaceId: c.get('workspaceId'),
+        kind: 'sms_provision',
+        quantity: 1,
+        period: new Date().toISOString().slice(0, 7),
+      });
+      // Janis-hosted SMS: the number is bought on the MASTER account and
+      // enrolled in the A2P messaging service — subaccount numbers can't
+      // join it, so there's no per-channel subaccount here like voice.
+      // Channel creds are the master creds (webhook signatures validate
+      // against them); twilio_number_sid marks the number for release.
+      const { provisionSmsNumber } = await import('../lib/twilio.js');
+      const channelId = randomUUID();
+      const p = await provisionSmsNumber(channelId, body.phone_number!).catch((err) => {
+        throw new HTTPException(400, {
+          message: `number provisioning failed: ${(err as Error).message}`,
+        });
+      });
+      credentials.twilio_account_sid = env.twilioAccountSid;
+      credentials.twilio_auth_token = env.twilioAuthToken;
+      credentials.phone_number = p.number;
+      credentials.hosted = true;
+      credentials.twilio_number_sid = p.numberSid;
+      const [row] = await db
+        .insert(channels)
+        .values({
+          id: channelId,
+          workspaceId: c.get('workspaceId'),
+          agentId: body.agent_id,
+          kind: body.kind,
+          name: body.name,
+          credentials,
+        })
+        .returning();
+      invalidateChannelCache();
+      const { recordSmsNumberUsage } = await import('../lib/usage.js');
+      void recordSmsNumberUsage(db, {
         workspaceId: c.get('workspaceId'),
         agentId: body.agent_id,
         channelId: row.id,
@@ -827,6 +925,12 @@ export function channelApiRoutes(db: Db) {
     if (row.kind === 'voice' && creds?.hosted && creds.twilio_account_sid) {
       const { deprovisionVoiceNumber } = await import('../lib/twilio.js');
       void deprovisionVoiceNumber(creds.twilio_account_sid, creds.twilio_number_sid);
+    }
+    // Hosted SMS: number lives on the master account inside the A2P
+    // service — release it so nothing keeps billing.
+    if (row.kind === 'sms' && creds?.hosted && creds.twilio_number_sid) {
+      const { deprovisionSmsNumber } = await import('../lib/twilio.js');
+      void deprovisionSmsNumber(creds.twilio_number_sid);
     }
     // An SMS channel cloned off a hosted number dies with it — the shared
     // subaccount creds stop working when the number releases. BYO voice
