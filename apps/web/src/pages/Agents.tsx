@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Inbox, Settings, Trash2 } from 'lucide-react';
+import { Gauge, Inbox, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import { useAgents, useChannels, useMe } from '../api/hooks';
 import { timeAgo } from '../components/bits';
@@ -108,7 +108,7 @@ export default function Agents() {
                 aria-label={`Manage ${agent.name}`}
                 onClick={() => navigate(`/agents/${agent.id}`)}
               >
-                <Settings size={14} />
+                <Gauge size={14} />
               </button>
               {isAdmin && (
                 <button
