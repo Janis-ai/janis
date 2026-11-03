@@ -914,15 +914,18 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   .agent-list .agent-row { justify-content: flex-end; column-gap: 8px; }
   .agent-list .agent-row > .grow { flex-basis: 100%; }
 }
-/* Agent overview head: one flowing line — title · channels · last event,
-   with the actions floated right at the end of the text. The float lands
-   right-aligned on the last text line: everything shares one line when it
-   fits, and when it doesn't the buttons hold their own right-aligned row
-   while the text wraps above/into it on the left. overflow:hidden (from
-   .page-title) contains the float; white-space must allow wrapping. */
-.ov-title { white-space: normal; text-overflow: clip; }
-.ov-title .ov-meta { display: block; }
-.ov-title .ov-actions { float: right; display: flex; flex-wrap: nowrap; gap: 8px; margin: 2px 0 6px 12px; }
+/* Agent overview head: title row 1 with actions top-aligned to it; the
+   meta is always the second row. When the title would overlap the
+   buttons (.ov-tight, measured in JS — flips both ways on resize), the
+   title keeps row 1, the actions drop to the meta row, and the meta
+   bottom-aligns to them. Compound selectors beat .row's late rules. */
+.row.ov-head { align-items: flex-start; }
+.row.ov-head > .page-title { flex: 0 0 auto; max-width: 100%; }
+.ov-head .ov-meta { flex-basis: 100%; }
+.row.ov-head.ov-tight { align-items: flex-end; }
+.row.ov-head.ov-tight > .page-title { flex-basis: 100%; }
+.ov-head.ov-tight .ov-meta { order: 2; flex: 1 1 auto; min-width: 0; }
+.ov-head.ov-tight .ov-actions { order: 3; }
 
 /* agent detail — sticky name/save header + tabs */
 /* min-height fills .main's viewport so flex:1 children (e.g. the knowledge
