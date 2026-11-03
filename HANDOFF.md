@@ -93,6 +93,22 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-03b — Copilot: 'this conversation' referent + contact-account scoping
+- Prod transcript (rail conv u:1bb91d38…, 19:04–19:13): on ambiguous asks
+  ('what conversation is this', 'who is the customer in this thread') the
+  model guessed with zero tool calls — fabricated a conv id (c-87d2938e)
+  then answered from the rail's own context. It only called
+  read_conversation once 'in the inbox' was explicit; the tool+page-trait
+  pipeline itself worked correctly.
+- Also conflated a contact's account.plan/role/workspace traits (the
+  person's OWN Janis account) with the operator's workspace — told Mike a
+  contact was 'an admin in your workspace' and argued that 'OAuth review
+  workspace' was named 'OAuth review'.
+- Operator prompt (hostedAgent.ts) now disambiguates: bare 'this
+  conversation/thread/customer' referents prefer the open page over this
+  chat (resolve via tool, never from the rail's own details), and
+  account.* traits are the contact's own workspace, never the operator's.
+
 ## 2026-11-03a — Inbox suggestion card follows composer mode, sparkles is a toggle
 - Bug: the Suggested-reply card was gated on conversation state==='human',
   so "Reply as yourself" while the agent still held the thread hid it —
