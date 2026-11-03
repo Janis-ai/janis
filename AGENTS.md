@@ -303,7 +303,12 @@ is a day on launch)*
    checks. Launch Progress: Build+Review green, awaiting Zapier team
    review (~1 wk). Test account: integration-testing@zapier.com
    (admin in the test workspace, "Zapier review" API key on Demo Agent
-   — revoke it after review closes).
+   — revoke it after review closes). 2026-11-03 reviewer flagged
+   integration description for mentioning Slack (req 6.2 — no
+   other-app names); fixed via `zapier-platform register` (dir zapier/,
+   linked app 247023 — PUT updates registration fields: title, --desc
+   ≤140 chars, --url, --audience, --role, --category; the desc lives
+   server-side, NOT in index.js/package.json). Back in review.
 5. Twilio — A2P 10DLC DONE 2026-11-03: LOW_VOLUME campaign
    CM8e0a336681e1e4895395053e82c33bbe approved on brand BNc69f40cc…
    (service MG68b89899e59ff9db523d61033cdaeee9 "Janis"). Master-account
