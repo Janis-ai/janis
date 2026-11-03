@@ -469,7 +469,7 @@ export function SourceList({
               >
                 {uploading ? 'uploading…' : 'browse files'}
               </button>
-              {' '}— PDF, text, markdown, CSV, JSON, HTML, images.
+              .
             </span>
             <button
               className="btn"
@@ -480,6 +480,9 @@ export function SourceList({
             >
               <Paperclip size={14} />
             </button>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
+            PDF, text, markdown, CSV, JSON, HTML, images.
           </div>
           {importMsg && !error && (
             <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{importMsg}</div>
