@@ -5482,8 +5482,8 @@ function TestsTab({ agentId, agent, isAdmin }: { agentId: string; agent: Agent; 
   return (
     <div className="card" style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 12 }}>
       <ReadOnly off={!isAdmin}>
-      <div className="row" style={{ alignItems: 'center', gap: 8 }}>
-        <div className="grow" style={{ minWidth: 0 }}>
+      <div className="row" style={{ alignItems: 'center', gap: 8, justifyContent: 'flex-end' }}>
+        <div className="grow" style={{ flex: '1 1 260px', minWidth: 0 }}>
           <strong>Scenarios</strong>
           <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>
             saved conversations replayed against this agent's current setup
