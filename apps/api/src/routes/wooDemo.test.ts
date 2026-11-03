@@ -18,13 +18,13 @@ describe('woo demo store', () => {
       await app.request('/wp-json/wc/v3/orders/1042', { headers: AUTH })
     ).json();
     expect(order.status).toBe('completed');
-    expect(order.billing.email).toBe('jane.demo@example.com');
+    expect(order.billing.email).toBe('michael.nathanson@gmail.com');
 
     const miss = await app.request('/wp-json/wc/v3/orders/9999', { headers: AUTH });
     expect(miss.status).toBe(404);
 
     const search = await (
-      await app.request('/wp-json/wc/v3/orders?search=jane.demo%40example.com&per_page=10', {
+      await app.request('/wp-json/wc/v3/orders?search=michael.nathanson%40gmail.com&per_page=10', {
         headers: AUTH,
       })
     ).json();

@@ -51,7 +51,7 @@ const ORDERS = [
     billing: {
       first_name: 'Jane',
       last_name: 'Demo',
-      email: 'jane.demo@example.com',
+      email: 'michael.nathanson@gmail.com',
     },
     shipping: { city: 'Toronto', country: 'CA' },
     line_items: [
@@ -70,7 +70,7 @@ const ORDERS = [
     billing: {
       first_name: 'Jane',
       last_name: 'Demo',
-      email: 'jane.demo@example.com',
+      email: 'michael.nathanson@gmail.com',
     },
     shipping: { city: 'Toronto', country: 'CA' },
     line_items: [{ id: 3, name: 'Demo Cap', quantity: 1, total: '22.00' }],
