@@ -4,7 +4,7 @@ import type { Agent, AgentConfig, HelpArticle } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { HelpCenter } from './HelpCenter';
 import { Modal } from './Modal';
-import { FileText, Globe, Newspaper, RefreshCw, StickyNote, Trash2 } from 'lucide-react';
+import { FileText, Globe, Newspaper, Paperclip, RefreshCw, StickyNote, Trash2 } from 'lucide-react';
 import { timeAgo } from './bits';
 
 export interface KnowledgeFile {
@@ -456,17 +456,28 @@ export function SourceList({
               }}
             />
           </div>
-          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-            Links become website sources — anything else saves as a note. Drop
-            files anywhere on this panel, or{' '}
+          <div className="row" style={{ marginTop: 10, gap: 8, alignItems: 'center' }}>
             <button
-              style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontSize: 11, cursor: 'pointer', textDecoration: 'underline' }}
+              className="btn"
+              title="Upload files (PDF, text, markdown…)"
+              aria-label="Upload files"
               disabled={uploading}
               onClick={() => fileRef.current?.click()}
             >
-              {uploading ? 'uploading…' : 'browse files'}
+              <Paperclip size={14} />
             </button>
-            .
+            <span className="muted" style={{ fontSize: 13 }}>
+              Links become website sources — anything else saves as a note.
+              Drop files anywhere on this panel, or{' '}
+              <button
+                style={{ background: 'none', border: 'none', padding: 0, color: 'var(--accent)', fontSize: 13, cursor: 'pointer', textDecoration: 'underline' }}
+                disabled={uploading}
+                onClick={() => fileRef.current?.click()}
+              >
+                {uploading ? 'uploading…' : 'browse files'}
+              </button>
+              .
+            </span>
           </div>
           {importMsg && !error && (
             <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>{importMsg}</div>
