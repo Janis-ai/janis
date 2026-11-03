@@ -186,12 +186,10 @@ export default function AgentOverview() {
     <>
       <h1 className="page-title ov-title">
         {agent?.name ?? '…'}
-        {channels.length > 0 && (
-          <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>
-            {` · ${[...new Set(channels.map((c) => KIND_LABEL[c.kind] ?? c.name))].join(', ')}`}
-          </span>
-        )}
-        <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>
+        {/* inline-block: the whole meta moves to line 2 as a unit the moment
+            it can't sit beside the name — text never wraps mid-meta. */}
+        <span className="muted ov-meta" style={{ fontSize: 13, fontWeight: 400 }}>
+          {channels.length > 0 && ` · ${[...new Set(channels.map((c) => KIND_LABEL[c.kind] ?? c.name))].join(', ')}`}
           {` · ${agent?.last_seen_at ? `last event ${timeAgo(agent.last_seen_at)}` : 'no events yet'}`}
         </span>
         {agent && !agent.hosted && !agent.webhook_url && <span className="badge warn" style={{ marginLeft: 8 }}>unreachable</span>}
