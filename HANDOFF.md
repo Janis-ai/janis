@@ -93,6 +93,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-03a — Inbox suggestion card follows composer mode, sparkles is a toggle
+- Bug: the Suggested-reply card was gated on conversation state==='human',
+  so "Reply as yourself" while the agent still held the thread hid it —
+  the moment operators most want the draft. Card now follows sendAs:
+  visible for human/agent reply modes, dismissed (pending suggestions
+  POSTed 'dismissed', not just hidden) on switching to note/teach.
+- Sparkles button no longer unmounts while its card is open — it shows
+  a pressed-in accent state (.btn.suggest-on, same grammar as
+  filter-on/verdict-on), toggles the card off on click, and renders
+  disabled (tooltip "Suggestions apply to visitor replies") in
+  note/teach. New Composer prop: suggestActive.
 ## 2026-11-02t — AWS account fully decommissioned (was billing $42/mo)
 - Mike got an AWS invoice: $39.61 Lambda + $2.45 CloudWatch, API GW $0.
   Root cause: 4 ENABLED EventBridge cron rules from the OLD system still
