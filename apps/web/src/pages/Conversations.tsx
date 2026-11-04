@@ -840,22 +840,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           <button className="btn" title="Assign to me" aria-label="Assign to me" disabled={busy} onClick={() => bulk('assign_me')}><UserCheck size={14} /></button>
           <button className="btn" title="Unassign" aria-label="Unassign" disabled={busy} onClick={() => bulk('unassign')}><UserX size={14} /></button>
           <button
-            className="btn danger"
-            title="Delete"
-            aria-label="Delete"
-            disabled={busy}
-            onClick={async () => {
-              const ok = await confirm(
-                `Delete ${selected.size} conversation${selected.size === 1 ? '' : 's'} permanently? This can't be undone.`,
-                [{ key: 'delete', label: 'Delete', danger: true }],
-                true,
-              );
-              if (ok === 'delete') void bulk('delete');
-            }}
-          >
-            <Trash2 size={14} />
-          </button>
-          <button
             className="btn"
             disabled={busy}
             title="Tag"
@@ -897,6 +881,22 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
               </>
             )}
           </span>
+          <button
+            className="btn danger"
+            title="Delete"
+            aria-label="Delete"
+            disabled={busy}
+            onClick={async () => {
+              const ok = await confirm(
+                `Delete ${selected.size} conversation${selected.size === 1 ? '' : 's'} permanently? This can't be undone.`,
+                [{ key: 'delete', label: 'Delete', danger: true }],
+                true,
+              );
+              if (ok === 'delete') void bulk('delete');
+            }}
+          >
+            <Trash2 size={14} />
+          </button>
           </div>
           <button className="btn bulk-close" title="Clear selection" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
         </div>
