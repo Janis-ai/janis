@@ -19,6 +19,7 @@ import {
   channels,
   contactIdentities,
   contacts,
+  slackInstallations,
   usageEvents,
 } from '../db/schema.js';
 import { effectivePlanKey } from '../lib/plans.js';
@@ -53,9 +54,14 @@ import {
 } from '../lib/email.js';
 import { toChannel } from '../lib/serializers.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
+import {
+  joinBoundSlackChannels,
+  slackAppManifest,
+  slackBotToken,
+} from '../lib/slackChannel.js';
 
 const createChannel = z.object({
-  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'voice', 'sms', 'chatfuel', 'manychat']),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'voice', 'sms', 'chatfuel', 'manychat', 'slack']),
   name: z.string().min(1).max(120),
   agent_id: z.string().uuid(),
   page_id: z.string().optional(), // messenger / instagram
@@ -77,6 +83,15 @@ const createChannel = z.object({
   // sms: clone the Twilio creds + number off an existing voice channel — the
   // one-click "text-enable this number" path (hosted and BYO both work).
   from_voice_channel_id: z.string().uuid().optional(),
+  // slack: shared Janis app (slack_installation_id → the workspace's
+  // /slack install) or the customer's own Slack app (bot_token +
+  // signing_secret — its Events URL is shown on the channel page).
+  slack_installation_id: z.string().uuid().optional(),
+  slack_bot_token: z.string().optional(),
+  slack_signing_secret: z.string().optional(),
+  // claimed surfaces: Slack channel ids to listen in + bot DM opt-in
+  slack_channel_ids: z.array(z.string().min(1)).max(50).optional(),
+  slack_dm: z.boolean().optional(),
 });
 
 const patchChannel = z.object({
@@ -196,6 +211,11 @@ const patchChannel = z.object({
         .or(z.literal('')),
     )
     .optional(),
+  // slack: claimed surfaces + manual-app credentials ('' clears a token)
+  slack_channel_ids: z.array(z.string().min(1)).max(50).optional(),
+  slack_dm: z.boolean().optional(),
+  slack_bot_token: z.string().max(200).optional(),
+  slack_signing_secret: z.string().max(200).optional(),
 });
 
 /** Console endpoints mounted at /api/channels (session auth). */
@@ -336,6 +356,58 @@ export function channelApiRoutes(db: Db) {
     return c.json({ channel: toChannel(row.channel, row.agentName) });
   });
 
+  // slack (manual/BYO app): the manifest to paste at api.slack.com/apps →
+  // "Create New App → from a manifest" — pre-fills bot scopes + the
+  // per-channel Events Request URL.
+  app.get('/:id/slack-manifest', async (c) => {
+    const [row] = await db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.id, c.req.param('id')),
+          eq(channels.workspaceId, c.get('workspaceId')),
+          eq(channels.kind, 'slack'),
+        ),
+      )
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    return c.json({
+      manifest: slackAppManifest(env.apiOrigin, row.id, row.name.replace(/\s+/g, ' ').slice(0, 75)),
+    });
+  });
+
+  // slack: the Slack workspace's channel list for the listen-surface picker —
+  // resolved through the channel's own bot token so manual (BYO) apps and
+  // shared-app installs both work.
+  app.get('/:id/slack-channels', async (c) => {
+    const [row] = await db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.id, c.req.param('id')),
+          eq(channels.workspaceId, c.get('workspaceId')),
+          eq(channels.kind, 'slack'),
+        ),
+      )
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    const creds = row.credentials as ChannelCredentials;
+    const token = await slackBotToken(db, row, creds);
+    if (!token) return c.json({ error: 'no bot token on this channel' }, 400);
+    const { listSlackChannels } = await import('../lib/slack.js');
+    const { channels: list, complete } = await listSlackChannels(token);
+    // Bound ids the API hasn't listed yet (private channels need a member
+    // invite before they show) — keep them selectable rather than dropping.
+    const listed = new Set(list.map((ch) => ch.id));
+    const missing = (creds.slack_channel_ids ?? []).filter((id) => !listed.has(id));
+    return c.json({
+      channels: [...list, ...missing.map((id) => ({ id, name: id }))],
+      truncated: !complete,
+    });
+  });
+
   app.post('/', zValidator('json', createChannel), async (c) => {
     const body = c.req.valid('json');
     const role = await agentRoleFor(
@@ -381,6 +453,33 @@ export function channelApiRoutes(db: Db) {
         return c.json({ error: 'access_token required for messenger/instagram' }, 400);
       }
     }
+    // slack: shared Janis app (an existing /slack install on this workspace)
+    // or the customer's own Slack app (bot_token + signing_secret pasted in).
+    let slackInst: { id: string; teamId: string; teamName: string | null } | undefined;
+    if (body.kind === 'slack') {
+      if (!body.slack_installation_id && !(body.slack_bot_token && body.slack_signing_secret)) {
+        return c.json(
+          { error: 'slack needs slack_installation_id (shared app) or slack_bot_token + slack_signing_secret (own app)' },
+          400,
+        );
+      }
+      if (body.slack_installation_id) {
+        const [inst] = await db
+          .select({ id: slackInstallations.id, teamId: slackInstallations.teamId, teamName: slackInstallations.teamName })
+          .from(slackInstallations)
+          .where(
+            and(
+              eq(slackInstallations.id, body.slack_installation_id),
+              eq(slackInstallations.workspaceId, c.get('workspaceId')),
+            ),
+          )
+          .limit(1);
+        if (!inst) {
+          return c.json({ error: 'slack installation not found — connect Slack under Settings first' }, 404);
+        }
+        slackInst = inst;
+      }
+    }
 
     const credentials: ChannelCredentials = {
       page_id: body.page_id,
@@ -401,6 +500,20 @@ export function channelApiRoutes(db: Db) {
       credentials.inbound_address = `ch_${randomBytes(4).toString('hex')}@${env.emailInboundDomain}`;
       credentials.reply_address = await uniqueReplyAddress(db, body.name, 'new');
       credentials.from_name = body.from_name;
+    }
+    if (body.kind === 'slack') {
+      if (slackInst) {
+        credentials.via = 'oauth';
+        credentials.slack_installation_id = slackInst.id;
+        credentials.slack_team_id = slackInst.teamId;
+        credentials.slack_team_name = slackInst.teamName ?? undefined;
+      } else {
+        credentials.via = 'manual';
+        credentials.slack_bot_token = body.slack_bot_token;
+        credentials.slack_signing_secret = body.slack_signing_secret;
+      }
+      if (body.slack_channel_ids?.length) credentials.slack_channel_ids = body.slack_channel_ids;
+      if (body.slack_dm) credentials.slack_dm = true;
     }
     if (body.kind === 'sms' && body.from_voice_channel_id) {
       const [voice] = await db
@@ -591,6 +704,15 @@ export function channelApiRoutes(db: Db) {
       const { setSmsWebhook } = await import('../lib/twilio.js');
       await setSmsWebhook(credentials, `${env.apiOrigin}/sms/${row.id}`).catch(() => {});
     }
+    let slackJoinErrors: { id: string; error: string }[] | undefined;
+    if (row && body.kind === 'slack' && credentials.slack_channel_ids?.length) {
+      // The Events API only delivers messages from channels the bot sits in —
+      // try to join each bound channel now so the surface is live on save.
+      const token = await slackBotToken(db, row, credentials);
+      if (token) {
+        slackJoinErrors = (await joinBoundSlackChannels(token, credentials.slack_channel_ids)).failed;
+      }
+    }
     invalidateChannelCache();
     // Get Started button on the page profile — best-effort, never block creation
     void setGetStartedButton(body.kind, credentials).catch(() => {});
@@ -603,7 +725,10 @@ export function channelApiRoutes(db: Db) {
       targetId: row.id,
       meta: { kind: body.kind, name: body.name, agent_id: body.agent_id },
     });
-    return c.json({ channel: toChannel(row, agent.name) }, 201);
+    return c.json({
+      channel: toChannel(row, agent.name),
+      ...(slackJoinErrors?.length ? { slack_join_errors: slackJoinErrors } : {}),
+    }, 201);
   });
 
   app.patch('/:id', zValidator('json', patchChannel), async (c) => {
@@ -654,6 +779,15 @@ export function channelApiRoutes(db: Db) {
     }
     if (body.manychat_token !== undefined && row.kind !== 'manychat') {
       return c.json({ error: 'manychat_token applies to manychat channels' }, 400);
+    }
+    if (
+      (body.slack_channel_ids !== undefined ||
+        body.slack_dm !== undefined ||
+        body.slack_bot_token !== undefined ||
+        body.slack_signing_secret !== undefined) &&
+      row.kind !== 'slack'
+    ) {
+      return c.json({ error: 'slack settings apply to slack channels' }, 400);
     }
 
     const creds = { ...(row.credentials as ChannelCredentials) };
@@ -814,6 +948,24 @@ export function channelApiRoutes(db: Db) {
       if (!t) delete creds.manychat_token;
       else creds.manychat_token = t;
     }
+    if (body.slack_channel_ids !== undefined) {
+      if (body.slack_channel_ids.length) creds.slack_channel_ids = body.slack_channel_ids;
+      else delete creds.slack_channel_ids;
+    }
+    if (body.slack_dm !== undefined) {
+      if (body.slack_dm) creds.slack_dm = true;
+      else delete creds.slack_dm;
+    }
+    if (body.slack_bot_token !== undefined) {
+      const t = body.slack_bot_token.trim();
+      if (!t) delete creds.slack_bot_token;
+      else creds.slack_bot_token = t;
+    }
+    if (body.slack_signing_secret !== undefined) {
+      const t = body.slack_signing_secret.trim();
+      if (!t) delete creds.slack_signing_secret;
+      else creds.slack_signing_secret = t;
+    }
     const [updated] = await db
       .update(channels)
       .set({
@@ -825,8 +977,20 @@ export function channelApiRoutes(db: Db) {
     invalidateChannelCache();
     // Re-apply Get Started on edits — covers channels created before this existed
     void setGetStartedButton(row.kind, creds).catch(() => {});
+    let slackJoinErrors: { id: string; error: string }[] | undefined;
+    if (row.kind === 'slack' && creds.slack_channel_ids?.length) {
+      // Bound channel set may have changed — re-join so the new ids go live
+      // (join is idempotent; already_in_channel is a no-op).
+      const token = await slackBotToken(db, updated, creds);
+      if (token) {
+        slackJoinErrors = (await joinBoundSlackChannels(token, creds.slack_channel_ids)).failed;
+      }
+    }
     const [agent] = await db.select({ name: agents.name }).from(agents).where(eq(agents.id, row.agentId)).limit(1);
-    return c.json({ channel: toChannel(updated, agent?.name ?? '') });
+    return c.json({
+      channel: toChannel(updated, agent?.name ?? ''),
+      ...(slackJoinErrors?.length ? { slack_join_errors: slackJoinErrors } : {}),
+    });
   });
 
   // ── Custom domain (webchat Bubble) ──────────────────────────────────

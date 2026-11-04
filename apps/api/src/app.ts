@@ -153,6 +153,7 @@ export function createApp(db: Db) {
   // a second limiter here would double-count the same bucket row.
   app.use('/slack/events', rateLimit({ scope: 'slack', windowMs: 60_000, max: 120 }));
   app.use('/slack/interactions', rateLimit({ scope: 'slack', windowMs: 60_000, max: 120 }));
+  app.use('/slack/ext/*', rateLimit({ scope: 'slack-ext', windowMs: 60_000, max: 240 }));
   app.use('/channels/meta/*', rateLimit({ scope: 'meta', windowMs: 60_000, max: 300 }));
   app.use('/channels/email/*', rateLimit({ scope: 'email', windowMs: 60_000, max: 300 }));
   app.use('/gmail/*', rateLimit({ scope: 'gmail', windowMs: 60_000, max: 60 }));

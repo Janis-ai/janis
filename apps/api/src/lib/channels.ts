@@ -15,6 +15,7 @@ import {
 } from './gmail.js';
 import { voiceDeliver } from './voiceBridge.js';
 import { sendSms, type TwilioError } from './twilio.js';
+import { sendSlackReply } from './slackChannel.js';
 import { qrTitle } from './legacyFormat.js';
 // qrTitle lives in the leaf formatter (botPlatform needs it without a
 // module cycle); re-exported so existing channels.js imports keep working.
@@ -37,6 +38,21 @@ export interface ChannelCredentials {
   secondary_receiver_id?: string;
   // legacy ManyChat bots: bearer token for api.manychat.com sends
   manychat_token?: string;
+  // slack: a customer-facing Slack surface. via 'oauth' rides a workspace
+  // slack_installations row (the shared Janis app — events arrive at
+  // /slack/events); via 'manual' is the customer's own Slack app — they
+  // create it from our manifest and paste bot_token + signing_secret, and
+  // its Events Request URL points at /slack/ext/:channelId/events.
+  slack_installation_id?: string;
+  slack_team_id?: string;
+  slack_team_name?: string;
+  slack_bot_token?: string;
+  slack_signing_secret?: string;
+  // which Slack surfaces route to this agent: listed channel ids claim
+  // every message + @mention inside them (bot must be a member — Janis
+  // attempts conversations.join on save); dm claims bot direct messages.
+  slack_channel_ids?: string[];
+  slack_dm?: boolean;
   phone_number_id?: string; // whatsapp
   username?: string; // instagram @handle — for ig.me links
   phone_number?: string; // whatsapp display number (digits only) — for wa.me links
@@ -728,6 +744,9 @@ export async function sendChannelMessage(
   }
   if (channel.kind === 'sms') {
     return sendSmsReply(channel, platformUserId, text, attachments, opts);
+  }
+  if (channel.kind === 'slack') {
+    return sendSlackReply(db, channel, platformUserId, text, attachments, opts);
   }
   const creds = channel.credentials as ChannelCredentials;
   // Bot platforms pull the reply out of the synchronous ingest response —
@@ -1679,6 +1698,9 @@ const CHANNEL_FMT_RE =
   /\*\*([^\s*](?:[^*]*[^\s*])?)\*\*|\*([^\s*](?:[^*]*[^\s*])?)\*|~~([^\s~](?:[^~]*[^\s~])?)~~|`([^`\n]+)`|\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
 
 export function formatForChannel(text: string, kind: string): string {
+  // slack has its own dialect pass (slackMrkdwn — escaping + <url|label>
+  // links) applied at the send site; leave the canonical text intact here.
+  if (kind === 'slack') return text;
   const wa = kind === 'whatsapp';
   // Math renders as Unicode on every delivery path — $60^\circ$ → 60°.
   // (The webchat widget/console get canonical from storage and style it via
@@ -1888,6 +1910,12 @@ export function channelChatUrl(channel: ChannelRow): string | undefined {
   if (channel.kind === 'messenger' && c.page_id) return `https://m.me/${c.page_id}`;
   if (channel.kind === 'instagram' && c.username) return `https://ig.me/m/${c.username}`;
   if (channel.kind === 'whatsapp' && c.phone_number) return `https://wa.me/${c.phone_number}`;
+  // slack deep link into the customer's workspace — first bound channel when
+  // known, else the workspace itself (the bot's DM is one tap from there)
+  if (channel.kind === 'slack' && c.slack_team_id) {
+    const dest = c.slack_channel_ids?.[0];
+    return `https://app.slack.com/client/${c.slack_team_id}${dest ? `/${dest}` : ''}`;
+  }
   return undefined;
 }
 

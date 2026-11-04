@@ -222,8 +222,8 @@ export function AgentChannels({ agent }: { agent: Agent }) {
       localStorage.setItem(`janis.launch-ack.${agentId}`, '1');
     } catch {}
   };
-  type ChKey = 'bubble' | 'meta' | 'gmail' | 'outlook' | 'email' | 'voice' | 'sms' | 'bots';
-  const ALL_CH: ChKey[] = ['bubble', 'meta', 'gmail', 'outlook', 'email', 'voice', 'sms', 'bots'];
+  type ChKey = 'bubble' | 'meta' | 'gmail' | 'outlook' | 'email' | 'voice' | 'sms' | 'slack' | 'bots';
+  const ALL_CH: ChKey[] = ['bubble', 'meta', 'gmail', 'outlook', 'email', 'voice', 'sms', 'slack', 'bots'];
   // While Gmail connect is gated, the "Email" sorter pick lands on the
   // forwarding channel — the always-available mailbox path.
   const NEED_TARGETS: Record<string, string> = {
@@ -550,6 +550,67 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     onError: (e) => setError(e.message),
   });
 
+  // Slack — the shared Janis app (an existing workspace install) or the
+  // customer's own Slack app (bot token + signing secret; the events URL +
+  // manifest live on the channel page).
+  const slackStatus = useQuery({
+    queryKey: ['slack-status'],
+    queryFn: () =>
+      api<{
+        connected: boolean;
+        configured: boolean;
+        installations: { id: string; team_id: string; team_name: string | null; mode: string }[];
+      }>('/api/slack/status'),
+    staleTime: 30_000,
+  });
+  const [slackInst, setSlackInst] = useState('');
+  const [slackPicked, setSlackPicked] = useState<Set<string>>(new Set());
+  const [slackDm, setSlackDm] = useState(false);
+  const [slackByo, setSlackByo] = useState(false);
+  const [slackByoForm, setSlackByoForm] = useState({ token: '', secret: '' });
+  const slackInsts = slackStatus.data?.installations ?? [];
+  const slackEffInst = slackInst || slackInsts[0]?.id || '';
+  const slackChannelsQ = useQuery({
+    queryKey: ['slack-pick-channels', slackEffInst],
+    queryFn: () =>
+      api<{ channels: { id: string; name: string }[]; truncated?: boolean }>(
+        `/api/slack/channels?installation_id=${slackEffInst}`,
+      ),
+    enabled: Boolean(slackEffInst),
+    staleTime: 30_000,
+  });
+  const createSlack = useMutation({
+    mutationFn: () =>
+      api<{ channel: Channel }>('/api/channels', {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'slack',
+          name: `${agent.name} Slack`,
+          agent_id: agentId,
+          ...(slackByo
+            ? {
+                slack_bot_token: slackByoForm.token.trim(),
+                slack_signing_secret: slackByoForm.secret.trim(),
+              }
+            : {
+                slack_installation_id: slackEffInst,
+                slack_channel_ids: [...slackPicked],
+                slack_dm: slackDm || undefined,
+              }),
+        }),
+      }),
+    onSuccess: (r) => {
+      setSlackPicked(new Set());
+      setSlackDm(false);
+      setSlackByoForm({ token: '', secret: '' });
+      setError('');
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['build-status'] });
+      goToChannel(r.channel.id);
+    },
+    onError: (e) => setError(e.message),
+  });
+
   const removeChannel = useMutation({
     mutationFn: (channelId: string) => api(`/api/channels/${channelId}`, { method: 'DELETE' }),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['channels'] }),
@@ -756,6 +817,7 @@ export function AgentChannels({ agent }: { agent: Agent }) {
     email: 'any mailbox via forwarding',
     voice: 'voice calls',
     sms: 'SMS texting',
+    slack: 'Slack — community or team channels',
     bots: 'Chatfuel or ManyChat bot',
   };
   const firstCh = [...channels].sort((a, b) =>
@@ -1401,6 +1463,166 @@ export function AgentChannels({ agent }: { agent: Agent }) {
             </details>
           </div>
         );
+      case 'slack': {
+        const slackExisting = channels.filter((v) => v.kind === 'slack');
+        const slackChannels = [...(slackChannelsQ.data?.channels ?? [])].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        );
+        const toggleSlack = (id: string) =>
+          setSlackPicked((prev) => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+          });
+        return (
+          <div className="card">
+            <details className="appearance-details">
+              <summary>
+                <span className="details-title">Slack{sTag && <> — {sTag}</>}</span>
+                <span className="details-sub">
+                  needs: a Slack workspace — the agent answers in channels you pick, or bot DMs
+                </span>
+              </summary>
+              <div style={{ marginTop: 12 }}>
+                {slackStatus.data && !slackStatus.data.configured && (
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    Slack isn't enabled on this deployment.
+                  </div>
+                )}
+                {slackStatus.data?.configured && !slackByo && (
+                  <>
+                    {slackInsts.length === 0 ? (
+                      <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>
+                        Install the Janis app into your Slack workspace — the agent then answers
+                        in the channels you bind it to.
+                      </div>
+                    ) : (
+                      <>
+                        <div className="row" style={{ gap: 8, alignItems: 'center', marginTop: 4 }}>
+                          <span className="muted" style={{ fontSize: 13 }}>Slack workspace</span>
+                          <select
+                            value={slackEffInst}
+                            onChange={(e) => setSlackInst(e.target.value)}
+                            disabled={slackInsts.length < 2}
+                          >
+                            {slackInsts.map((i) => (
+                              <option key={i.id} value={i.id}>
+                                {i.team_name ?? i.team_id}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        {slackChannels.length > 0 ? (
+                          <div
+                            style={{
+                              display: 'grid',
+                              gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+                              gap: '2px 12px',
+                              marginTop: 8,
+                            }}
+                          >
+                            {slackChannels.map((sc) => (
+                              <label key={sc.id} className="muted" style={{ fontSize: 13 }}>
+                                <input
+                                  type="checkbox"
+                                  checked={slackPicked.has(sc.id)}
+                                  onChange={() => toggleSlack(sc.id)}
+                                />{' '}
+                                #{sc.name}
+                              </label>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                            {slackChannelsQ.isPending
+                              ? 'Loading Slack channels…'
+                              : 'No channels listed — the workspace channel list may still be syncing.'}
+                          </div>
+                        )}
+                        <label className="muted" style={{ display: 'block', marginTop: 8, fontSize: 13 }}>
+                          <input
+                            type="checkbox"
+                            checked={slackDm}
+                            onChange={(e) => setSlackDm(e.target.checked)}
+                          />{' '}
+                          Answer direct messages to the bot
+                        </label>
+                      </>
+                    )}
+                    <div className="row" style={{ marginTop: 10, gap: 8 }}>
+                      {slackInsts.length > 0 && (
+                        <button
+                          className={primCls}
+                          disabled={createSlack.isPending}
+                          onClick={() => createSlack.mutate()}
+                        >
+                          {slackExisting.length ? 'Add another Slack channel' : 'Connect'}
+                        </button>
+                      )}
+                      {slackInsts.length === 0 && (
+                        <a
+                          className={primCls}
+                          href={`/api/slack/install?return=${encodeURIComponent(window.location.pathname + window.location.search)}`}
+                        >
+                          Add to Slack
+                        </a>
+                      )}
+                      <button className="btn" onClick={() => setSlackByo(true)}>
+                        Use your own Slack app
+                      </button>
+                    </div>
+                  </>
+                )}
+                {slackStatus.data?.configured && slackByo && (
+                  <>
+                    <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>
+                      Your own Slack app — white-label bot name and icon. Paste its bot token and
+                      signing secret; the events URL and a ready-made app manifest live on the
+                      channel page after connecting.
+                    </div>
+                    <form
+                      style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 520 }}
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        createSlack.mutate();
+                      }}
+                    >
+                      <input
+                        placeholder="Bot token (xoxb-…)"
+                        value={slackByoForm.token}
+                        onChange={(e) => setSlackByoForm({ ...slackByoForm, token: e.target.value })}
+                        required
+                      />
+                      <input
+                        placeholder="Signing secret"
+                        value={slackByoForm.secret}
+                        onChange={(e) => setSlackByoForm({ ...slackByoForm, secret: e.target.value })}
+                        required
+                      />
+                      <div className="row" style={{ gap: 8 }}>
+                        <button className={primCls} type="submit" disabled={createSlack.isPending}>
+                          Connect
+                        </button>
+                        <button className="btn" type="button" onClick={() => setSlackByo(false)}>
+                          Back
+                        </button>
+                      </div>
+                    </form>
+                  </>
+                )}
+                {slackExisting.length > 0 && (
+                  <div className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                    {slackExisting.length} Slack channel
+                    {slackExisting.length === 1 ? '' : 's'} connected — open its page to change
+                    listening surfaces.
+                  </div>
+                )}
+              </div>
+            </details>
+          </div>
+        );
+      }
       case 'bots':
         return (
           <div className="card">

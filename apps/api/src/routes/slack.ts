@@ -35,6 +35,12 @@ import {
 } from '../lib/slack.js';
 import { fetchAvatar } from '../lib/avatar.js';
 import { membershipFor } from '../lib/members.js';
+import type { ChannelCredentials } from '../lib/channels.js';
+import {
+  claimsVisitorEvent,
+  visitorChannelFor,
+  visitorSlackInbound,
+} from '../lib/slackChannel.js';
 import { agentSend, humanReply, internalNote, resume, takeover, TakeoverError, teachAgent } from '../services/takeover.js';
 import { handleChannelMessage } from '../services/channelIngress.js';
 import { legacyTeamState } from '../lib/legacyMongo.js';
@@ -1422,6 +1428,48 @@ export function slackPublicRoutes(db: Db) {
       return c.json({ ok: true });
     }
 
+    // Visitor Slack channels (shared app): a kind:'slack' channel bound to
+    // this install claims matching events BEFORE the concierge surface —
+    // listed channel ids take every message/mention inside them and
+    // creds.slack_dm claims bot DMs. Mentions elsewhere + unclaimed DMs fall
+    // through to concierge/thread handling unchanged.
+    if (
+      ev &&
+      (ev.type === 'message' || ev.type === 'app_mention') &&
+      !ev.bot_id &&
+      !ev.subtype &&
+      ev.user &&
+      ev.text &&
+      ev.ts &&
+      ev.channel &&
+      body.team_id &&
+      evTeamInstall &&
+      evTeamInstall.mode !== 'classic'
+    ) {
+      const vChannel = await visitorChannelFor(db, evTeamInstall, ev.channel, ev.channel_type);
+      if (vChannel) {
+        const evKey = `v:${ev.channel}:${ev.ts}`;
+        if (!recentSlackEvents.has(evKey)) {
+          recentSlackEvents.set(evKey, Date.now());
+          await visitorSlackInbound(
+            db,
+            vChannel,
+            {
+              user: ev.user,
+              channel: ev.channel,
+              ts: ev.ts,
+              threadTs: ev.thread_ts,
+              text: ev.text,
+              mention: ev.type === 'app_mention',
+              channelType: ev.channel_type,
+            },
+            body.team_id,
+          ).catch((err) => console.error('slack visitor inbound failed:', err));
+        }
+        return c.json({ ok: true });
+      }
+    }
+
     // Concierge surface: a DM to the app (message.im) or an @mention
     // (app_mention) is a member asking Janis — routed through the concierge
     // channel like the Ask rail, with the reply posted back to Slack.
@@ -1626,6 +1674,99 @@ export function slackPublicRoutes(db: Db) {
     } catch (err) {
       if (!(err instanceof TakeoverError)) throw err;
     }
+    return c.json({ ok: true });
+  });
+
+  // BYO Slack apps (manual visitor channels): the channel's Events Request
+  // URL. Verified with the channel's own signing secret — no installation
+  // row involved, the channel creds carry bot_token + signing_secret.
+  app.post('/ext/:channelId/events', async (c) => {
+    const raw = await c.req.text();
+    const [channel] = await db
+      .select()
+      .from(channels)
+      .where(
+        and(eq(channels.id, c.req.param('channelId')), eq(channels.kind, 'slack')),
+      )
+      .limit(1);
+    const creds = channel?.credentials as ChannelCredentials | undefined;
+    if (!channel || !creds?.slack_signing_secret) return c.text('not found', 404);
+    if (
+      !verifySlackSignature(
+        creds.slack_signing_secret,
+        c.req.header('x-slack-request-timestamp'),
+        c.req.header('x-slack-signature'),
+        raw,
+      )
+    ) {
+      return c.text('invalid signature', 401);
+    }
+    const body = JSON.parse(raw) as {
+      type: string;
+      challenge?: string;
+      team_id?: string;
+      event?: {
+        type: string;
+        subtype?: string;
+        bot_id?: string;
+        user?: string;
+        channel?: string;
+        channel_type?: string;
+        thread_ts?: string;
+        ts?: string;
+        text?: string;
+      };
+    };
+    if (body.type === 'url_verification') return c.json({ challenge: body.challenge });
+    if (body.type !== 'event_callback') return c.json({ ok: true });
+    const ev = body.event;
+    if (
+      !ev ||
+      (ev.type !== 'message' && ev.type !== 'app_mention') ||
+      ev.bot_id ||
+      ev.subtype ||
+      !ev.user ||
+      !ev.text ||
+      !ev.ts ||
+      !ev.channel
+    ) {
+      return c.json({ ok: true });
+    }
+    // Team pinning: once a team id is on record the channel only answers
+    // that workspace's events.
+    if (creds.slack_team_id && body.team_id && creds.slack_team_id !== body.team_id) {
+      return c.json({ ok: true });
+    }
+    if (!claimsVisitorEvent(creds, ev.channel, ev.channel_type)) {
+      return c.json({ ok: true });
+    }
+    const evKey = `v:${ev.channel}:${ev.ts}`;
+    if (recentSlackEvents.has(evKey)) return c.json({ ok: true });
+    recentSlackEvents.set(evKey, Date.now());
+    const teamId = body.team_id ?? creds.slack_team_id ?? '';
+    // First event from a manual app pins the team so future foreign-team
+    // events can't reach this channel.
+    if (body.team_id && !creds.slack_team_id) {
+      creds.slack_team_id = body.team_id;
+      await db
+        .update(channels)
+        .set({ credentials: creds })
+        .where(eq(channels.id, channel.id));
+    }
+    await visitorSlackInbound(
+      db,
+      channel,
+      {
+        user: ev.user,
+        channel: ev.channel,
+        ts: ev.ts,
+        threadTs: ev.thread_ts,
+        text: ev.text,
+        mention: ev.type === 'app_mention',
+        channelType: ev.channel_type,
+      },
+      teamId,
+    ).catch((err) => console.error('slack visitor inbound failed:', err));
     return c.json({ ok: true });
   });
 

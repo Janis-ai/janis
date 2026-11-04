@@ -28,6 +28,7 @@ import type {
   users,
 } from '../db/schema.js';
 import { channelChatUrl } from './channels.js';
+import { env } from '../env.js';
 
 type Row<T> = T extends { $inferSelect: infer S } ? S : never;
 
@@ -265,6 +266,11 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
     mirror_address?: string;
     widget_domain?: string;
     manychat_token?: string;
+    slack_team_id?: string;
+    slack_team_name?: string;
+    slack_channel_ids?: string[];
+    slack_dm?: boolean;
+    slack_signing_secret?: string;
   };
   return {
     id: row.id,
@@ -305,6 +311,14 @@ export function toChannel(row: Row<typeof channels>, agentName: string): Channel
       cf_connected: row.kind === 'email' && creds.cf_refresh_token ? true : undefined,
       mirror_address: row.kind === 'email' ? creds.mirror_address : undefined,
       widget_domain: row.kind === 'webchat' ? creds.widget_domain : undefined,
+      slack_team_id: row.kind === 'slack' ? creds.slack_team_id : undefined,
+      slack_team_name: row.kind === 'slack' ? creds.slack_team_name : undefined,
+      slack_channel_ids: row.kind === 'slack' ? creds.slack_channel_ids : undefined,
+      slack_dm: row.kind === 'slack' ? creds.slack_dm === true : undefined,
+      slack_events_url:
+        row.kind === 'slack' && creds.slack_signing_secret
+          ? `${env.apiOrigin}/slack/ext/${row.id}/events`
+          : undefined,
       // manychat: an API token is on file (server-side pushes live) — the
       // token itself never leaves credentials
       manychat_connected:

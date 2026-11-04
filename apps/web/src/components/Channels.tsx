@@ -177,6 +177,7 @@ export const KIND_LABEL: Record<string, string> = {
   gmail: 'Gmail',
   voice: 'Voice',
   sms: 'SMS',
+  slack: 'Slack',
   chatfuel: 'Chatfuel',
   manychat: 'ManyChat',
 };
@@ -918,6 +919,7 @@ export function ChannelCard({
           </div>
         </details>
       )}
+      {ch.kind === 'slack' && <SlackSettings channel={ch} />}
       {(ch.kind === 'chatfuel' || ch.kind === 'manychat') && <BotIngestDetails ch={ch} />}
       {ch.meta.via !== 'oauth' && ['messenger', 'instagram', 'whatsapp'].includes(ch.kind) && (
       <details className="webhook-details">
@@ -957,6 +959,198 @@ export function ChannelCard({
 }
 
 /** Email channel: the From display name outbound replies send as. */
+/** Slack channel settings: which Slack surfaces the agent listens on
+ *  (bound channels + bot DMs), plus the BYO-app plumbing (events URL,
+ *  manifest, credentials) for manual installs. */
+function SlackSettings({ channel }: { channel: Channel }) {
+  const qc = useQueryClient();
+  const meta = channel.meta;
+  const isManual = meta.via === 'manual';
+  const listQ = useQuery({
+    queryKey: ['slack-channels', channel.id],
+    queryFn: () =>
+      api<{ channels: { id: string; name: string }[]; truncated?: boolean }>(
+        `/api/channels/${channel.id}/slack-channels`,
+      ),
+    retry: false,
+  });
+  const [picked, setPicked] = useState<Set<string>>(
+    () => new Set(meta.slack_channel_ids ?? []),
+  );
+  const [dm, setDm] = useState(meta.slack_dm === true);
+  const [secrets, setSecrets] = useState({ bot_token: '', signing_secret: '' });
+  const [manifest, setManifest] = useState('');
+  const [msg, setMsg] = useState('');
+  const save = useMutation({
+    mutationFn: () =>
+      api<{ slack_join_errors?: { id: string; error: string }[] }>(
+        `/api/channels/${channel.id}`,
+        {
+          method: 'PATCH',
+          body: JSON.stringify({
+            slack_channel_ids: [...picked],
+            slack_dm: dm,
+            ...(isManual && secrets.bot_token.trim()
+              ? { slack_bot_token: secrets.bot_token.trim() }
+              : {}),
+            ...(isManual && secrets.signing_secret.trim()
+              ? { slack_signing_secret: secrets.signing_secret.trim() }
+              : {}),
+          }),
+        },
+      ),
+    onSuccess: (r) => {
+      void qc.invalidateQueries({ queryKey: ['channels'] });
+      void qc.invalidateQueries({ queryKey: ['channel', channel.id] });
+      setSecrets({ bot_token: '', signing_secret: '' });
+      setMsg(
+        r.slack_join_errors?.length
+          ? `Saved — but the bot couldn't join ${r.slack_join_errors.length} channel${r.slack_join_errors.length === 1 ? '' : 's'} (${r.slack_join_errors.map((e) => e.id).join(', ')}). Private channels need an invite from a member.`
+          : 'Saved.',
+      );
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : 'Save failed'),
+  });
+  const manifestQ = useMutation({
+    mutationFn: () =>
+      api<{ manifest: string }>(`/api/channels/${channel.id}/slack-manifest`),
+    onSuccess: (r) => setManifest(r.manifest),
+  });
+  const toggle = (id: string) =>
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const slackChannels = [...(listQ.data?.channels ?? [])].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+  return (
+    <>
+      <details className="webhook-details" open style={{ marginTop: 8 }}>
+        <summary>
+          <span className="details-title">Listening surfaces</span>
+          <span className="details-sub">
+            {meta.slack_team_name ?? meta.slack_team_id ?? 'Slack'}
+            {isManual ? ' · your own Slack app' : ' · Janis app'} — pick where the agent answers
+          </span>
+        </summary>
+        <div style={{ marginTop: 8, fontSize: 13 }}>
+          {listQ.isPending && <div className="muted">Loading Slack channels…</div>}
+          {listQ.error && (
+            <div className="muted" style={{ fontSize: 12, lineHeight: 1.6 }}>
+              Couldn't list channels ({listQ.error instanceof Error ? listQ.error.message : 'error'}).
+              The bot may not be installed yet — channel ids can still be saved below by editing
+              the list directly.
+            </div>
+          )}
+          {slackChannels.length > 0 && (
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+                gap: '2px 12px',
+                marginTop: 4,
+              }}
+            >
+              {slackChannels.map((sc) => (
+                <label key={sc.id} className="muted" style={{ display: 'block', fontSize: 13 }}>
+                  <input
+                    type="checkbox"
+                    checked={picked.has(sc.id)}
+                    onChange={() => toggle(sc.id)}
+                  />{' '}
+                  #{sc.name}
+                </label>
+              ))}
+            </div>
+          )}
+          {listQ.data?.truncated && (
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              Channel list is still syncing — more will appear shortly.
+            </div>
+          )}
+          <label className="muted" style={{ display: 'block', marginTop: 10, fontSize: 13 }}>
+            <input type="checkbox" checked={dm} onChange={(e) => setDm(e.target.checked)} />{' '}
+            Answer direct messages to the bot
+            <div style={{ fontSize: 12, marginTop: 2 }}>
+              On the shared Janis app this claims DMs from the concierge — most installs only
+              want checked channels.
+            </div>
+          </label>
+          <div className="muted" style={{ fontSize: 12, marginTop: 8, lineHeight: 1.6 }}>
+            Every message + @mention in a checked channel becomes a conversation — the agent
+            replies in-thread. The bot joins public channels automatically; private channels
+            need an invite from a member.
+          </div>
+          {isManual && (
+            <>
+              <div className="row" style={{ marginTop: 10, gap: 6 }}>
+                <input
+                  className="grow"
+                  type="password"
+                  placeholder="Bot token (xoxb-…) — saved, never shown"
+                  value={secrets.bot_token}
+                  onChange={(e) => setSecrets({ ...secrets, bot_token: e.target.value })}
+                />
+                <input
+                  className="grow"
+                  type="password"
+                  placeholder="Signing secret — saved, never shown"
+                  value={secrets.signing_secret}
+                  onChange={(e) => setSecrets({ ...secrets, signing_secret: e.target.value })}
+                />
+              </div>
+            </>
+          )}
+          <div className="row" style={{ marginTop: 10 }}>
+            <button className="btn" disabled={save.isPending} onClick={() => save.mutate()}>
+              Save
+            </button>
+            {msg && <span className="muted">{msg}</span>}
+          </div>
+        </div>
+      </details>
+      {isManual && meta.slack_events_url && (
+        <details className="webhook-details" style={{ marginTop: 8 }}>
+          <summary>
+            <span className="details-title">Your Slack app</span>
+            <span className="details-sub">events URL + app manifest</span>
+          </summary>
+          <div style={{ marginTop: 8, fontSize: 13 }}>
+            <CodeBlock
+              title="Events API Request URL — api.slack.com → your app → Event Subscriptions"
+              code={meta.slack_events_url}
+              lang="sh"
+            />
+            <div className="muted" style={{ fontSize: 12, marginTop: 6, lineHeight: 1.6 }}>
+              Subscribe to bot events: <span className="mono">app_mention</span>,{' '}
+              <span className="mono">message.channels</span>,{' '}
+              <span className="mono">message.groups</span>,{' '}
+              <span className="mono">message.im</span>. Or start from the manifest — it
+              pre-fills scopes, events, and this URL (api.slack.com/apps → Create New App →
+              from a manifest).
+            </div>
+            <div className="row" style={{ marginTop: 8 }}>
+              <button
+                className="btn"
+                disabled={manifestQ.isPending}
+                onClick={() => (manifest ? setManifest('') : manifestQ.mutate())}
+              >
+                {manifest ? 'Hide manifest' : 'Show app manifest'}
+              </button>
+            </div>
+            {manifest && (
+              <CodeBlock title="Slack app manifest" code={manifest} lang="sh" />
+            )}
+          </div>
+        </details>
+      )}
+    </>
+  );
+}
+
 function EmailFromName({ channel }: { channel: Channel }) {
   const qc = useQueryClient();
   const [name, setName] = useState(channel.meta.from_name ?? '');

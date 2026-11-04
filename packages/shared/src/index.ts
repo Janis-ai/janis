@@ -635,7 +635,7 @@ export type Agent = z.infer<typeof Agent>;
 /** A hosted messaging channel (Meta), embeddable webchat, or inbound email. Tokens are never exposed to the console. */
 export const Channel = z.object({
   id: z.string(),
-  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'outlook', 'voice', 'sms', 'chatfuel', 'manychat']),
+  kind: z.enum(['messenger', 'instagram', 'whatsapp', 'webchat', 'email', 'gmail', 'outlook', 'voice', 'sms', 'chatfuel', 'manychat', 'slack']),
   name: z.string(),
   agent_id: z.string(),
   agent_name: z.string(),
@@ -705,6 +705,14 @@ export const Channel = z.object({
     // webchat: claimed custom domain (chat.acme.com) — serves the hosted chat
     // page + widget.js on that host once it reaches this app
     widget_domain: z.string().optional(),
+    // slack: which Slack workspace the channel listens in + the claimed
+    // surfaces (bound channel ids, bot DMs). events_url is the Request URL a
+    // manual (BYO) Slack app points at; undefined on shared-app installs.
+    slack_team_id: z.string().optional(),
+    slack_team_name: z.string().optional(),
+    slack_channel_ids: z.array(z.string()).optional(),
+    slack_dm: z.boolean().optional(),
+    slack_events_url: z.string().optional(),
     // webchat widget appearance — display config only, never secrets
     branding: z
       .object({
