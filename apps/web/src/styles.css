@@ -2135,6 +2135,9 @@ details summary:hover { color: var(--text); }
      (Gmail-app style). Secondary chips (agent, page disambiguator,
      intent) drop so the row reads name + channel + preview at a glance. */
   .conv-row { align-items: flex-start; gap: 8px; padding: 9px 14px; position: relative; }
+  /* Select-all rides the row's own 14px inset — its checkbox lines up
+     with row checkboxes, the pager with the stamp column. */
+  .conv-select-all { padding: 0 14px 8px; }
   /* Mobile stays flat — the two-tone is desktop-only; :not(.sel) keeps
      the bulk-select tint working on unread rows. */
   .conv-row.unread:not(.sel) { background: transparent; }
