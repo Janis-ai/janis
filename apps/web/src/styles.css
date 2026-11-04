@@ -1786,9 +1786,14 @@ details summary:hover { color: var(--text); }
 /* ⓘ only exists for the drawer — and it lives at the right edge the
    drawer slides out from. */
 .conv-actions .info-btn { order: 9; margin-left: auto; }
-/* Filter button's active count — the label carries it on desktop, the
-   badge carries it on mobile where the label is gone. */
-.filter-badge { display: none; }
+/* Filter button's active count — a pill at every width; the label doesn't
+   carry it anywhere. (The ≤1100/dock-open copies are same-style redeclares.) */
+.filter-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 16px; padding: 0 4px; margin-left: 2px;
+  border-radius: 8px; background: var(--accent); color: #06281f;
+  font-size: 10px; font-weight: 700; line-height: 1;
+}
 /* Snooze + send-as wrap their selects — the select is the visible dropdown
    on desktop; on mobile it goes invisible and an icon is the button face. */
 /* Bulk-bar snooze — same moon-over-select trick, sized to the row. */
