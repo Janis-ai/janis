@@ -2,12 +2,12 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
-import { useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
+import { useConversationsPage, useAgents, useMe, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
 import { Avatar, displayName, Empty, Md, SearchInput } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
-import { Archive, ArchiveRestore, Bot, Cog, Headset, ListFilter, Mail, MailOpen, Moon, Save, Star, Tag, Trash2, User, UserCheck, UserX, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Bot, ChevronLeft, ChevronRight, Cog, Headset, ListFilter, Mail, MailOpen, Moon, Save, Star, Tag, Trash2, User, UserCheck, UserX, X } from 'lucide-react';
 import { useConfirm, usePrompt } from '../components/Prompt';
 import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
 import { isEditableTarget } from '../lib/keys';
@@ -361,12 +361,25 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     from: drill?.from || undefined,
     to: drill?.to || undefined,
   };
-  const { data, hasNextPage, fetchNextPage, isFetchingNextPage, isPending: convsPending } =
-    useConversations({
-      attention: tab === 'attention' || undefined,
-      ...filterParams,
-    });
-  const convList = data?.pages.flatMap((p) => p.conversations);
+  // Gmail-style paging — a cursor stack keys each page back/forward;
+  // filters/tabs/agent changes reset to page 1.
+  const [pageIdx, setPageIdx] = useState(0);
+  const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
+  const filterKey = `${tab}|${JSON.stringify(filterParams)}`;
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
+  if (prevFilterKey !== filterKey) {
+    setPrevFilterKey(filterKey);
+    setPageIdx(0);
+    setCursorStack([undefined]);
+  }
+  const { data, isPending: convsPending } = useConversationsPage(
+    { attention: tab === 'attention' || undefined, ...filterParams },
+    cursorStack[pageIdx],
+  );
+  const convList = data?.conversations;
+  const total = data?.total ?? 0;
+  const pageStart = total === 0 ? 0 : pageIdx * 50 + 1;
+  const pageEnd = pageIdx * 50 + (convList?.length ?? 0);
   const knownTags = [...new Set((convList ?? []).flatMap((c) => c.tags ?? []))].sort();
   const { data: agents, isPending: agentsPending } = useAgents();
   const { data: views } = useViews();
@@ -763,6 +776,32 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         {/* The agent dimension is whole-app context — this picker switches
             it everywhere (nav subsection, Copilot, the other shared pages),
             and "All agents" leaves context entirely. */}
+        {!searching && total > 0 && (
+          <div className="inbox-pager">
+            <span className="muted">{pageStart}–{Math.min(pageEnd, total)} of {total.toLocaleString()}</span>
+            <button
+              className="btn icon"
+              aria-label="Previous page"
+              title="Previous page"
+              disabled={pageIdx === 0}
+              onClick={() => setPageIdx((i) => i - 1)}
+            >
+              <ChevronLeft size={15} />
+            </button>
+            <button
+              className="btn icon"
+              aria-label="Next page"
+              title="Next page"
+              disabled={!data?.next_cursor}
+              onClick={() => {
+                setCursorStack((s) => [...s.slice(0, pageIdx + 1), data!.next_cursor!]);
+                setPageIdx((i) => i + 1);
+              }}
+            >
+              <ChevronRight size={15} />
+            </button>
+          </div>
+        )}
       </div>
       </div>
 
@@ -905,14 +944,16 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           {convList?.map((c, i) => (
             <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} base={inboxBase} onAction={rowAction} />
           ))}
-          {hasNextPage && (
+          {data?.next_cursor && (
             <div style={{ textAlign: 'center', marginTop: 12 }}>
               <button
                 className="btn"
-                disabled={isFetchingNextPage}
-                onClick={() => void fetchNextPage()}
+                onClick={() => {
+                  setCursorStack((s) => [...s.slice(0, pageIdx + 1), data.next_cursor!]);
+                  setPageIdx((i) => i + 1);
+                }}
               >
-                {isFetchingNextPage ? 'Loading…' : 'Load more'}
+                Next page
               </button>
             </div>
           )}

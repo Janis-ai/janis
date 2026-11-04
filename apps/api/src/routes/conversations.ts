@@ -126,6 +126,14 @@ export function conversationRoutes(db: Db) {
 
     const conditions = convListConditions(q, workspaceId, c.get('user').id, c.get('agentScope'));
 
+    // Total for the Gmail-style "1–50 of N" pager — the filtered set
+    // BEFORE the cursor slice narrows it.
+    const [{ count: total }] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(...conditions));
+
     // Sort key: last activity, falling back to creation for threads with no
     // messages yet. id is the tiebreaker so the order is total — the cursor
     // comparison below relies on it.
@@ -166,6 +174,7 @@ export function conversationRoutes(db: Db) {
       conversations: page.map((r) => toConversation(r.conversation, r.openAlertCount, r.isTest)),
       has_more: hasMore,
       next_cursor: nextCursor,
+      total,
     });
   });
 

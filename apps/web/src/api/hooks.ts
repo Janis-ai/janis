@@ -91,9 +91,10 @@ export interface ConversationsPage {
   conversations: Conversation[];
   has_more: boolean;
   next_cursor: string | null;
+  total: number;
 }
 
-export function useConversations(filter: {
+type ConvFilter = {
   state?: string;
   states?: string;
   flags?: string;
@@ -104,7 +105,9 @@ export function useConversations(filter: {
   intent?: string;
   from?: string;
   to?: string;
-}) {
+};
+
+function convParams(filter: ConvFilter) {
   const params = new URLSearchParams();
   if (filter.state) params.set('state', filter.state);
   if (filter.states) params.set('states', filter.states);
@@ -117,6 +120,11 @@ export function useConversations(filter: {
   if (filter.from) params.set('from', filter.from);
   if (filter.to) params.set('to', filter.to);
   params.set('limit', '50');
+  return params;
+}
+
+export function useConversations(filter: ConvFilter) {
+  const params = convParams(filter);
   return useInfiniteQuery({
     queryKey: ['conversations', filter],
     queryFn: ({ pageParam }) =>
@@ -126,6 +134,19 @@ export function useConversations(filter: {
     initialPageParam: '',
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     refetchInterval: 30_000,
+  });
+}
+
+/** Single page of the inbox — Gmail-style pager where prev/next navigate
+ *  pages rather than accumulating rows like the infinite variant. */
+export function useConversationsPage(filter: ConvFilter, cursor?: string) {
+  const params = convParams(filter);
+  return useQuery({
+    queryKey: ['conversations-page', filter, cursor ?? ''],
+    queryFn: () =>
+      api<ConversationsPage>(`/api/conversations?${params}${cursor ? `&cursor=${cursor}` : ''}`),
+    refetchInterval: 30_000,
+    placeholderData: (prev) => prev,
   });
 }
 
