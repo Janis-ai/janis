@@ -1562,8 +1562,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
     display: block; width: 290px; flex-shrink: 0;
     border-right: 1px solid var(--border);
     /* Rows bleed edge-to-edge — the sel tint and hover wash span the
-       column; content keeps its inset via row padding. */
-    overflow-y: auto; padding: 8px 0;
+       column; content keeps its inset via row padding. Top padding lives
+       on the head so its controls line up with conv-main's action row. */
+    overflow-y: auto; padding: 0 0 8px;
   }
   /* Sidebar collapses to its icon rail while a conversation is open —
      same grammar as the dock-open squeeze, kept in lockstep. */
