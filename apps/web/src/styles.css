@@ -975,11 +975,10 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   border-bottom: 1px solid var(--border);
 }
 .conv-row:first-of-type { border-top: 1px solid var(--border); }
-/* Gmail two-tone on desktop — READ rows ride the tinted surface, unread
-   stay on the page bg (Gmail tints read, not the other way). Placed
-   before :hover/.sel so both still win; mobile keeps rows flat. */
-.conv-row { background: var(--panel); }
-.conv-row.unread { background: var(--bg); }
+/* Gmail two-tone on desktop — unread rows ride the tinted surface, read
+   stay flat. Placed before :hover/.sel so both still win; mobile keeps
+   rows flat. */
+.conv-row.unread { background: var(--panel); }
 .conv-row:hover { background: var(--panel-2); }
 .conv-row.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .conv-row.sel:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
@@ -2116,8 +2115,8 @@ details summary:hover { color: var(--text); }
      (Gmail-app style). Secondary chips (agent, page disambiguator,
      intent) drop so the row reads name + channel + preview at a glance. */
   .conv-row { align-items: flex-start; gap: 8px; padding: 9px 14px; position: relative; }
-  /* Mobile stays flat — the two-tone is desktop-only. */
-  .conv-row { background: transparent; }
+  /* Mobile stays flat — the two-tone is desktop-only; :not(.sel) keeps
+     the bulk-select tint working on unread rows. */
   .conv-row.unread:not(.sel) { background: transparent; }
   /* Name owns line 1; the tags group wraps to its own line beneath it so
      chips keep their natural pill widths; preview wraps last. */
