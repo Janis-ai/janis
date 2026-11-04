@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
 import { useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
-import { Avatar, displayName, Empty, Md, SearchInput, StateBadge, surfaceLabel } from '../components/bits';
+import { Avatar, displayName, Empty, Md, SearchInput, surfaceLabel } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
 import { Archive, ArchiveRestore, Bot, Cog, Headset, ListFilter, Mail, MailOpen, Moon, Save, Star, Tag, Trash2, User, UserCheck, UserX, X } from 'lucide-react';
@@ -180,12 +180,9 @@ function ConvRow({
       >
         <Star size={15} fill={c.is_starred ? 'currentColor' : 'none'} />
       </button>
-      {(c.open_alert_count > 0 || c.is_unread) && (
+      {c.open_alert_count > 0 && (
         <span className="conv-dots">
-          {c.open_alert_count > 0 && (
-            <span className="alert-dot" title={`${c.open_alert_count} open alert${c.open_alert_count === 1 ? '' : 's'}`} />
-          )}
-          {c.is_unread && <span className="unread-dot" title="Unread" />}
+          <span className="alert-dot" title={`${c.open_alert_count} open alert${c.open_alert_count === 1 ? '' : 's'}`} />
         </span>
       )}
       <Avatar c={c} size={32} />
@@ -223,8 +220,10 @@ function ConvRow({
         </div>
       </div>
       <div className="tail">
-        <StateBadge state={c.state} />
         <span className="meta">{listTime(c.last_message_at)}</span>
+        {/* Mobile-only unread marker (Gmail-app style: dot right of the
+            timestamp) — desktop carries unread purely by weight. */}
+        {c.is_unread && <span className="unread-dot m-dot" title="Unread" />}
         <span className="row-actions">
           <button
             type="button"
