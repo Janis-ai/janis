@@ -2031,8 +2031,14 @@ details summary:hover { color: var(--text); }
   .conv-row .tail { align-items: center; gap: 5px; margin-top: 3px; }
   .conv-row .tail .meta { font-size: 11px; }
   .conv-row .unread-dot.m-dot { display: inline-block; width: 7px; height: 7px; }
-  /* Star parks in the bottom-right corner under the timestamp (Gmail app). */
-  .conv-star { position: absolute; right: 8px; bottom: 9px; width: 30px; height: 30px; }
+  /* Star parks bottom-right (Gmail app): glyph's right edge lines up under
+     the time/dot column, its bottom edge with the preview line. The button
+     keeps a larger invisible hit area up/left of the glyph. */
+  .conv-star {
+    position: absolute; right: 10px; bottom: 9px;
+    width: 30px; height: 32px; padding: 0;
+    justify-content: flex-end; align-items: flex-end;
+  }
   .conv-row .agent-tag, .conv-row .intent-tag, .conv-row .channel-name { display: none; }
   .msg { max-width: 85%; }
   .login-wrap { padding: 16px; }
