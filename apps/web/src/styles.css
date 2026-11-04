@@ -1074,6 +1074,15 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   background: var(--panel); border: 1px solid var(--accent-dim);
   border-radius: 10px; padding: 8px 12px; margin-bottom: 10px;
 }
+/* Borderless icon slots everywhere — the mobile grammar was right:
+   even hit areas, chrome only on hover. */
+.bulk-bar .bulk-actions .btn, .bulk-bar .bulk-close {
+  border: 0; background: none; box-shadow: none;
+  height: auto; padding: 6px 8px;
+}
+.bulk-bar .bulk-actions .btn:hover, .bulk-bar .bulk-close:hover {
+  background: var(--panel-2); border: 0;
+}
 
 .avatar { border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .avatar.fallback {
@@ -2021,12 +2030,6 @@ details summary:hover { color: var(--text); }
   }
   .bulk-bar .bulk-actions .btn { padding: 6px 2px; }
   .bulk-actions > .btn, .bulk-actions > .bulk-snz-wrap { width: auto; min-width: 0; justify-content: center; }
-  /* Mobile bulk icons go borderless — even hit slots, no boxes. */
-  .bulk-bar .bulk-actions .btn {
-    border: 0; background: none; box-shadow: none;
-    height: auto; padding: 8px 4px;
-  }
-  .bulk-bar .bulk-actions .btn:hover { background: var(--panel-2); border: 0; }
   /* Details slide-over — the side column leaves the flow and becomes a
      right drawer behind the header's ⓘ. */
   .conv-side {
