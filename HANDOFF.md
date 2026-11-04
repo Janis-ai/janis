@@ -93,6 +93,37 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-04d — Visitor-facing Slack channels (shared app OR bring-your-own)
+- New 'slack' channel kind — an agent answers in bound Slack channels +
+  (opt-in) bot DMs. conversations key slack:{team}:{user}; the reply lands
+  wherever they last spoke (payload.slack stamp on the inbound message is
+  the reply pointer — channel + thread anchor, read back by sendSlackReply
+  like email's threading headers).
+- Two credential flavors on one channel row: via 'oauth' rides the existing
+  shared Janis app install (slack_installation_id — all needed scopes were
+  ALREADY in the install set: chat:write.customize, channels:join,
+  im:history, users:read.email); via 'manual' is the customer's own
+  white-label Slack app — bot_token+signing_secret on the channel, Events
+  URL /slack/ext/:id/events, manifest from /api/channels/:id/slack-manifest.
+- Routing: /slack/events claims bound surfaces BEFORE concierge (claims
+  only match creds.slack_channel_ids / slack_dm — unclaimed DMs + mentions
+  elsewhere still go concierge; classic-mode installs untouched).
+- lib/slackChannel.ts is the new home: claimsVisitorEvent,
+  visitorChannelFor, visitorSlackInbound, sendSlackReply (thread_ts anchor,
+  mrkdwn via slackMrkdwn, persona via username=operator|agent name),
+  joinBoundSlackChannels (auto-join on save; private channels need member
+  invite — surfaced as slack_join_errors on create/patch).
+- Console: Slack card on agent Integrations (install picker + channel
+  multi-pick + DM toggle + BYO form); channel page gets Listening surfaces
+  + Your Slack app (events URL, manifest) sections.
+- Slack directory emails store as contact email but stay UNVERIFIED —
+  ToolDef.identity tools don't see them. Per-thread ticketing (each post =
+  its own conversation) is deliberately not done: per-user continuity.
+- Deferred: Slack files/attachments, native quick-reply buttons (rendered
+  as a bullet list), @mentions in unbound channels going to concierge on
+  community installs, per-thread (vs per-user) conversation mode.
+- Committed + pushed 5e1919a; NOT deployed per Mike.
+
 ## 2026-11-04c — Host-asserted avatars via Janis.identify({ avatar_url })
 - identityClaim accepts avatar_url; verifyIdentitySig returns
   {verified, avatarSigned} — the avatar is honored only when the signature
