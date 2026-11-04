@@ -2044,11 +2044,12 @@ details summary:hover { color: var(--text); }
   .conv-row .who .name { flex: 0 1 auto; max-width: 100%; }
   .conv-row .who .tags { flex-basis: 100%; order: 2; margin-top: 2px; }
   .conv-row .who .preview { flex-basis: 100%; order: 3; padding-right: 36px; }
-  /* Tail is "time [dots]" at top-right — attention + unread dots in a
-     fixed-width slot whose far edge lines up with the star beneath. */
+  /* Tail is "time [dots]" at top-right — dots hug the stamp (no reserved
+     slot) so the group's far edge always lands on the star's edge, and
+     dot-less rows put the stamp itself flush on it. */
   .conv-row .tail { align-items: center; gap: 5px; margin-top: 3px; }
   .conv-row .tail .meta { font-size: 11px; }
-  .conv-row .tail-dots { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; width: 20px; flex-shrink: 0; }
+  .conv-row .tail-dots { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
   .conv-row .tail-dots .alert-dot, .conv-row .tail-dots .unread-dot { width: 7px; height: 7px; }
   .conv-row .conv-dots { display: none; }
   /* Star parks bottom-right (Gmail app): glyph's right edge lines up under
