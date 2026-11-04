@@ -4152,6 +4152,33 @@ function IntegrationCards({
       ) : (
         grid(rest)
       )}
+      {/* Zapier is external automation on the agent's API keys, not a tool
+          template — static card, same grid styling. The generated Workflow
+          Element embed drops in here once zap templates are published. */}
+      <div className="card" style={{ padding: 14, marginTop: 12 }}>
+        <div className="row" style={{ alignItems: 'center' }}>
+          <strong>8,000+ more apps via Zapier</strong>
+          <span className="badge" style={{ marginLeft: 'auto' }}>automation</span>
+        </div>
+        <div className="muted" style={{ fontSize: 12, margin: '8px 0 10px' }}>
+          Conversations starting, escalating, or resolving can kick off Zaps — and anything
+          in Zapier can send replies, escalate, resolve, or start an outbound message back
+          here. When Zapier asks for a key, create one under Settings → General → API keys.
+        </div>
+        <div className="row">
+          <a
+            className="btn primary"
+            href="https://zapier.com/apps/janis/integrations"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Connect apps in Zapier ↗
+          </a>
+          <Link className="btn" to={`/agents/${agentId}/settings?sub=general`}>
+            API keys
+          </Link>
+        </div>
+      </div>
     </>
   );
 }

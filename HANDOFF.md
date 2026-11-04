@@ -93,6 +93,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-04f — Zapier card on agent Integrations (embed surface)
+- Agent Actions tab gets a static "8,000+ more apps via Zapier" card
+  under the catalog grid — blurb covers both directions (triggers on
+  new/escalated/resolved, actions back into Janis), links the live
+  directory listing, and a secondary button jumps to Settings →
+  General → API keys (the credential Zapier asks for). Not a tool
+  template — external automation on agent API keys.
+- The generated Zapier Workflow Element mounts inside this card once
+  Mike publishes zap templates + whitelists embed domains in the dev
+  platform (both are his-login steps).
+
 ## 2026-11-04e — Zapier approved: Janis is live in the public directory
 - Platform review passed (after the 11-03 desc fix — no other-app
   names); invite code retired, app is searchable/installable by anyone.

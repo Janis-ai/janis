@@ -1022,8 +1022,11 @@ drizzle-kit/workbox-build, nothing to drop directly).
 - Marketplace: Janis is a PUBLISHED Zapier app — approved + live
   2026-11-04, public beta until ~2026-02-02 (§A item 4). Open
   beta-phase leverage: zap templates embedded in product (also the
-  early-exit path from beta), Powered-by-Zapier embed, help doc on
-  janis.ai, Zapier Partner Sandbox for version testing. Mike-side
+  early-exit path from beta — console card shipped 2026-11-04 on agent
+  Actions; the generated Workflow Element mounts inside it once
+  templates are public + embed domains whitelisted in dev-platform
+  settings), help doc on janis.ai, Zapier Partner Sandbox for version
+  testing. Mike-side
   hygiene: keep technical contact info current on the dev platform
   (Zapier asked 2026-11-04 — routes their escalations to the right
   person). Webhook
