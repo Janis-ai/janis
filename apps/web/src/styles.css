@@ -980,7 +980,7 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
    preview and clip whole at the column edge, never squeezing the name. */
 .conv-row .who .name {
   flex: 0 0 clamp(140px, 18%, 220px); min-width: 0;
-  overflow: hidden; font-weight: 400; font-size: 13px;
+  overflow: hidden; font-weight: 400; font-size: 13.5px;
   /* Read senders sit a step dimmer than unread — Gmail's gray-vs-ink. */
   color: color-mix(in srgb, var(--text) 72%, var(--muted));
 }
