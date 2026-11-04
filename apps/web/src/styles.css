@@ -879,6 +879,7 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 }
 .ask-input-row { display: flex; align-items: center; gap: 8px; }
 .sidebar .user { padding: 12px 20px; font-size: 12px; color: var(--muted); border-top: 1px solid var(--border); }
+.sidebar .user .user-ic { display: none; }
 .sidebar .user .ws-switch { width: 100%; padding: 5px 8px; font-size: 12px; margin-bottom: 6px; }
 
 .main { flex: 1; min-width: 0; padding: 24px; max-width: 1100px; overflow-y: auto; overflow-x: hidden; }
@@ -1572,7 +1573,12 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .layout.conv-open .sidebar .brand, .layout.conv-open .sidebar a { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
   .layout.conv-open .sidebar .brand .brand-wide { display: none; }
   .layout.conv-open .sidebar .brand .brand-mark { display: block; margin: 0 auto; }
-  .layout.conv-open .sidebar a .label, .layout.conv-open .sidebar .user, .layout.conv-open .sidebar .ask-toggle .label { display: none; }
+  .layout.conv-open .sidebar a .label, .layout.conv-open .sidebar .ask-toggle .label { display: none; }
+  /* Sign-out keeps an icon affordance in the rail — text swaps for glyph. */
+  .layout.conv-open .sidebar .user { display: flex; justify-content: center; padding: 12px 0; }
+  .layout.conv-open .sidebar .user .user-text { display: none; }
+  .layout.conv-open .sidebar .user .user-ic { display: inline-flex; color: var(--muted); }
+  .layout.conv-open .sidebar .user .user-ic:hover { color: var(--text); }
   .layout.conv-open .sidebar a .icon, .layout.conv-open .sidebar .ask-toggle .icon { display: inline-flex; }
   .layout.conv-open .sidebar a.nav-indent { padding-left: 0; }
   .layout.conv-open .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
@@ -1678,7 +1684,11 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .layout.dock-open:has(.conv-layout) .sidebar .brand, .layout.dock-open:has(.conv-layout) .sidebar a { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
   .layout.dock-open:has(.conv-layout) .sidebar .brand .brand-wide { display: none; }
   .layout.dock-open:has(.conv-layout) .sidebar .brand .brand-mark { display: block; margin: 0 auto; }
-  .layout.dock-open:has(.conv-layout) .sidebar a .label, .layout.dock-open:has(.conv-layout) .sidebar .user, .layout.dock-open:has(.conv-layout) .sidebar .ask-toggle .label { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar a .label, .layout.dock-open:has(.conv-layout) .sidebar .ask-toggle .label { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar .user { display: flex; justify-content: center; padding: 12px 0; }
+  .layout.dock-open:has(.conv-layout) .sidebar .user .user-text { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar .user .user-ic { display: inline-flex; color: var(--muted); }
+  .layout.dock-open:has(.conv-layout) .sidebar .user .user-ic:hover { color: var(--text); }
   .layout.dock-open:has(.conv-layout) .sidebar a .icon, .layout.dock-open:has(.conv-layout) .sidebar .ask-toggle .icon { display: inline-flex; }
   /* icon rail: no indent — icons centre like every other row; the agent
      label collapses to its bot glyph */

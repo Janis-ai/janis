@@ -27,7 +27,7 @@ import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronLeft, ChevronRight, ChevronsUpDown,
   Columns2, Compass, CreditCard, FlaskConical, Gauge, Inbox, Maximize2, Megaphone,
-  Menu, MessageSquarePlus, Minimize2, PenLine, Rocket, Settings, Sparkles, Users,
+  LogOut, Menu, MessageSquarePlus, Minimize2, PenLine, Rocket, Settings, Sparkles, Users,
   Wrench, X, Zap,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
@@ -1361,9 +1361,20 @@ export default function Layout() {
           <span className="label">{t('nav.operatorGuide', 'Operator guide')}</span><span className="icon"><BookOpen size={16} /></span>
         </Link>
         <div className="user">
-          {data?.user.name}
-          {' · '}
-          <a href="#" onClick={(e) => { e.preventDefault(); void logout(); }}>Sign out</a>
+          <a
+            className="user-ic"
+            href="#"
+            title="Sign out"
+            aria-label="Sign out"
+            onClick={(e) => { e.preventDefault(); void logout(); }}
+          >
+            <LogOut size={16} />
+          </a>
+          <span className="user-text">
+            {data?.user.name}
+            {' · '}
+            <a href="#" onClick={(e) => { e.preventDefault(); void logout(); }}>Sign out</a>
+          </span>
         </div>
       </nav>
       <main className="main" id="main-content" tabIndex={-1}>
