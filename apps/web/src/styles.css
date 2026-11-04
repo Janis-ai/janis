@@ -1077,6 +1077,8 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 }
 /* Close pins to the panel's top-right corner. */
 .bulk-bar .bulk-close { position: absolute; top: 6px; right: 6px; }
+/* Checkbox + count center with the icons on the bar's midline. */
+.bulk-bar > .check { align-items: center; display: flex; }
 /* Borderless icon slots everywhere — the mobile grammar was right:
    even hit areas, chrome only on hover. */
 .bulk-bar .bulk-actions .btn, .bulk-bar .bulk-close {
