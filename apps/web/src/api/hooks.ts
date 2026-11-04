@@ -123,7 +123,7 @@ function convParams(filter: ConvFilter) {
   return params;
 }
 
-export function useConversations(filter: ConvFilter) {
+export function useConversations(filter: ConvFilter, enabled = true) {
   const params = convParams(filter);
   return useInfiniteQuery({
     queryKey: ['conversations', filter],
@@ -134,12 +134,13 @@ export function useConversations(filter: ConvFilter) {
     initialPageParam: '',
     getNextPageParam: (last) => last.next_cursor ?? undefined,
     refetchInterval: 30_000,
+    enabled,
   });
 }
 
 /** Single page of the inbox — Gmail-style pager where prev/next navigate
  *  pages rather than accumulating rows like the infinite variant. */
-export function useConversationsPage(filter: ConvFilter, cursor?: string) {
+export function useConversationsPage(filter: ConvFilter, cursor?: string, enabled = true) {
   const params = convParams(filter);
   return useQuery({
     queryKey: ['conversations-page', filter, cursor ?? ''],
@@ -147,6 +148,7 @@ export function useConversationsPage(filter: ConvFilter, cursor?: string) {
       api<ConversationsPage>(`/api/conversations?${params}${cursor ? `&cursor=${cursor}` : ''}`),
     refetchInterval: 30_000,
     placeholderData: (prev) => prev,
+    enabled,
   });
 }
 

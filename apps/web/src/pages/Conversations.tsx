@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
-import { useConversationsPage, useAgents, useMe, useSearch, useViews } from '../api/hooks';
+import { useConversations, useConversationsPage, useAgents, useMe, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
 import { Avatar, displayName, Empty, Md, SearchInput } from '../components/bits';
 import Onboarding from '../components/Onboarding';
@@ -130,6 +130,7 @@ export function ConvRow({
   selected,
   onToggle,
   focused,
+  selMode,
   base,
   onAction,
 }: {
@@ -138,6 +139,9 @@ export function ConvRow({
   selected?: boolean;
   onToggle?: (id: string) => void;
   focused?: boolean;
+  /** Multi-select active (mobile long-press grammar): taps toggle the row
+   *  instead of navigating. */
+  selMode?: boolean;
   /** Inbox base path — agent-scoped mounts link to /agents/:id/inbox/:conv
    *  so the sidebar keeps the agent context open on the detail page. */
   base: string;
@@ -160,11 +164,36 @@ export function ConvRow({
     e.stopPropagation();
     onAction?.(c, action);
   };
+  // Long-press (mobile) flips this row into multi-select; in select mode
+  // taps toggle rather than navigate — the link click is suppressed
+  // either way once the press fires.
+  const lp = useRef<{ t?: number; fired?: boolean }>({});
   return (
     <Link
       to={`${base}/${c.id}`}
       className={`conv-row${c.is_unread ? ' unread' : ''}${selected ? ' sel' : ''}${focused ? ' kbd-focus' : ''}`}
       ref={rowRef}
+      onTouchStart={() => {
+        lp.current.fired = false;
+        lp.current.t = window.setTimeout(() => {
+          lp.current.fired = true;
+          onToggle?.(c.id);
+        }, 450);
+      }}
+      onTouchEnd={() => window.clearTimeout(lp.current.t)}
+      onTouchMove={() => window.clearTimeout(lp.current.t)}
+      onTouchCancel={() => window.clearTimeout(lp.current.t)}
+      onClick={(e) => {
+        if (lp.current.fired) {
+          e.preventDefault();
+          lp.current.fired = false;
+          return;
+        }
+        if (selMode) {
+          e.preventDefault();
+          onToggle?.(c.id);
+        }
+      }}
     >
       {onToggle && (
         <input
@@ -361,8 +390,15 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     from: drill?.from || undefined,
     to: drill?.to || undefined,
   };
-  // Gmail-style paging — a cursor stack keys each page back/forward;
-  // filters/tabs/agent changes reset to page 1.
+  // Two list grammars: desktop pages via a cursor stack (Gmail ‹ ›),
+  // mobile infinite-scrolls — a bottom sentinel keeps fetching.
+  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 720px)').matches);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 720px)');
+    const fn = () => setIsMobile(mq.matches);
+    mq.addEventListener('change', fn);
+    return () => mq.removeEventListener('change', fn);
+  }, []);
   const [pageIdx, setPageIdx] = useState(0);
   const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
   const filterKey = `${tab}|${JSON.stringify(filterParams)}`;
@@ -372,14 +408,36 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     setPageIdx(0);
     setCursorStack([undefined]);
   }
-  const { data, isPending: convsPending } = useConversationsPage(
-    { attention: tab === 'attention' || undefined, ...filterParams },
-    cursorStack[pageIdx],
-  );
-  const convList = data?.conversations;
-  const total = data?.total ?? 0;
+  const convFilter = { attention: tab === 'attention' || undefined, ...filterParams };
+  const pageQ = useConversationsPage(convFilter, cursorStack[pageIdx], !isMobile);
+  const infQ = useConversations(convFilter, isMobile);
+  const data = isMobile ? undefined : pageQ.data;
+  const convList = isMobile
+    ? infQ.data?.pages.flatMap((p) => p.conversations)
+    : pageQ.data?.conversations;
+  const convsPending = isMobile ? infQ.isPending : pageQ.isPending;
+  const total = (isMobile ? infQ.data?.pages[0]?.total : pageQ.data?.total) ?? 0;
   const pageStart = total === 0 ? 0 : pageIdx * 50 + 1;
   const pageEnd = pageIdx * 50 + (convList?.length ?? 0);
+  // Scroll-sentinel: mobile's pager replacement — bottom hit fetches the
+  // next page while more rows exist.
+  const listRef = useRef<HTMLDivElement>(null);
+  const sentRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isMobile) return;
+    const el = sentRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (es) => {
+        if (es[0].isIntersecting && infQ.hasNextPage && !infQ.isFetchingNextPage) {
+          void infQ.fetchNextPage();
+        }
+      },
+      { root: listRef.current, rootMargin: '200px' },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [isMobile, infQ.hasNextPage, infQ.isFetchingNextPage, infQ.fetchNextPage]);
   const knownTags = [...new Set((convList ?? []).flatMap((c) => c.tags ?? []))].sort();
   const { data: agents, isPending: agentsPending } = useAgents();
   const { data: views } = useViews();
@@ -848,7 +906,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
 
       {/* The list is the scroll region — .main locks when .inbox-head is
           present, so only rows move. */}
-      <div className={`conv-list${selected.size ? ' sel' : ''}`}>
+      <div className={`conv-list${selected.size ? ' sel' : ''}`} ref={listRef}>
       {searching ? (
         searchPending ? (
           <div className="row" style={{ justifyContent: 'center', marginTop: 24 }}>
@@ -859,7 +917,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         <>
           {hits && hits.conversations.length === 0 && <Empty>No matches.</Empty>}
           {hits?.conversations.map((c, i) => (
-            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} base={inboxBase} onAction={rowAction} />
+            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} selMode={selected.size > 0} base={inboxBase} onAction={rowAction} />
           ))}
           {hits && hits.messages.length > 0 && (
             <div className="card" style={{ marginTop: 16 }}>
@@ -942,9 +1000,17 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             </div>
           )}
           {convList?.map((c, i) => (
-            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} base={inboxBase} onAction={rowAction} />
+            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} selMode={selected.size > 0} base={inboxBase} onAction={rowAction} />
           ))}
-          {data?.next_cursor && (
+          {/* Mobile's pager is the scroll itself — this sentinel fires
+              fetchNextPage when the bottom enters view. */}
+          {isMobile && <div ref={sentRef} style={{ height: 1 }} />}
+          {isMobile && infQ.isFetchingNextPage && (
+            <div className="row" style={{ justifyContent: 'center', marginTop: 12 }}>
+              <span className="spin" />
+            </div>
+          )}
+          {!isMobile && data?.next_cursor && (
             <div style={{ textAlign: 'center', marginTop: 12 }}>
               <button
                 className="btn"

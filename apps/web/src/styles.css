@@ -2135,9 +2135,13 @@ details summary:hover { color: var(--text); }
      (Gmail-app style). Secondary chips (agent, page disambiguator,
      intent) drop so the row reads name + channel + preview at a glance. */
   .conv-row { align-items: flex-start; gap: 8px; padding: 9px 14px; position: relative; }
-  /* Select-all rides the row's own 14px inset — its checkbox lines up
-     with row checkboxes, the pager with the stamp column. */
-  .conv-select-all { padding: 0 14px 8px; }
+  /* Mobile selection is long-press + tap-to-toggle — the checkbox, the
+     select-all row, and the pager count all go away; the avatar slides
+     to the row edge. user-select off keeps the press from selecting text. */
+  .conv-row { -webkit-touch-callout: none; }
+  .conv-row .who, .conv-row .tail { user-select: none; -webkit-user-select: none; }
+  .conv-row .conv-check { display: none; }
+  .conv-select-all { display: none; }
   /* Mobile stays flat — the two-tone is desktop-only; :not(.sel) keeps
      the bulk-select tint working on unread rows. */
   .conv-row.unread:not(.sel) { background: transparent; }
