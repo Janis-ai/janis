@@ -1068,13 +1068,17 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 }
 /* Sides pad to the same 24px inset as the head — the pager's › lands on
    the search field's right edge while the row bleeds past it. */
-.conv-select-all { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 0 24px 8px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
+/* Same footprint as .bulk-bar (44px row + 6px gap) — the two swap in the
+   same slot, so the list below can't jump and the checkbox stays put. */
+.conv-select-all { position: sticky; top: 0; z-index: 5; background: var(--bg); height: 44px; box-sizing: border-box; padding: 0 24px; margin-bottom: 6px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
+.conv-select-all .check { margin: 0; }
 .bulk-bar {
   position: sticky; top: 0; z-index: 5;
   /* Boxless — floats on the page background like Gmail's; --bg backing is
      only there so rows scrolling under the sticky bar don't bleed through. */
   background: var(--bg); border: 0;
   margin: 0 -24px 10px; padding: 6px 24px;
+  min-height: 44px; box-sizing: border-box;
   display: flex; align-items: center;
 }
 /* Desktop hides the × — unchecking the bar's own checkbox clears the
@@ -1084,7 +1088,9 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .bulk-bar > .check { align-items: center; display: flex; margin: 0; }
 /* Compact cluster — fixed-width slots so the icon pitch is perfectly
    even without spreading across the bar. */
-.bulk-bar .bulk-actions { display: flex; align-items: center; gap: 2px; margin-left: 10px; }
+/* min-width makes the cluster wrap to its own full row when it can't fit
+   beside the count — a deliberate second line, not a spill. */
+.bulk-bar .bulk-actions { display: flex; align-items: center; gap: 2px; margin-left: 10px; flex: 1 1 auto; min-width: 340px; }
 .bulk-bar .bulk-actions > .btn,
 .bulk-bar .bulk-actions > .bulk-snz-wrap {
   width: 34px; flex: none; display: inline-flex; align-items: center; justify-content: center;
@@ -2040,7 +2046,7 @@ details summary:hover { color: var(--text); }
     /* The panel bleeds to the edges — cards read cramped floating inset
        on a phone; the bar owns the full width like the rows do. */
     margin: 0 -14px 10px; border-radius: 0; border-left: 0; border-right: 0;
-    padding: 8px 14px;
+    padding: 8px 14px; height: auto;
     background: var(--panel);
     border-top: 1px solid var(--accent-dim); border-bottom: 1px solid var(--accent-dim);
   }
@@ -2049,8 +2055,11 @@ details summary:hover { color: var(--text); }
   .filters.bulk-bar .bulk-close { display: inline-flex; order: 1; margin-left: auto; border: 0; background: none; box-shadow: none; }
   /* the ten actions as one even row of borderless icon slots */
   .bulk-bar .bulk-actions {
-    order: 2; flex-basis: 100%;
-    display: grid; grid-template-columns: repeat(10, 1fr); gap: 0;
+    order: 2; flex-basis: 100%; min-width: 0; margin-left: 0;
+    /* Columns cap at 42px and the strip centers — full-bleed on a phone,
+       a compact centered cluster when the row is wider. */
+    display: grid; grid-template-columns: repeat(10, minmax(0, 42px)); gap: 0;
+    justify-content: center;
   }
   .bulk-bar .bulk-actions .btn { padding: 6px 2px; }
   .bulk-bar .bulk-actions > .btn, .bulk-bar .bulk-actions > .bulk-snz-wrap { width: auto; min-width: 0; justify-content: center; }
