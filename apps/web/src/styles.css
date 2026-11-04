@@ -1077,12 +1077,25 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   display: flex; align-items: center;
 }
 .bulk-bar .bulk-close { margin-left: auto; }
-.bulk-bar > .check { align-items: center; display: flex; }
+.bulk-bar > .check { align-items: center; display: flex; margin: 0; }
+/* Compact cluster — fixed-width slots so the icon pitch is perfectly
+   even without spreading across the bar. */
+.bulk-bar .bulk-actions { display: flex; align-items: center; gap: 2px; margin-left: 10px; }
+.bulk-bar .bulk-actions > .btn,
+.bulk-bar .bulk-actions > .bulk-snz-wrap {
+  width: 34px; flex: none; display: inline-flex; align-items: center; justify-content: center;
+}
+/* .filters' `order: 1` on .src-menu-wrap would shove the snooze slot past
+   delete — pin DOM order so delete stays the last action everywhere. */
+.bulk-bar .bulk-actions .bulk-snz-wrap { order: 0; }
+/* The global .btn+.btn sibling margin skips the snooze span — kill it so
+   every slot keeps the same 2px gap. */
+.bulk-bar .bulk-actions .btn + .btn { margin-left: 0; }
 /* Borderless icon slots everywhere — the mobile grammar was right:
    even hit areas, chrome only on hover. */
 .bulk-bar .bulk-actions .btn, .bulk-bar .bulk-close {
   border: 0; background: none; box-shadow: none;
-  height: auto; padding: 6px 8px;
+  height: auto; padding: 6px 0;
 }
 .bulk-bar .bulk-actions .btn:hover, .bulk-bar .bulk-close:hover {
   background: var(--panel-2); border: 0;
@@ -2033,7 +2046,7 @@ details summary:hover { color: var(--text); }
     display: grid; grid-template-columns: repeat(10, 1fr); gap: 0;
   }
   .bulk-bar .bulk-actions .btn { padding: 6px 2px; }
-  .bulk-actions > .btn, .bulk-actions > .bulk-snz-wrap { width: auto; min-width: 0; justify-content: center; }
+  .bulk-bar .bulk-actions > .btn, .bulk-bar .bulk-actions > .bulk-snz-wrap { width: auto; min-width: 0; justify-content: center; }
   /* Details slide-over — the side column leaves the flow and becomes a
      right drawer behind the header's ⓘ. */
   .conv-side {
