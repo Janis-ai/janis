@@ -2,12 +2,12 @@ import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
-import { useConversations, useConversationsPage, useAgents, useMe, useSearch, useViews } from '../api/hooks';
+import { useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
 import { Avatar, displayName, Empty, Md, SearchInput } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
-import { Archive, ArchiveRestore, Bot, Check, ChevronLeft, ChevronRight, Cog, Headset, ListFilter, Mail, MailOpen, Moon, Save, Star, Tag, Trash2, User, UserCheck, UserX, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Bot, Check, Cog, Headset, ListFilter, Mail, MailOpen, Moon, Save, Star, Tag, Trash2, User, UserCheck, UserX, X } from 'lucide-react';
 import { useConfirm, usePrompt } from '../components/Prompt';
 import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
 import { isEditableTarget } from '../lib/keys';
@@ -395,41 +395,16 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     from: drill?.from || undefined,
     to: drill?.to || undefined,
   };
-  // Two list grammars: desktop pages via a cursor stack (Gmail ‹ ›),
-  // mobile infinite-scrolls — a bottom sentinel keeps fetching.
-  const [isMobile, setIsMobile] = useState(() => window.matchMedia('(max-width: 720px)').matches);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 720px)');
-    const fn = () => setIsMobile(mq.matches);
-    mq.addEventListener('change', fn);
-    return () => mq.removeEventListener('change', fn);
-  }, []);
-  const [pageIdx, setPageIdx] = useState(0);
-  const [cursorStack, setCursorStack] = useState<(string | undefined)[]>([undefined]);
-  const filterKey = `${tab}|${JSON.stringify(filterParams)}`;
-  const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
-  if (prevFilterKey !== filterKey) {
-    setPrevFilterKey(filterKey);
-    setPageIdx(0);
-    setCursorStack([undefined]);
-  }
+  // One grammar everywhere — scroll-append; the bottom sentinel keeps
+  // fetching while more rows exist. Total still shows in the head line.
   const convFilter = { attention: tab === 'attention' || undefined, ...filterParams };
-  const pageQ = useConversationsPage(convFilter, cursorStack[pageIdx], !isMobile);
-  const infQ = useConversations(convFilter, isMobile);
-  const data = isMobile ? undefined : pageQ.data;
-  const convList = isMobile
-    ? infQ.data?.pages.flatMap((p) => p.conversations)
-    : pageQ.data?.conversations;
-  const convsPending = isMobile ? infQ.isPending : pageQ.isPending;
-  const total = (isMobile ? infQ.data?.pages[0]?.total : pageQ.data?.total) ?? 0;
-  const pageStart = total === 0 ? 0 : pageIdx * 50 + 1;
-  const pageEnd = pageIdx * 50 + (convList?.length ?? 0);
-  // Scroll-sentinel: mobile's pager replacement — bottom hit fetches the
-  // next page while more rows exist.
+  const infQ = useConversations(convFilter);
+  const convList = infQ.data?.pages.flatMap((p) => p.conversations);
+  const convsPending = infQ.isPending;
+  const total = infQ.data?.pages[0]?.total ?? 0;
   const listRef = useRef<HTMLDivElement>(null);
   const sentRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!isMobile) return;
     const el = sentRef.current;
     if (!el) return;
     const obs = new IntersectionObserver(
@@ -442,7 +417,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     );
     obs.observe(el);
     return () => obs.disconnect();
-  }, [isMobile, infQ.hasNextPage, infQ.isFetchingNextPage, infQ.fetchNextPage]);
+  }, [infQ.hasNextPage, infQ.isFetchingNextPage, infQ.fetchNextPage]);
   const knownTags = [...new Set((convList ?? []).flatMap((c) => c.tags ?? []))].sort();
   const { data: agents, isPending: agentsPending } = useAgents();
   const { data: views } = useViews();
@@ -968,7 +943,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         </div>
       ) : (
         <>
-          {data && convList!.length === 0 && (
+          {infQ.data && convList!.length === 0 && (
             <Empty>
               {tab === 'attention'
                 ? 'No conversations need attention. When an agent fails or asks for help, it lands here.'
@@ -993,55 +968,19 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
                 Select all loaded
               </label>
               {!searching && total > 0 && (
-                <div className="inbox-pager">
-                  <span className="muted">{pageStart}–{Math.min(pageEnd, total)} of {total.toLocaleString()}</span>
-                  <button
-                    className="btn icon"
-                    aria-label="Previous page"
-                    title="Previous page"
-                    disabled={pageIdx === 0}
-                    onClick={() => setPageIdx((i) => i - 1)}
-                  >
-                    <ChevronLeft size={15} />
-                  </button>
-                  <button
-                    className="btn icon"
-                    aria-label="Next page"
-                    title="Next page"
-                    disabled={!data?.next_cursor}
-                    onClick={() => {
-                      setCursorStack((s) => [...s.slice(0, pageIdx + 1), data!.next_cursor!]);
-                      setPageIdx((i) => i + 1);
-                    }}
-                  >
-                    <ChevronRight size={15} />
-                  </button>
-                </div>
+                <span className="muted inbox-total">{(convList?.length ?? 0).toLocaleString()} of {total.toLocaleString()}</span>
               )}
             </div>
           )}
           {convList?.map((c, i) => (
             <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} selMode={selected.size > 0} base={inboxBase} onAction={rowAction} />
           ))}
-          {/* Mobile's pager is the scroll itself — this sentinel fires
+          {/* The pager is the scroll itself — the sentinel fires
               fetchNextPage when the bottom enters view. */}
-          {isMobile && <div ref={sentRef} style={{ height: 1 }} />}
-          {isMobile && infQ.isFetchingNextPage && (
+          <div ref={sentRef} style={{ height: 1 }} />
+          {infQ.isFetchingNextPage && (
             <div className="row" style={{ justifyContent: 'center', marginTop: 12 }}>
               <span className="spin" />
-            </div>
-          )}
-          {!isMobile && data?.next_cursor && (
-            <div style={{ textAlign: 'center', marginTop: 12 }}>
-              <button
-                className="btn"
-                onClick={() => {
-                  setCursorStack((s) => [...s.slice(0, pageIdx + 1), data.next_cursor!]);
-                  setPageIdx((i) => i + 1);
-                }}
-              >
-                Next page
-              </button>
             </div>
           )}
           <div className="muted kb-hints" style={{ fontSize: 11, marginTop: 14, textAlign: 'center' }}>
