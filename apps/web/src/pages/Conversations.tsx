@@ -542,7 +542,9 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         method: 'POST',
         body: JSON.stringify({ ids: [...selected], action, ...extra }),
       });
-      setSelected(new Set());
+      // Mobile select-mode survives actions — multi-step triage needs it;
+      // the × alone exits. Desktop keeps the one-shot clear.
+      if (!window.matchMedia('(max-width: 720px)').matches) setSelected(new Set());
       void qc.invalidateQueries({ queryKey: ['conversations'] });
       void qc.invalidateQueries({ queryKey: ['attention-count'] });
     } finally {
