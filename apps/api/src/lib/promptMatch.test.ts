@@ -140,4 +140,22 @@ describe('matchPromptsSemantically', () => {
     expect(await matchPromptsSemantically({} as never, ['x'], [])).toEqual({});
     expect(complete).not.toHaveBeenCalled();
   });
+
+  it('delimits multi-line exchanges so item boundaries stay unambiguous', async () => {
+    const { complete } = await import('./hostedAgent.js');
+    const spy = complete as ReturnType<typeof vi.fn>;
+    spy.mockClear();
+    g.__matchReply = '{}';
+    await matchPromptsSemantically(
+      { provider: 'openai', model: 'm' } as never,
+      ['customer: first\ncustomer: trigger'],
+      ['customer: ctx\ncustomer: saved trigger', 'bare prompt'],
+    );
+    const content = spy.mock.calls[0][2][0].content as string;
+    // First-line-only numbering bled a scenario's context into the next
+    // item — small judge models over-matched on topic.
+    expect(content).toContain('=== SCENARIO 1 ===\ncustomer: ctx\ncustomer: saved trigger');
+    expect(content).toContain('=== SCENARIO 2 ===\nbare prompt');
+    expect(content).toContain('=== INPUT 1 ===\ncustomer: first\ncustomer: trigger');
+  });
 });

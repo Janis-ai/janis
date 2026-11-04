@@ -135,14 +135,14 @@ export function formatExchange(turns: MatchTurn[]): string {
 import { complete, type LlmSettings } from './hostedAgent.js';
 
 const MATCH_SYSTEM =
-  'You match customer exchanges to saved scenario exchanges. Items may be ' +
-  'a bare prompt or a multi-turn exchange formatted as "customer:"/"agent:" ' +
-  'lines ending at the trigger question. For each numbered INPUT, decide ' +
-  'which numbered SCENARIO captures the same check — the same trigger ' +
-  'intent needing the same answer, and when the input carries context, in ' +
-  'an essentially similar setup. Paraphrases, rewording, and typos count as ' +
-  'the same; merely related topics, or the same question in a clearly ' +
-  'different context, do NOT. Reply with ONLY a JSON object mapping each ' +
+  'You match customer exchanges to saved scenario exchanges. Each item is a ' +
+  'delimited block ("=== SCENARIO 1 ===" / "=== INPUT 1 ===") containing either ' +
+  'a bare prompt or "customer:"/"agent:" lines ending at the trigger question. ' +
+  'An INPUT matches a SCENARIO only when their trigger questions ask for ' +
+  'essentially the same thing — paraphrases, rewording, and typos count — and, ' +
+  'when the input carries context, the setup is essentially similar. Merely ' +
+  'related topics or a different question about the same subject do NOT match; ' +
+  'when in doubt, return null. Reply with ONLY a JSON object mapping each ' +
   'input number to a scenario number or null, e.g. {"1": 2, "2": null}.';
 
 /** Batched paraphrase check — returns {inputIndex → candidateIndex}. Only
@@ -155,14 +155,18 @@ export async function matchPromptsSemantically(
   const ins = inputs.slice(0, 20);
   const cands = candidates.slice(0, 60);
   if (!ins.length || !cands.length) return {};
+  // Multi-line exchanges need block delimiters — numbering only the first
+  // line left item boundaries ambiguous, and small judge models bled one
+  // scenario's context lines into the next and over-matched on topic.
+  const block = (label: string, i: number, s: string) => `=== ${label} ${i + 1} ===\n${s}`;
   const res = await complete(llm, MATCH_SYSTEM, [
     {
       role: 'user',
       content:
         'SCENARIOS:\n' +
-        cands.map((s, i) => `${i + 1}. ${s}`).join('\n') +
+        cands.map((s, i) => block('SCENARIO', i, s)).join('\n\n') +
         '\n\nINPUTS:\n' +
-        ins.map((s, i) => `${i + 1}. ${s}`).join('\n'),
+        ins.map((s, i) => block('INPUT', i, s)).join('\n\n'),
     },
   ]);
   const m = res.text?.match(/\{[\s\S]*\}/);
