@@ -4,14 +4,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Alert, Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
-import { useAgents, useConversation, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
+import { useAgents, useConversation, useConversations, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
 import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, StateBadge, surfaceLabel } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 import { useScenarioMatch } from '../lib/scenarioMatch';
-import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
+import { ConvRow, SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { ALERT_LABELS } from '../components/Layout';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
@@ -58,6 +58,11 @@ interface OutEntry {
 
 export default function ConversationPage() {
   const params = useParams();
+  // Split-pane inbox (wide screens only — .conv-inbox is display:none
+  // below the breakpoint): the same browse list the row came from,
+  // scoped to the route's agent when there is one.
+  const inboxQ = useConversations({ agent_id: params.agentId || undefined });
+  const inboxBase = params.agentId ? `/agents/${params.agentId}/inbox` : '/conversations';
   const id = params.cid ?? params.id ?? '';
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
@@ -925,6 +930,13 @@ export default function ConversationPage() {
   return (
     <div className="conv-layout">
       {confirmEl}
+      <div className="conv-inbox">
+        <div className="conv-list">
+          {inboxQ.data?.pages.flatMap((p) => p.conversations).map((c2) => (
+            <ConvRow key={c2.id} c={c2} base={inboxBase} selected={c2.id === c.id} />
+          ))}
+        </div>
+      </div>
       <div className="conv-main">
         {/* Phone-only header (hidden ≥721px): back + who this is, pinned —
             the Slack-style frame the desktop sidebar provides for free. */}

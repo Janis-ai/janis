@@ -124,7 +124,7 @@ function listTime(iso: string | null): string {
   return d.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: '2-digit' });
 }
 
-function ConvRow({
+export function ConvRow({
   c,
   agentName,
   selected,

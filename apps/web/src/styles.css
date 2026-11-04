@@ -1526,6 +1526,51 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -24px; padding: 0 24px; }
 
 .conv-layout { display: flex; gap: 16px; height: 100%; min-height: 100%; container-type: inline-size; container-name: convl; position: relative; overflow-x: hidden; overflow-x: clip; }
+/* Split-pane inbox column — only on wide screens (≥1200 block below):
+   a slim stacked list reusing conv-row, current conversation tinted. */
+.conv-inbox { display: none; }
+.conv-inbox .conv-list { flex: none; margin: 0; padding: 0; overflow: visible; }
+.conv-inbox .conv-row { flex-wrap: wrap; align-items: flex-start; gap: 8px; padding: 8px 12px; }
+.conv-inbox .conv-row .who { flex-wrap: wrap; row-gap: 1px; column-gap: 8px; }
+.conv-inbox .conv-row .who .name { flex: 0 1 auto; max-width: 100%; }
+.conv-inbox .conv-row .who .tags { flex-basis: 100%; order: 2; margin-top: 2px; }
+.conv-inbox .conv-row .who .preview { flex-basis: 100%; order: 3; }
+.conv-inbox .conv-check, .conv-inbox .conv-star, .conv-inbox .row-actions { display: none; }
+.conv-inbox .conv-dots { display: none; }
+.conv-inbox .tail { align-items: center; gap: 5px; margin-top: 3px; }
+.conv-inbox .tail .meta { font-size: 11px; }
+.conv-inbox .tail-dots { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.conv-inbox .tail-dots:empty { display: none; }
+.conv-inbox .tail-dots .alert-dot, .conv-inbox .tail-dots .unread-dot { width: 7px; height: 7px; }
+@media (min-width: 1200px) {
+  .conv-inbox {
+    display: block; width: 290px; flex-shrink: 0;
+    border-right: 1px solid var(--border);
+    overflow-y: auto; margin: -14px 0 -14px -16px; padding: 8px 0;
+  }
+  /* Sidebar collapses to its icon rail while a conversation is open —
+     same grammar as the dock-open squeeze, kept in lockstep. */
+  .layout.conv-open .sidebar { width: 60px; }
+  .layout.conv-open .sidebar .brand, .layout.conv-open .sidebar a { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
+  .layout.conv-open .sidebar .brand .brand-wide { display: none; }
+  .layout.conv-open .sidebar .brand .brand-mark { display: block; margin: 0 auto; }
+  .layout.conv-open .sidebar a .label, .layout.conv-open .sidebar .user, .layout.conv-open .sidebar .ask-toggle .label { display: none; }
+  .layout.conv-open .sidebar a .icon, .layout.conv-open .sidebar .ask-toggle .icon { display: inline-flex; }
+  .layout.conv-open .sidebar a.nav-indent { padding-left: 0; }
+  .layout.conv-open .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
+  .layout.conv-open .sidebar .nav-sec span { display: none; }
+  .layout.conv-open .sidebar .nav-sec:not(:has(svg)) { display: none; }
+  .layout.conv-open .sidebar a { position: relative; }
+  .layout.conv-open .sidebar a .nav-badge {
+    position: absolute; top: 1px; left: 50%; margin: 0 0 0 7px;
+    font-size: 9px; line-height: 13px; min-width: 13px; padding: 0 3px;
+    border-radius: 8px;
+  }
+  .layout.conv-open .sidebar a .step-mark {
+    position: absolute; top: 2px; left: 50%; margin: 0 0 0 6px; font-size: 10px;
+  }
+  .layout.conv-open .sidebar .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
+}
 /* Details rail: beside the transcript when the column is wide enough,
    otherwise the ⓘ slide-over — never stacked below the footer. */
 .info-btn, .conv-actions .copilot-btn { display: none; }
