@@ -581,9 +581,17 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   gap: 8px; padding: 8px 10px 2px; border-top: 1px solid var(--border);
 }
 .filter-hint { font-size: 11px; color: var(--muted); max-width: 170px; }
-/* Gmail-style pager — "1–50 of N" + ‹ › at the head row's right edge. */
-.inbox-pager { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; flex-shrink: 0; font-size: 12px; }
-.inbox-pager .btn.icon { padding: 4px 6px; height: auto; }
+/* Gmail-style pager — "1–50 of N" + ‹ › at the head row's right edge.
+   Chevrons are borderless glyphs at rest; the button chrome shows on
+   hover, and they sit tight together like Gmail's pair. */
+.inbox-pager { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; flex-shrink: 0; font-size: 12px; }
+.inbox-pager .btn.icon {
+  padding: 4px 3px; height: auto; border-color: transparent; background: none;
+}
+.inbox-pager .btn.icon + .btn.icon { margin-left: -2px; }
+.inbox-pager .btn.icon:hover:not(:disabled) {
+  border-color: var(--border); background: var(--panel-2);
+}
 /* Correct this — a real button under every agent reply on test surfaces,
    but invisible until hover/focus: a persistent pill on every message
    makes each reply look broken. Touch devices get it always-on but dim. */
