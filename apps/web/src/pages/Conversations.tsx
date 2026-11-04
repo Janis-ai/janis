@@ -219,14 +219,14 @@ function ConvRow({
         </div>
       </div>
       <div className="tail">
-        {/* Mobile-only marker column — dots in a fixed slot LEFT of the
-            stamp so the stamp's right edge stays flush with the star on
-            every row. Desktop carries unread by weight, attention left. */}
+        <span className="meta">{listTime(c.last_message_at)}</span>
+        {/* Mobile-only marker column — dots in a fixed-width slot right of
+            the stamp, its far edge lining up with the star beneath.
+            Desktop carries unread by weight, attention in the left column. */}
         <span className="tail-dots">
           {needsAttention && <span className="alert-dot" title="Needs attention" />}
           {c.is_unread && <span className="unread-dot" title="Unread" />}
         </span>
-        <span className="meta">{listTime(c.last_message_at)}</span>
         <span className="row-actions">
           <button
             type="button"

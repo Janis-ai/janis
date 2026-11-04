@@ -2044,9 +2044,8 @@ details summary:hover { color: var(--text); }
   .conv-row .who .name { flex: 0 1 auto; max-width: 100%; }
   .conv-row .who .tags { flex-basis: 100%; order: 2; margin-top: 2px; }
   .conv-row .who .preview { flex-basis: 100%; order: 3; padding-right: 36px; }
-  /* Tail is "[dots] time" at top-right — the stamp's right edge is the
-     column edge (aligned with the star beneath); attention + unread dots
-     sit in a fixed-width slot immediately left of it. */
+  /* Tail is "time [dots]" at top-right — attention + unread dots in a
+     fixed-width slot whose far edge lines up with the star beneath. */
   .conv-row .tail { align-items: center; gap: 5px; margin-top: 3px; }
   .conv-row .tail .meta { font-size: 11px; }
   .conv-row .tail-dots { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; width: 20px; flex-shrink: 0; }
