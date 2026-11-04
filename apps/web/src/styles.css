@@ -975,10 +975,12 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   border-bottom: 1px solid var(--border);
 }
 .conv-row:first-of-type { border-top: 1px solid var(--border); }
-/* Gmail two-tone on desktop — unread rows ride the tinted surface, read
-   stay flat. Placed before :hover/.sel so both still win; mobile keeps
-   rows flat. */
-.conv-row.unread { background: var(--panel); }
+/* Gmail two-tone on desktop — unread rows contrast the page: darker in
+   dark mode (--panel-alt sits below --bg), lighter in light mode
+   (--panel is white over the gray page). Read rows stay flat. Placed
+   before :hover/.sel so both still win; mobile keeps rows flat. */
+.conv-row.unread { background: var(--panel-alt); }
+:root[data-theme='light'] .conv-row.unread { background: var(--panel); }
 .conv-row:hover { background: var(--panel-2); }
 .conv-row.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .conv-row.sel:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
