@@ -2036,13 +2036,11 @@ details summary:hover { color: var(--text); }
      (Gmail-app style). Secondary chips (agent, page disambiguator,
      intent) drop so the row reads name + channel + preview at a glance. */
   .conv-row { align-items: flex-start; gap: 8px; padding: 9px 10px; position: relative; }
-  /* Name + other chips share line 1; the agent tag gets its own line
-     beneath the name (display:contents lifts chips into .who's flex wrap),
-     and the preview wraps last. */
+  /* Name owns line 1; the tags group wraps to its own line beneath it so
+     chips keep their natural pill widths; preview wraps last. */
   .conv-row .who { flex-wrap: wrap; row-gap: 1px; column-gap: 8px; }
   .conv-row .who .name { flex: 0 1 auto; max-width: 100%; }
-  .conv-row .who .tags { display: contents; }
-  .conv-row .who .tags .agent-tag { order: 2; flex-basis: 100%; margin-top: 2px; }
+  .conv-row .who .tags { flex-basis: 100%; order: 2; margin-top: 2px; }
   .conv-row .who .preview { flex-basis: 100%; order: 3; padding-right: 36px; }
   /* Tail is just "time ●" at top-right — the unread dot follows the stamp. */
   .conv-row .tail { align-items: center; gap: 5px; margin-top: 3px; }
