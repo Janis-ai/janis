@@ -371,7 +371,8 @@ describe('change_plan builtin', () => {
       acceptedAt: new Date(),
     });
     const out = JSON.parse(await changePlan().run({ plan: 'pro' }, ctx(CONV3)));
-    expect(out.error).toContain('Paid WS');
+    expect(out.result).toBe('ambiguous_workspace');
+    expect(out.workspaces).toContain('Paid WS');
   });
 });
 
@@ -464,7 +465,8 @@ describe('create_agent builtin', () => {
       acceptedAt: new Date(),
     });
     const ambiguous = JSON.parse(await createAgent().run({ name: 'B' }, ctx(CONV2)));
-    expect(ambiguous.error).toContain('Free WS');
+    expect(ambiguous.result).toBe('ambiguous_workspace');
+    expect(ambiguous.workspaces).toContain('Free WS');
     const picked = await createAgent().run({ name: 'B2', workspace: 'ann second' }, cctx(CONV2));
     expect(picked).toContain('action_card');
     const pa = (
@@ -622,8 +624,8 @@ describe('workspace_stats builtin', () => {
 
   it('asks which workspace when the visitor has several', async () => {
     const out = JSON.parse(await stats().run({}, ctx(CONV2)));
-    expect(out.error).toContain('which workspace');
-    expect(out.error).toContain('Free WS');
+    expect(out.result).toBe('ambiguous_workspace');
+    expect(out.workspaces).toContain('Free WS');
   });
 
   it('falls back to the workspace the visitor is viewing', async () => {
@@ -1995,9 +1997,10 @@ describe('inspect_agent builtin', () => {
       autoGreet: false,
     });
 
-    // unknown agent → error naming the candidates, not a hallucinated blank
+    // unknown agent → a result naming the candidates, not a hallucinated blank
     const miss = JSON.parse(await inspect().run({ workspace: 'free', agent: 'nope' }, cctx(CONV2)));
-    expect(miss.error).toContain("didn't match");
+    expect(miss.result).toBe('no_matching_agent');
+    expect(miss.hint).toContain("didn't match");
 
     await db.delete(schema.alertRules).where(eq(schema.alertRules.agentId, bot2.id));
     await db.delete(schema.agentWidgets).where(eq(schema.agentWidgets.agentId, bot2.id));

@@ -157,15 +157,19 @@ function argObjectArray(v: unknown): unknown[] | undefined {
 /** Resolve which of the visitor's workspaces a concierge tool should act on.
  * Order: explicit `workspace` name hint → the workspace they're currently
  * viewing (the context pack's current_workspace trait) → their only
- * membership → a "which workspace?" error listing the options. adminOnly
+ * membership → a "which workspace?" result listing the options. adminOnly
  * narrows to workspaces they administer; read-only tools accept any
- * accepted membership. */
+ * accepted membership. A bad/absent hint is a model-correctable miss, not
+ * breakage — like findVisitorConversation it returns a result object, since
+ * {"error"} marks the call failed and fires a Run-error alert. */
 async function visitorWorkspace(
   ctx: BuiltinCtx,
   user: { id: string; name: string | null },
   hint: string | undefined,
   opts: { adminOnly?: boolean } = {},
-): Promise<{ ws: WorkspaceRow } | { error: string }> {
+): Promise<
+  { ws: WorkspaceRow } | { error: string } | { result: string; hint: string; workspaces: string[] }
+> {
   // Embedded merchant-Ask: the shop's bound workspace is the whole universe
   // — there's no "which workspace?" ambiguity, and the staff member's Shopify
   // session is the trust (they may hold no Janis membership at all). Member-
@@ -231,7 +235,9 @@ async function visitorWorkspace(
       ) ?? rows.find((r) => needle.includes(r.ws.name.toLowerCase()));
     if (hit) return { ws: hit.ws };
     return {
-      error: `no workspace matching "${hint}" — the visitor's workspaces: ${rows.map((r) => r.ws.name).join(', ')}`,
+      result: 'no_matching_workspace',
+      hint: `"${hint}" didn't match — pass one of the visitor's workspaces or omit workspace to use the one they're viewing`,
+      workspaces: rows.map((r) => r.ws.name),
     };
   }
   // Default to the workspace open in their console when the pack named it.
@@ -246,20 +252,28 @@ async function visitorWorkspace(
   if (curHit) return { ws: curHit.ws };
   if (rows.length === 1) return { ws: rows[0].ws };
   return {
-    error: `which workspace? ${user.name ?? 'The visitor'} has: ${rows.map((r) => r.ws.name).join(', ')}`,
+    result: 'ambiguous_workspace',
+    hint: `which workspace? ${user.name ?? 'The visitor'} has several — pass one`,
+    workspaces: rows.map((r) => r.ws.name),
   };
 }
 
 /** Resolve which agent of a workspace a concierge tool should act on.
  * Order: explicit `agent` name hint → the agent selected in the console
- * (the context pack's current_agent trait) → a "which agent?" error listing
- * the options. `current` echoes the console selection so callers can flag
- * when an explicit hint lands on a different (possibly stale) agent. */
+ * (the context pack's current_agent trait) → a "which agent?" result
+ * listing the options. `current` echoes the console selection so callers
+ * can flag when an explicit hint lands on a different (possibly stale)
+ * agent. A bad/absent hint is a model-correctable miss — a result object,
+ * not {"error"} (call failure + Run-error alert). */
 async function visitorAgent(
   ctx: BuiltinCtx,
   ws: WorkspaceRow,
   hint: string | undefined,
-): Promise<{ agent: typeof agents.$inferSelect; current?: string } | { error: string }> {
+): Promise<
+  | { agent: typeof agents.$inferSelect; current?: string }
+  | { error: string }
+  | { result: string; hint: string; agents: string[] }
+> {
   const wsAgents = await ctx.db.select().from(agents).where(eq(agents.workspaceId, ws.id));
   const [conv] = await ctx.db
     .select({ userProfile: conversations.userProfile })
@@ -278,7 +292,9 @@ async function visitorAgent(
       wsAgents.find((a) => needle.includes(a.name.toLowerCase()));
     if (agent) return { agent, current: current || undefined };
     return {
-      error: `which agent? "${hint}" didn't match — agents: ${wsAgents.map((a) => a.name).join(', ')}`,
+      result: 'no_matching_agent',
+      hint: `"${hint}" didn't match — pass one of the workspace's agents or omit agent to use the selected one`,
+      agents: wsAgents.map((a) => a.name),
     };
   }
   const curHit = current
@@ -287,7 +303,9 @@ async function visitorAgent(
   if (curHit) return { agent: curHit };
   if (wsAgents.length === 1) return { agent: wsAgents[0] };
   return {
-    error: `which agent? ${ws.name} has: ${wsAgents.map((a) => a.name).join(', ')}`,
+    result: 'ambiguous_agent',
+    hint: `which agent? ${ws.name} has several — pass one`,
+    agents: wsAgents.map((a) => a.name),
   };
 }
 
@@ -830,11 +848,15 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           ? adminRows[0].ws
           : undefined;
       if (!ws) {
-        return JSON.stringify({
-          error: adminRows.length
-            ? `which workspace? ${user.name ?? 'the visitor'} administers: ${adminRows.map((r) => r.ws.name).join(', ')}`
-            : 'no workspace where the visitor is an admin — billing changes need admin rights',
-        });
+        return JSON.stringify(
+          adminRows.length
+            ? {
+                result: 'ambiguous_workspace',
+                hint: `which workspace? ${user.name ?? 'the visitor'} administers several — pass one`,
+                workspaces: adminRows.map((r) => r.ws.name),
+              }
+            : { error: 'no workspace where the visitor is an admin — billing changes need admin rights' },
+        );
       }
       const plan = PLANS[target];
       const current = ws.stripeSubscriptionId ? (ws.plan ?? 'free') : 'free';
@@ -975,7 +997,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
 
       // Same gate as POST /api/agents — must administer the target workspace.
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       // Agency children can't grow the fleet — same rule as the API route.
       if (ws.parentWorkspaceId && !ws.stripeSubscriptionId && !ws.connectSubscriptionId) {
@@ -1231,10 +1253,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const picked = await visitorAgent(ctx, ws, args.agent);
-      if ('error' in picked) return JSON.stringify(picked);
+      if (!('agent' in picked)) return JSON.stringify(picked);
       const agent = picked.agent;
 
       const purpose =
@@ -1404,7 +1426,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace);
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const days = Math.min(Math.max(Number(args.days) || 30, 1), 90);
       const cutoff = new Date(Date.now() - days * 86_400_000);
@@ -1558,10 +1580,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const picked = await visitorAgent(ctx, ws, args.agent);
-      if ('error' in picked) return JSON.stringify(picked);
+      if (!('agent' in picked)) return JSON.stringify(picked);
       const agent = picked.agent;
       const cfg = (agent.config ?? {}) as AgentConfig;
       const [files, chans, rules, widgets] = await Promise.all([
@@ -1660,10 +1682,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace);
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const picked = await visitorAgent(ctx, ws, args.agent);
-      if ('error' in picked) return JSON.stringify(picked);
+      if (!('agent' in picked)) return JSON.stringify(picked);
       const agent = picked.agent;
       // Allowlist — the path is emitted verbatim to SSE clients; never trust
       // free text where a URL is expected.
@@ -1718,7 +1740,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace);
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const q = (args.conversation ?? '').trim();
       if (!q) return JSON.stringify({ error: 'pass a conversation id or a name/email to search for' });
@@ -1905,7 +1927,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace);
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       let q = (args.contact ?? '').trim();
       if (!q) {
@@ -2025,7 +2047,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace);
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       let q = (args.conversation ?? '').trim();
       if (!q) {
@@ -2143,7 +2165,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace);
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const days = Math.min(Math.max(Number(args.days) || 30, 1), 90);
 
@@ -2319,11 +2341,11 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
 
       const picked = await visitorAgent(ctx, ws, args.agent);
-      if ('error' in picked) return JSON.stringify(picked);
+      if (!('agent' in picked)) return JSON.stringify(picked);
       const agent = picked.agent;
       const entry = String(args.entry ?? '').trim();
       if (!entry) return JSON.stringify({ error: 'entry text is required' });
@@ -2421,11 +2443,11 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
 
       const picked = await visitorAgent(ctx, ws, args.agent);
-      if ('error' in picked) return JSON.stringify(picked);
+      if (!('agent' in picked)) return JSON.stringify(picked);
       const agent = picked.agent;
       const kind = String(args.kind ?? '').trim();
       if (!['keyword', 'inactivity', 'auto_assign', 'failure', 'handoff_request', 'custom_alert'].includes(kind)) {
@@ -2592,7 +2614,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const q = (args.conversation ?? '').trim();
       if (!q) return JSON.stringify({ error: 'pass a conversation id or a name/email to search for' });
@@ -2690,7 +2712,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace);
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const q = (args.conversation ?? '').trim();
       if (!q) return JSON.stringify({ error: 'pass a conversation id or a name/email to search for' });
@@ -2852,11 +2874,11 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
 
       const picked = await visitorAgent(ctx, ws, args.agent);
-      if ('error' in picked) return JSON.stringify(picked);
+      if (!('agent' in picked)) return JSON.stringify(picked);
       const agent = picked.agent;
       // The model sometimes names an agent from an older topic, not the one
       // the visitor is looking at — the card is still correct to post, but
@@ -3151,11 +3173,11 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
 
       const picked = await visitorAgent(ctx, ws, args.agent);
-      if ('error' in picked) return JSON.stringify(picked);
+      if (!('agent' in picked)) return JSON.stringify(picked);
       const agent = picked.agent;
       const name = normWidgetRef(String(args.name ?? '')).slice(0, 60);
       if (!name) return JSON.stringify({ error: 'name cannot be blank' });
@@ -3335,7 +3357,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
 
       const hint = args.channel?.trim().toLowerCase();
@@ -3474,10 +3496,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const target = await visitorAgent(ctx, ws, args.agent);
-      if ('error' in target) return JSON.stringify(target);
+      if (!('agent' in target)) return JSON.stringify(target);
       const agent = target.agent;
       const name = (args.name ?? '').trim().slice(0, 80) || agent.name;
       const wsChannels = await ctx.db
@@ -3579,10 +3601,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const picked = await visitorAgent(ctx, ws, args.agent);
-      if ('error' in picked) return JSON.stringify(picked);
+      if (!('agent' in picked)) return JSON.stringify(picked);
       const agent = picked.agent;
       const kind = String(args.kind ?? '').trim();
       if (!['url', 'text', 'site'].includes(kind)) {
@@ -3791,10 +3813,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const picked = await visitorAgent(ctx, ws, args.agent);
-      if ('error' in picked) return JSON.stringify(picked);
+      if (!('agent' in picked)) return JSON.stringify(picked);
       const agent = picked.agent;
       const title = String(args.title ?? '').trim().slice(0, 200);
       const body = String(args.body ?? '').trim();
@@ -3912,10 +3934,10 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
       }
       const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
-      if ('error' in resolved) return JSON.stringify(resolved);
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
       const picked = await visitorAgent(ctx, ws, args.agent);
-      if ('error' in picked) return JSON.stringify(picked);
+      if (!('agent' in picked)) return JSON.stringify(picked);
       const agent = picked.agent;
       const name = String(args.name ?? '').trim().slice(0, 120);
       const customerMessage = String(args.customer_message ?? '').trim().slice(0, 2000);
