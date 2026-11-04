@@ -1537,7 +1537,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-inbox-head .search-wrap { flex: 1 1 0; min-width: 0; }
 .conv-inbox-head .search-box { height: 32px; font-size: 13px; min-width: 0; }
 .conv-inbox-head .btn { height: 32px; padding: 6px 9px; }
-.conv-inbox-head .menu-pop { left: auto; right: 0; max-height: min(70vh, 480px); overflow-y: auto; }
+.conv-inbox-head .menu-pop { left: 0; right: auto; max-height: min(70vh, 480px); overflow-y: auto; }
 .conv-inbox .conv-list { flex: none; margin: 0; padding: 0; overflow: visible; }
 .conv-inbox .conv-row { flex-wrap: wrap; align-items: flex-start; gap: 8px; padding: 8px 12px; }
 .conv-inbox .conv-row .who { flex-wrap: wrap; row-gap: 1px; column-gap: 8px; }

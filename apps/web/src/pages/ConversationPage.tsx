@@ -966,13 +966,6 @@ export default function ConversationPage() {
       {confirmEl}
       <div className="conv-inbox">
         <div className="conv-inbox-head">
-          <SearchInput
-            className="search-box"
-            placeholder="Search…"
-            value={inboxQuery}
-            onChange={(e) => setInboxQuery(e.target.value)}
-            onClear={() => setInboxQuery('')}
-          />
           <span className="src-menu-wrap">
             <button
               className={`btn${inboxFilterCount ? ' primary' : ''}`}
@@ -1053,6 +1046,13 @@ export default function ConversationPage() {
               </>
             )}
           </span>
+          <SearchInput
+            className="search-box"
+            placeholder="Search…"
+            value={inboxQuery}
+            onChange={(e) => setInboxQuery(e.target.value)}
+            onClear={() => setInboxQuery('')}
+          />
         </div>
         <div className="conv-list">
           {inboxList?.map((c2) => (
