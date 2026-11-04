@@ -537,6 +537,10 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
    anchored to the button runs off-viewport. */
 .filters .menu-pop { left: 0; right: auto; max-width: calc(100vw - 16px); }
 .menu-pop button:hover:not(:disabled) { background: var(--panel-2); }
+/* Bulk snooze pops a real menu-pop — native <select> menus render
+   cramped on phones; this anchors to the button's bottom-right. */
+.bulk-snz-wrap { position: relative; display: inline-flex; }
+.bulk-snz-pop { position: absolute; top: calc(100% + 4px); right: 0; min-width: 150px; z-index: 90; }
 .menu-pop button:disabled { color: var(--muted); cursor: default; }
 /* Inbox multi-select filter popover — checkbox groups instead of the old
    single-select dropdown. Wider than a plain menu; groups separated. */
@@ -2018,7 +2022,13 @@ details summary:hover { color: var(--text); }
     order: 2; flex-basis: 100%;
     display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;
   }
-  .bulk-actions > .btn, .bulk-actions > .bulk-snz { width: auto; min-width: 0; justify-content: center; }
+  .bulk-actions > .btn, .bulk-actions > .bulk-snz-wrap { width: auto; min-width: 0; justify-content: center; }
+  /* Mobile bulk icons go borderless — even hit slots, no boxes. */
+  .bulk-bar .bulk-actions .btn {
+    border: 0; background: none; box-shadow: none;
+    height: auto; padding: 8px 4px;
+  }
+  .bulk-bar .bulk-actions .btn:hover { background: var(--panel-2); border: 0; }
   /* Details slide-over — the side column leaves the flow and becomes a
      right drawer behind the header's ⓘ. */
   .conv-side {

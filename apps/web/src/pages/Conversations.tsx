@@ -382,6 +382,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const [mine, setMine] = useSticky('conv.mine', false);
   const [query, setQuery] = useSticky('conv.query', '');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkSnzOpen, setBulkSnzOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const qc = useQueryClient();
   const filterParams = {
@@ -886,22 +887,38 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           >
             <Tag size={14} />
           </button>
-          <span className="snooze-wrap bulk-snz" title="Snooze…" aria-label="Snooze">
-            <Moon size={14} className="snz-ic" />
-            <select
+          <span className="src-menu-wrap bulk-snz-wrap">
+            <button
+              className="btn"
               disabled={busy}
-              value=""
-              onChange={(e) => {
-                const m = Number(e.target.value);
-                e.target.value = '';
-                if (m === 0) void bulk('unsnooze');
-                else void bulk('snooze', { minutes: snoozeMinutes(m) });
-              }}
+              title="Snooze…"
+              aria-label="Snooze"
+              onClick={() => setBulkSnzOpen((o) => !o)}
             >
-              <option value="">Snooze…</option>
-              {SNOOZE_OPTIONS.map(([l, m]) => <option key={l} value={m}>{l}</option>)}
-              <option value="0">Unsnooze</option>
-            </select>
+              <Moon size={14} />
+            </button>
+            {bulkSnzOpen && (
+              <>
+                <div className="menu-backdrop" onClick={() => setBulkSnzOpen(false)} />
+                <div className="menu-pop bulk-snz-pop">
+                  {SNOOZE_OPTIONS.map(([l, m]) => (
+                    <button
+                      key={l}
+                      className="menu-item"
+                      onClick={() => { setBulkSnzOpen(false); void bulk('snooze', { minutes: snoozeMinutes(m) }); }}
+                    >
+                      {l}
+                    </button>
+                  ))}
+                  <button
+                    className="menu-item"
+                    onClick={() => { setBulkSnzOpen(false); void bulk('unsnooze'); }}
+                  >
+                    Unsnooze
+                  </button>
+                </div>
+              </>
+            )}
           </span>
           </div>
           <button className="btn bulk-close" title="Clear selection" aria-label="Clear selection" onClick={() => setSelected(new Set())}><X size={14} /></button>
