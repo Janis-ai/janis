@@ -146,6 +146,10 @@ function ConvRow({
 }) {
   const snoozed = c.snoozed_until && new Date(c.snoozed_until) > new Date();
   const archived = c.state === 'archived';
+  // Same predicate the Needs-attention filter + badge count use:
+  // human-needed/human-held states or any open alert.
+  const needsAttention =
+    c.open_alert_count > 0 || c.state === 'needs_human' || c.state === 'human';
   const rowRef = useRef<HTMLAnchorElement>(null);
   useEffect(() => {
     if (focused) rowRef.current?.scrollIntoView({ block: 'nearest' });
@@ -180,11 +184,16 @@ function ConvRow({
       >
         <Star size={15} fill={c.is_starred ? 'currentColor' : 'none'} />
       </button>
-      {c.open_alert_count > 0 && (
-        <span className="conv-dots">
-          <span className="alert-dot" title={`${c.open_alert_count} open alert${c.open_alert_count === 1 ? '' : 's'}`} />
-        </span>
-      )}
+      {/* Fixed-width dot column — avatar doesn't shift when a row has no
+          dot to show. Hidden on mobile, where the tail carries the dots. */}
+      <span className="conv-dots">
+        {needsAttention && (
+          <span
+            className="alert-dot"
+            title={c.open_alert_count > 0 ? `${c.open_alert_count} open alert${c.open_alert_count === 1 ? '' : 's'}` : 'Needs attention'}
+          />
+        )}
+      </span>
       <Avatar c={c} size={32} />
       <div className="who">
         <div className="name">
@@ -211,9 +220,13 @@ function ConvRow({
       </div>
       <div className="tail">
         <span className="meta">{listTime(c.last_message_at)}</span>
-        {/* Mobile-only unread marker (Gmail-app style: dot right of the
-            timestamp) — desktop carries unread purely by weight. */}
-        {c.is_unread && <span className="unread-dot m-dot" title="Unread" />}
+        {/* Mobile-only marker column (Gmail-app style: dots right of the
+            stamp, fixed width so stamps align on empty rows) — desktop
+            carries unread by weight and attention in the left column. */}
+        <span className="tail-dots">
+          {needsAttention && <span className="alert-dot" title="Needs attention" />}
+          {c.is_unread && <span className="unread-dot" title="Unread" />}
+        </span>
         <span className="row-actions">
           <button
             type="button"

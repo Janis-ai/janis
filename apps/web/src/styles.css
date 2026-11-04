@@ -1006,12 +1006,14 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .conv-row .tail { position: relative; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .conv-row .meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .conv-row.unread .meta { color: var(--text); font-weight: 700; }
-.conv-dots { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+/* Reserved dot slot on desktop — fixed width so the avatar never shifts
+   when a row has no attention marker. */
+.conv-dots { display: inline-flex; align-items: center; justify-content: center; gap: 4px; width: 10px; flex-shrink: 0; }
 .alert-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
-/* Unread is weight-only on desktop; the dot exists solely for the mobile
-   tail where it sits right of the timestamp, Gmail-app style. */
+/* Unread is weight-only on desktop; the tail-dots column exists solely
+   for mobile where dots sit right of the timestamp, Gmail-app style. */
 .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
-.unread-dot.m-dot { display: none; }
+.tail-dots { display: none; }
 .conv-check { flex-shrink: 0; accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
 .conv-star {
   display: inline-flex; align-items: center; justify-content: center;
@@ -2042,10 +2044,13 @@ details summary:hover { color: var(--text); }
   .conv-row .who .name { flex: 0 1 auto; max-width: 100%; }
   .conv-row .who .tags { flex-basis: 100%; order: 2; margin-top: 2px; }
   .conv-row .who .preview { flex-basis: 100%; order: 3; padding-right: 36px; }
-  /* Tail is just "time ●" at top-right — the unread dot follows the stamp. */
+  /* Tail is "time [dots]" at top-right — attention + unread dots in a
+     fixed-width column so stamps align on dot-less rows. */
   .conv-row .tail { align-items: center; gap: 5px; margin-top: 3px; }
   .conv-row .tail .meta { font-size: 11px; }
-  .conv-row .unread-dot.m-dot { display: inline-block; width: 7px; height: 7px; }
+  .conv-row .tail-dots { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; width: 20px; flex-shrink: 0; }
+  .conv-row .tail-dots .alert-dot, .conv-row .tail-dots .unread-dot { width: 7px; height: 7px; }
+  .conv-row .conv-dots { display: none; }
   /* Star parks bottom-right (Gmail app): glyph's right edge lines up under
      the time/dot column, its bottom edge with the preview line. The button
      keeps a larger invisible hit area up/left of the glyph. */
