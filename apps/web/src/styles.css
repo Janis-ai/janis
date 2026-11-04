@@ -2050,6 +2050,9 @@ details summary:hover { color: var(--text); }
   .conv-row .tail { align-items: center; gap: 5px; margin-top: 3px; }
   .conv-row .tail .meta { font-size: 11px; }
   .conv-row .tail-dots { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  /* An empty slot still ate the 5px tail gap, pushing dot-less stamps
+     off the shared right edge — collapse it. */
+  .conv-row .tail-dots:empty { display: none; }
   .conv-row .tail-dots .alert-dot, .conv-row .tail-dots .unread-dot { width: 7px; height: 7px; }
   .conv-row .conv-dots { display: none; }
   /* Star parks bottom-right (Gmail app): glyph's right edge lines up under
