@@ -640,6 +640,13 @@ drizzle-kit/workbox-build, nothing to drop directly).
 41. Enterprise — SOC 2 (Vanta/Drata), data residency, RBAC granularity
     beyond admin/member/viewer. (SSO/SCIM code-complete, GDPR
     export/delete DONE.)
+    Sender avatars via People API `otherContacts` — DEFERRED post-launch
+    (Mike, 2026-11-04): code shipped (fetchPlatformProfile gmail leg →
+    People API → Gravatar fallback) but needs contacts.other.readonly
+    on the consent screen VERIFIED, People API enabled on the GCP
+    project, and a Gmail channel reconnect. Gravatar covers email
+    senders meanwhile; OAuth-sign-in + Slack + identify avatars are
+    already live without it.
 
 *Loose ends*
 42. Live-verification residue (2026-10-03 session):
