@@ -297,18 +297,21 @@ is a day on launch)*
    billing signals.)
 3. DONE 2026-10-24 — IG App Review approved (`instagram_manage_messages`
    + business verification).
-4. DONE 2026-10-28 — Zapier submitted for review: durable REST-hook
-   deliveries (retries/sweeper/replay), 3 users migrated to 1.0.3 with
-   live Zaps covering all 3 triggers + 5 actions, promote passed all
-   checks. Launch Progress: Build+Review green, awaiting Zapier team
-   review (~1 wk). Test account: integration-testing@zapier.com
-   (admin in the test workspace, "Zapier review" API key on Demo Agent
-   — revoke it after review closes). 2026-11-03 reviewer flagged
-   integration description for mentioning Slack (req 6.2 — no
-   other-app names); fixed via `zapier-platform register` (dir zapier/,
-   linked app 247023 — PUT updates registration fields: title, --desc
-   ≤140 chars, --url, --audience, --role, --category; the desc lives
-   server-side, NOT in index.js/package.json). Back in review.
+4. DONE 2026-11-04 — Zapier APPROVED the app: live in the public
+   directory, invite code no longer needed. 90-day beta clock started
+   → Partner Program ~2026-02-02 (early exit by embedding — zap
+   templates / Full Zapier Experience); Zapier may pull it back to
+   Private if support volume spikes. Submitted 2026-10-28: durable
+   REST-hook deliveries (retries/sweeper/replay), 3 users migrated to
+   1.0.3 with live Zaps covering all 3 triggers + 5 actions, promote
+   passed all checks. 2026-11-03 reviewer flagged the description for
+   mentioning Slack (req 6.2 — no other-app names); fixed via
+   `zapier-platform register` (dir zapier/, linked app 247023 — PUT
+   updates registration fields: title, --desc ≤140 chars, --url,
+   --audience, --role, --category; the desc lives server-side, NOT in
+   index.js/package.json). "Zapier review" API key on prod Demo Agent
+   REVOKED 2026-11-04 — it belonged to integration-testing@zapier.com
+   (admin in the test workspace).
 5. Twilio — A2P 10DLC DONE 2026-11-03: LOW_VOLUME campaign
    CM8e0a336681e1e4895395053e82c33bbe approved on brand BNc69f40cc…
    (service MG68b89899e59ff9db523d61033cdaeee9 "Janis"). Master-account
@@ -1016,10 +1019,15 @@ drizzle-kit/workbox-build, nothing to drop directly).
   fingerprint-deduped + flippable; Insights card on the agent Help tab
   surfaces satisfaction %, downvoted articles, zero-result queries) all DONE.
   Missing: version history, widget article embeds.
-- Marketplace: webhook template + event export cover Zapier manually; no
-  published Zapier app (listing/submission = highest-leverage non-code task),
-  no one-click OAuth installs, no public /integrations directory. Outbound
-  webhooks have retries + deliveries/replay UI (DONE — see Webhook ops).
+- Marketplace: Janis is a PUBLISHED Zapier app — approved + live
+  2026-11-04, public beta until ~2026-02-02 (§A item 4). Open
+  beta-phase leverage: zap templates embedded in product (also the
+  early-exit path from beta), Powered-by-Zapier embed, help doc on
+  janis.ai, Zapier Partner Sandbox for version testing. Webhook
+  template + event export still cover the manual catch-hook path.
+  Still missing: one-click OAuth installs, public /integrations
+  directory. Outbound webhooks have retries + deliveries/replay UI
+  (DONE — see Webhook ops).
 - Intent classification: drift DONE — classifyAndRoute stamps
   intent_source ('ai'/'byo'); recheckIntent re-classifies the last 4
   inbounds on later inbounds (≤1/15min per conv), a differing non-'other'

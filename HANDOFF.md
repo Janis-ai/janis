@@ -93,6 +93,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-04e — Zapier approved: Janis is live in the public directory
+- Platform review passed (after the 11-03 desc fix — no other-app
+  names); invite code retired, app is searchable/installable by anyone.
+  90-day beta runs to ~2026-02-02 → Partner Program; embedding zap
+  templates / Full Zapier Experience exits beta early.
+- Housekeeping done: "Zapier review" API key on prod Demo Agent revoked
+  (was minted for the reviewer's test account 2026-10-28).
+- Beta-phase backlog now open: zap templates in-product, Powered-by-
+  Zapier embed, help doc, Partner Sandbox. Future version changes ride
+  promote→migrate→deprecate without a full re-review.
+
 ## 2026-11-04d — Visitor-facing Slack channels (shared app OR bring-your-own)
 - New 'slack' channel kind — an agent answers in bound Slack channels +
   (opt-in) bot DMs. conversations key slack:{team}:{user}; the reply lands
