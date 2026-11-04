@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
 import { useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
-import { Avatar, displayName, Empty, Md, SearchInput, surfaceLabel } from '../components/bits';
+import { Avatar, displayName, Empty, Md, SearchInput } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
 import { Archive, ArchiveRestore, Bot, Cog, Headset, ListFilter, Mail, MailOpen, Moon, Save, Star, Tag, Trash2, User, UserCheck, UserX, X } from 'lucide-react';
@@ -192,16 +192,6 @@ function ConvRow({
         </div>
         <span className="tags">
           {agentName && <span className="agent-tag">{agentName}</span>}
-          {c.user_profile?.channel && (
-            <span className="channel-tag">
-              {surfaceLabel(c.user_profile)}
-              {/* the page/account — disambiguates same-person-different-page
-                  PSID conversations that otherwise render identically */}
-              {c.user_profile.channel_name && (
-                <span className="channel-name"> · {c.user_profile.channel_name}</span>
-              )}
-            </span>
-          )}
           {c.is_test && (
             <span className="channel-tag" title="Internal test channel — excluded from the Inbox badge">
               Test
@@ -370,13 +360,10 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   });
 
   const searching = query.trim().length > 0;
-  // The agent tag is only informative on mixed rows — inside a scoped
-  // inbox every row carries the same one, so it earns its width only
-  // when the conversation belongs to a different agent than the context.
+  // The agent tag only earns its width on the all-agents view — inside a
+  // scoped inbox every row carries the same one, so it hides entirely.
   const agentName = (c: Conversation) =>
-    c.agent_id === agentId
-      ? undefined
-      : agents?.agents.find((a) => a.id === c.agent_id)?.name;
+    agentId ? undefined : agents?.agents.find((a) => a.id === c.agent_id)?.name;
 
   const applyView = (v: SavedView) => {
     const f = v.filters;
