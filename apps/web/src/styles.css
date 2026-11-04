@@ -1055,7 +1055,9 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 @media (hover: hover) {
   .conv-row:hover .row-actions { display: inline-flex; }
 }
-.conv-select-all { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 0 16px 8px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
+/* Right edge stays un-padded so the pager's › button lands on the same
+   inset as the search field's right edge in the head row. */
+.conv-select-all { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 0 0 8px 16px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
 .bulk-bar {
   position: sticky; top: 0; z-index: 5;
   background: var(--panel); border: 1px solid var(--accent-dim);
