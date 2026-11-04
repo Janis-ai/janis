@@ -93,6 +93,30 @@ type ContactDetail = {
 const displayName = (c: { name: string | null; email: string | null; phone: string | null }) =>
   c.name ?? c.email ?? c.phone ?? 'Unknown';
 
+/** Contact photo via the API proxy, falling back to an initial. */
+function ContactAvatar({ c, size = 28 }: { c: Pick<ContactRow, 'id' | 'has_avatar' | 'name' | 'email' | 'phone'>; size?: number }) {
+  const [failed, setFailed] = useState(false);
+  if (c.has_avatar && !failed) {
+    return (
+      <img
+        className="avatar"
+        style={{ width: size, height: size, flexShrink: 0 }}
+        src={`/api/contacts/${c.id}/avatar`}
+        onError={() => setFailed(true)}
+        alt=""
+      />
+    );
+  }
+  return (
+    <span
+      className="avatar fallback"
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.42), flexShrink: 0 }}
+    >
+      {displayName(c)[0]?.toUpperCase() ?? '?'}
+    </span>
+  );
+}
+
 export function Contacts({ agentId: routeAgent }: { agentId?: string } = {}) {
   usePageTitle('Contacts');
   // Agent scoping comes from app context (URL agent or the persisted pick),
@@ -223,6 +247,7 @@ export function Contacts({ agentId: routeAgent }: { agentId?: string } = {}) {
         )}
         {data?.contacts.map((c) => (
           <Link key={c.id} to={agentId ? `/agents/${agentId}/contacts/${c.id}` : `/contacts/${c.id}`} className="row" style={{ padding: '8px 0', borderBottom: '1px solid var(--border)', color: 'inherit', textDecoration: 'none' }}>
+            <ContactAvatar c={c} size={28} />
             <strong className="grow">{displayName(c)}</strong>
             {!!c.tags?.length && (
               <span>{c.tags.slice(0, 4).map((t) => <span key={t} className="chip" style={{ marginRight: 4 }}>{t}</span>)}</span>
@@ -563,6 +588,7 @@ export function ContactDetail() {
     <>
       {confirmEl}
       <div className="page-head">
+        <ContactAvatar c={c} size={40} />
         <h1>{displayName(c)}</h1>
         {!edit && <button className="btn" onClick={() => setEdit({ name: c.name ?? '', email: c.email ?? '', phone: c.phone ?? '', notes: c.notes ?? '', tags: (c.tags ?? []).join(', ') })}>Edit</button>}
         {isAdmin && (

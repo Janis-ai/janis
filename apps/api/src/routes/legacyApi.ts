@@ -153,7 +153,7 @@ async function enrichProfile(
   } | null;
   const fetched = fromMsg?.name
     ? {}
-    : await fetchPlatformProfile(channel, String(profile.id ?? ''));
+    : await fetchPlatformProfile(db, channel, String(profile.id ?? ''));
   const patch = Object.fromEntries(
     Object.entries({
       name: fromMsg?.name ?? (fetched as { name?: string }).name,

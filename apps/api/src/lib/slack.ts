@@ -1929,12 +1929,17 @@ export async function slackUserToMember(
     return linked.user;
   }
 
-  const info = await slackApi<{ user: { profile?: { email?: string } } }>(
+  const info = await slackApi<{
+    user: { profile?: { email?: string; image_192?: string; image_72?: string; image_48?: string } };
+  }>(
     inst.botToken,
     'users.info',
     { user: slackUserId },
   ).catch(() => null);
   const email = info?.ok ? info.user?.profile?.email : undefined;
+  const image = info?.ok
+    ? (info.user?.profile?.image_192 ?? info.user?.profile?.image_72 ?? info.user?.profile?.image_48)
+    : undefined;
   if (email) {
     const [member] = await memberWhere(eq(users.email, email));
     if (member) {
@@ -1943,8 +1948,42 @@ export async function slackUserToMember(
       if (!member.user.slackUserId) {
         await db.update(users).set({ slackUserId }).where(eq(users.id, member.user.id));
       }
+      if (image && !member.user.avatarUrl) {
+        await db.update(users).set({ avatarUrl: image }).where(eq(users.id, member.user.id));
+        member.user.avatarUrl = image;
+      }
       return member.user;
     }
   }
   return undefined;
+}
+
+// users.info once per member per process — image-less Slack profiles keep
+// avatar_url null, so without the guard every resolve would re-probe.
+const avatarChecked = new Set<string>();
+
+/** Backfill a member's avatar_url from their Slack profile photo. The
+ *  concierge thread's picture_url rides on users.avatar_url, so members who
+ *  never uploaded a Janis avatar showed as initials in their own DMs. Kept
+ *  OUT of slackUserToMember — its fast path is users.info-free by contract
+ *  (every interactive action resolves through it); callers that actually
+ *  render the avatar opt in. */
+export async function hydrateSlackAvatar(
+  db: Db,
+  inst: Installation,
+  slackUserId: string,
+  user: UserRow,
+): Promise<void> {
+  if (user.avatarUrl || avatarChecked.has(user.id)) return;
+  avatarChecked.add(user.id);
+  const info = await slackApi<{
+    user?: { profile?: { image_192?: string; image_72?: string; image_48?: string } };
+  }>(inst.botToken, 'users.info', { user: slackUserId }).catch(() => null);
+  const image = info?.ok
+    ? (info.user?.profile?.image_192 ?? info.user?.profile?.image_72 ?? info.user?.profile?.image_48)
+    : undefined;
+  if (image) {
+    await db.update(users).set({ avatarUrl: image }).where(eq(users.id, user.id));
+    user.avatarUrl = image;
+  }
 }

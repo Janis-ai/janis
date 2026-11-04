@@ -93,6 +93,27 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-04a — Sender avatars: Gmail/Gravatar/Slack hydration + contact route
+- fetchPlatformProfile generalized per kind (gained a db param): Meta
+  unchanged; gmail → People API otherContacts (sender's Google contact
+  photo — needs contacts.other.readonly, added to the Gmail connect
+  scopes; pre-scope tokens 403 → Gravatar); email/outlook → Gravatar
+  (md5(email), probed with ?d=404 so has_avatar stays honest). Misses now
+  stamp profile_fetched_at so the stale check stops re-probing every
+  inbound; pre-existing email convos pick avatars up on their next message.
+- Slack concierge threads: slackUserToMember captures profile.image_192/72/48
+  on the users.info leg; hydrateSlackAvatar (once per member per process,
+  opt-in) fills users.avatar_url — called at the concierge DM site, NOT in
+  the resolver whose fast path stays users.info-free by contract. The
+  concierge user payload now passes avatarUrl → picture_url.
+- Contact avatars were a dead end: toContact null'd avatar_url and no route
+  served it. New GET /api/contacts/:id/avatar → fetchContactAvatar serves
+  the row's avatar_url, falling back to the newest linked conversation's
+  picture_url (covers pre-enrich rows). has_avatar on list+detail counts
+  the fallback via an exists() subquery; Contacts page renders it.
+- Still unavailable: whatsapp/sms/voice (no provider endpoint) and
+  foreign-app PSIDs (Meta app-scoping wall — name only via participants).
+
 ## 2026-11-03d — Arg misses (workspace/agent) are results, not Run alerts
 - Same rail conv, 22:35 UTC: copilot passed workspace="OAuth review
   workspace" (hallucinated — conflated the contact's account traits with

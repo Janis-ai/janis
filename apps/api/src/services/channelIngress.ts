@@ -110,7 +110,7 @@ async function refreshProfile(
   channel: ChannelRow,
   conv: ConversationRow,
 ): Promise<void> {
-  const fetched = await fetchPlatformProfile(channel, String((conv.userProfile as UserProfile)?.id ?? ''));
+  const fetched = await fetchPlatformProfile(db, channel, String((conv.userProfile as UserProfile)?.id ?? ''));
   if (!Object.keys(defined(fetched)).length) return;
   // Key-level merge — a stale-snapshot replace can clobber verification state
   // a concurrent run wrote between this read and the platform fetch.
@@ -603,7 +603,7 @@ export async function handleChannelMessage(
   let created = false;
   if (!conv) {
     // First contact — enrich with the platform profile (name/handle/picture)
-    const fetched = await fetchPlatformProfile(channel, msg.senderId);
+    const fetched = await fetchPlatformProfile(db, channel, msg.senderId);
     const userProfile = { ...baseProfile(channel, msg), ...defined(fetched) };
     // Two deliveries (Meta retry, webhook + legacy-relay copies, or the
     // Chatfuel/ManyChat fallback racing the standby feed) can both miss the

@@ -345,6 +345,9 @@ describe('fetchPlatformProfile', () => {
       kind,
       credentials: { access_token: 'tok', page_id: 'PG1', phone_number_id: 'PN1' },
     }) as typeof channels.$inferSelect;
+  // Only the gmail path touches db (token refresh) — a fresh token_expiry
+  // keeps ensureAccessToken out of it, so a null stub is safe elsewhere.
+  const noDb = null as unknown as Db;
 
   afterEach(() => vi.unstubAllGlobals());
 
@@ -361,7 +364,7 @@ describe('fetchPlatformProfile', () => {
       return Promise.resolve(new Response('{}', { status: 400 }));
     });
     vi.stubGlobal('fetch', fetchMock);
-    const p = await fetchPlatformProfile(ch('messenger'), 'PSID1');
+    const p = await fetchPlatformProfile(noDb, ch('messenger'), 'PSID1');
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('PSID1?fields=name'),
       expect.anything(),
@@ -400,7 +403,7 @@ describe('fetchPlatformProfile', () => {
       return Promise.resolve(new Response('{}', { status: 400 }));
     });
     vi.stubGlobal('fetch', fetchMock);
-    const p = await fetchPlatformProfile(ch('messenger'), 'PSID1');
+    const p = await fetchPlatformProfile(noDb, ch('messenger'), 'PSID1');
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('conversations?user_id=PSID1'),
       expect.anything(),
@@ -415,7 +418,7 @@ describe('fetchPlatformProfile', () => {
       ),
     );
     vi.stubGlobal('fetch', fetchMock);
-    const p = await fetchPlatformProfile(ch('instagram'), 'IGSID1');
+    const p = await fetchPlatformProfile(noDb, ch('instagram'), 'IGSID1');
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringContaining('IGSID1?fields=name,username,profile_pic'),
       expect.anything(),
@@ -424,11 +427,79 @@ describe('fetchPlatformProfile', () => {
   });
 
   it('returns {} for whatsapp (no profile endpoint) and failures', async () => {
-    expect(await fetchPlatformProfile(ch('whatsapp'), '1555')).toEqual({});
+    expect(await fetchPlatformProfile(noDb, ch('whatsapp'), '1555')).toEqual({});
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 400 })));
-    expect(await fetchPlatformProfile(ch('messenger'), 'PSID1')).toEqual({});
+    expect(await fetchPlatformProfile(noDb, ch('messenger'), 'PSID1')).toEqual({});
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')));
-    expect(await fetchPlatformProfile(ch('messenger'), 'PSID1')).toEqual({});
+    expect(await fetchPlatformProfile(noDb, ch('messenger'), 'PSID1')).toEqual({});
+  });
+
+  it('resolves a gmail sender through People API otherContacts', async () => {
+    const gmail = {
+      kind: 'gmail',
+      credentials: { access_token: 'gtok', token_expiry: Date.now() + 3_600_000 },
+    } as typeof channels.$inferSelect;
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('people.googleapis.com')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              otherContacts: [
+                {
+                  names: [{ displayName: 'Jane Sender' }],
+                  emailAddresses: [{ value: 'jane@example.com' }],
+                  photos: [{ url: 'https://lh3.example/pic.jpg' }],
+                },
+                { emailAddresses: [{ value: 'someone-else@example.com' }] },
+              ],
+            }),
+          ),
+        );
+      }
+      return Promise.resolve(new Response('{}', { status: 400 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const p = await fetchPlatformProfile(noDb, gmail, 'Jane@Example.com');
+    expect(p.name).toBe('Jane Sender');
+    expect(p.picture_url).toBe('https://lh3.example/pic.jpg');
+    expect(p.profile_fetched_at).toBeTruthy();
+  });
+
+  it('falls back to Gravatar when the gmail token lacks the contacts scope', async () => {
+    const gmail = {
+      kind: 'gmail',
+      credentials: { access_token: 'gtok', token_expiry: Date.now() + 3_600_000 },
+    } as typeof channels.$inferSelect;
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      if (url.includes('people.googleapis.com')) {
+        return Promise.resolve(new Response('{}', { status: 403 }));
+      }
+      if (url.includes('gravatar.com')) return Promise.resolve(new Response('img'));
+      return Promise.resolve(new Response('{}', { status: 400 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const p = await fetchPlatformProfile(noDb, gmail, 'jane@example.com');
+    expect(p.picture_url).toContain('gravatar.com/avatar/');
+    expect(p.picture_url).toContain('d=404');
+  });
+
+  it('resolves bare email channels through Gravatar and stamps misses', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) =>
+      url.includes('gravatar.com/avatar/')
+        ? Promise.resolve(new Response('img'))
+        : Promise.resolve(new Response('{}', { status: 400 })),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const p = await fetchPlatformProfile(noDb, ch('email'), 'Jane@Example.com');
+    expect(p.picture_url).toContain('gravatar.com/avatar/');
+    expect(p.profile_fetched_at).toBeTruthy();
+
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 404 })));
+    const miss = await fetchPlatformProfile(noDb, ch('outlook'), 'nobody@example.com');
+    expect(miss.picture_url).toBeUndefined();
+    // misses still stamp profile_fetched_at — the stale check must not
+    // re-probe Gravatar on every inbound message
+    expect(miss.profile_fetched_at).toBeTruthy();
   });
 });
 

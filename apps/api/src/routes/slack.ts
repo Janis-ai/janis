@@ -15,6 +15,7 @@ import {
   createSlackChannel,
   findThread,
   getInstallation,
+  hydrateSlackAvatar,
   installationsFor,
   inviteWorkspaceMembers,
   listSlackChannels,
@@ -260,6 +261,7 @@ async function conciergeSlack(
       .catch(() => {});
 
   const member = await slackUserToMember(db, inst, ev.user).catch(() => undefined);
+  if (member) await hydrateSlackAvatar(db, inst, ev.user, member).catch(() => {});
   if (!member) {
     await say(
       `Hi! I'm the Janis concierge — I can help teammates with their workspace. ` +
@@ -382,6 +384,9 @@ async function conciergeSlack(
       verified: true,
       via: 'session',
       janisUser: true,
+      // their uploaded avatar, or the Slack profile photo hydrated by
+      // slackUserToMember — becomes the concierge thread's picture_url
+      avatarUrl: member.avatarUrl ?? undefined,
       traits: {
         janis_account: 'yes',
         workspaces: memberWs.map((w) => w.name).join(', '),

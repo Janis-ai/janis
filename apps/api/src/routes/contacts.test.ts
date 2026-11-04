@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
@@ -386,5 +386,62 @@ describe('contacts', () => {
       headers: { cookie },
     });
     expect(((await res1.json()) as { contacts: unknown[] }).contacts).toEqual([]);
+  });
+
+  describe('avatar', () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('serves a stored avatar_url through /:id/avatar', async () => {
+      const contactId = await contactForBinding(db, {
+        workspaceId,
+        channelId: emailChId,
+        platformUserId: 'direct@x.com',
+        profile: { email: 'direct@x.com', picture_url: 'https://cdn.example/me.jpg' },
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(new Response('IMG', { headers: { 'content-type': 'image/jpeg' } })),
+      );
+      const res = await api.request(`/api/contacts/${contactId}/avatar`, { headers: { cookie } });
+      expect(res.status).toBe(200);
+      expect(res.headers.get('content-type')).toBe('image/jpeg');
+      expect(await res.text()).toBe('IMG');
+    });
+
+    it('falls back to a linked conversation picture_url and reports has_avatar', async () => {
+      // Contacts linked before the conversation's picture resolved carry no
+      // avatar_url — the route must reach through to the conversation.
+      const [agent] = await db.select().from(agents).limit(1);
+      const [conv] = await db
+        .insert(conversations)
+        .values({
+          agentId: agent.id,
+          externalId: 'email:conv-pic@x.com',
+          userProfile: { id: 'conv-pic@x.com', picture_url: 'https://cdn.example/conv.jpg' },
+        })
+        .returning();
+      const contactId = await contactForBinding(db, {
+        workspaceId,
+        channelId: emailChId,
+        platformUserId: 'conv-pic@x.com',
+        profile: { email: 'conv-pic@x.com' },
+      });
+      await linkConversationContact(db, conv.id, contactId);
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue(new Response('CVIMG', { headers: { 'content-type': 'image/png' } })),
+      );
+      const res = await api.request(`/api/contacts/${contactId}/avatar`, { headers: { cookie } });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe('CVIMG');
+      const det = await api.request(`/api/contacts/${contactId}`, { headers: { cookie } });
+      expect(((await det.json()) as { contact: { has_avatar: boolean } }).contact.has_avatar).toBe(true);
+    });
+
+    it('404s when the contact has no resolvable avatar', async () => {
+      const [c] = await db.insert(contacts).values({ workspaceId, name: 'NoPic' }).returning();
+      const res = await api.request(`/api/contacts/${c.id}/avatar`, { headers: { cookie } });
+      expect(res.status).toBe(404);
+    });
   });
 });

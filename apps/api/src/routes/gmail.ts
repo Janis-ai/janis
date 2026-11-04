@@ -8,9 +8,14 @@ import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAu
 import type { ChannelCredentials } from '../lib/channels.js';
 
 // readonly inbox + send on the user's behalf — no mailbox modification.
+// contacts.other.readonly lets the profile fetcher resolve sender photos
+// through People API "Other contacts" (Google auto-files everyone the
+// mailbox has mailed); channels connected before it was added just 403 and
+// fall back to Gravatar — reconnecting picks the scope up.
 const SCOPES = [
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/contacts.other.readonly',
 ].join(' ');
 const STATE_TTL_MS = 15 * 60 * 1000;
 const LINK_TTL_MS = 7 * 24 * 3600 * 1000;

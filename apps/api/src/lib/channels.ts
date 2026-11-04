@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import type { QuickReply, UserProfile } from '@janis/shared';
 import { mathToUnicode } from '@janis/shared';
@@ -1897,16 +1897,45 @@ export function channelChatUrl(channel: ChannelRow): string | undefined {
  * returns {}. Failures return {} — never block message ingest on this.
  */
 export async function fetchPlatformProfile(
+  db: Db,
+  channel: ChannelRow,
+  platformUserId: string,
+): Promise<Partial<UserProfile>> {
+  // WhatsApp has no profile endpoint (name arrives in the webhook), and
+  // sms/voice/chatfuel/manychat offer none either — those stay initials.
+  switch (channel.kind) {
+    case 'messenger':
+    case 'instagram':
+      return metaProfile(channel, platformUserId);
+    case 'gmail': {
+      // The sender's Google contact photo when the mailbox knows them,
+      // Gravatar otherwise — both keyed off their email (= platformUserId).
+      // Gravatar can still supply a photo when the Google contact has a name
+      // but no picture, so merge rather than prefer-one.
+      const gp = await googleSenderProfile(db, channel, platformUserId);
+      const gr = gp?.picture_url ? null : await gravatarProfile(platformUserId);
+      // profile_fetched_at stamps even on a miss — otherwise the stale check
+      // re-probes both sources on every inbound message.
+      return { ...(gr ?? {}), ...(gp ?? {}), profile_fetched_at: new Date().toISOString() };
+    }
+    case 'email':
+    case 'outlook':
+      return {
+        ...(await gravatarProfile(platformUserId)),
+        profile_fetched_at: new Date().toISOString(),
+      };
+    default:
+      return {};
+  }
+}
+
+/** Meta Graph API profile — messenger/instagram only. */
+async function metaProfile(
   channel: ChannelRow,
   platformUserId: string,
 ): Promise<Partial<UserProfile>> {
   const creds = channel.credentials as ChannelCredentials;
-  // WhatsApp has no profile endpoint (name arrives in the webhook); email/
-  // gmail carry the address in the message itself and their access_token is
-  // a Google credential, not Meta's.
-  if (!creds.access_token || ['whatsapp', 'email', 'gmail'].includes(channel.kind)) {
-    return {};
-  }
+  if (!creds.access_token) return {};
   // Meta deprecated first_name/last_name/profile_pic on the User Profile
   // API — requesting them errors the whole call. `name` is all that survives.
   const fields =
@@ -1971,6 +2000,67 @@ export async function fetchPlatformProfile(
       picture_url: pictureUrl,
       profile_fetched_at: new Date().toISOString(),
     };
+  } catch {
+    return {};
+  }
+}
+
+/** Sender's Google contact entry via the People API "Other contacts" list —
+ *  Google files everyone the mailbox has exchanged mail with there. Needs
+ *  the contacts.other.readonly scope: channels connected before it was
+ *  added 403, and the caller falls through to Gravatar. */
+async function googleSenderProfile(
+  db: Db,
+  channel: ChannelRow,
+  email: string,
+): Promise<Partial<UserProfile> | null> {
+  const token = await ensureAccessToken(db, channel).catch(() => null);
+  if (!token) return null;
+  const target = email.trim().toLowerCase();
+  let pageToken = '';
+  for (let page = 0; page < 5; page++) {
+    const qs = new URLSearchParams({
+      readMask: 'names,photos,emailAddresses',
+      pageSize: '1000',
+      ...(pageToken ? { pageToken } : {}),
+    });
+    const res = await fetch(`https://people.googleapis.com/v1/otherContacts?${qs}`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(8_000),
+    }).catch(() => null);
+    if (!res?.ok) return null;
+    const data = (await res.json().catch(() => null)) as {
+      otherContacts?: {
+        names?: { displayName?: string }[];
+        emailAddresses?: { value?: string }[];
+        photos?: { url?: string; default?: boolean }[];
+      }[];
+      nextPageToken?: string;
+    } | null;
+    const match = (data?.otherContacts ?? []).find((o) =>
+      (o.emailAddresses ?? []).some((a) => a.value?.toLowerCase() === target),
+    );
+    if (match) {
+      const photo = (match.photos ?? []).find((p) => p.url && !p.default);
+      const name = match.names?.[0]?.displayName;
+      return photo?.url || name ? { name, picture_url: photo?.url } : null;
+    }
+    if (!data?.nextPageToken) return null;
+    pageToken = data.nextPageToken;
+  }
+  return null;
+}
+
+/** Gravatar is the only no-auth avatar source for bare-email senders. The
+ *  ?d=404 probe checks existence up front so has_avatar stays honest —
+ *  a stored url that later 404s just falls back to the initial. */
+async function gravatarProfile(email: string): Promise<Partial<UserProfile>> {
+  const addr = email.trim().toLowerCase();
+  if (!addr.includes('@')) return {};
+  const url = `https://www.gravatar.com/avatar/${createHash('md5').update(addr).digest('hex')}?s=256&d=404`;
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+    return res.ok ? { picture_url: url } : {};
   } catch {
     return {};
   }

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
-import { and, desc, eq, inArray, ne, or, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNotNull, ne, or, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -18,6 +18,7 @@ import { sessionAuth, adminOnly, type SessionEnv } from '../middleware/sessionAu
 import { audit } from '../lib/audit.js';
 import { segmentConditions, type CampaignSegment } from '../lib/campaigns.js';
 import { contactExportBundle, purgeContactData } from '../lib/contacts.js';
+import { fetchContactAvatar } from '../lib/avatar.js';
 
 const boolParam = (v: string | undefined) =>
   v === '1' || v === 'true' ? true : undefined;
@@ -36,7 +37,13 @@ export function contactRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
   app.use('/*', sessionAuth(db));
 
-  const toContact = (r: typeof contacts.$inferSelect, counts?: { identities: number; conversations: number }) => ({
+  const toContact = (
+    r: typeof contacts.$inferSelect,
+    counts?: { identities: number; conversations: number },
+    /** Covers the avatar route's conversation fallback — a linked thread's
+     *  picture_url counts even when contacts.avatar_url was never filled. */
+    hasAvatar?: boolean,
+  ) => ({
     id: r.id,
     name: r.name,
     email: r.email,
@@ -47,7 +54,7 @@ export function contactRoutes(db: Db) {
     external_ids: r.externalIds,
     metadata: r.metadata,
     avatar_url: null as string | null, // raw CDN urls stay server-side
-    has_avatar: Boolean(r.avatarUrl),
+    has_avatar: hasAvatar ?? Boolean(r.avatarUrl),
     notes: r.notes,
     identities: counts?.identities,
     conversations: counts?.conversations,
@@ -76,6 +83,7 @@ export function contactRoutes(db: Db) {
         contact: contacts,
         convCount: sql<number>`count(distinct ${conversations.id})::int`,
         lastMessageAt: sql<Date | null>`max(${conversations.lastMessageAt})`,
+        hasAvatar: sql<boolean>`(${contacts.avatarUrl} is not null) or exists (select 1 from conversations cv where cv.contact_id = ${contacts.id} and cv.user_profile->>'picture_url' is not null)`,
       })
       .from(contacts)
       .leftJoin(conversations, eq(conversations.contactId, contacts.id))
@@ -93,11 +101,32 @@ export function contactRoutes(db: Db) {
     const idCount = new Map(identityCounts.map((r) => [r.contactId, r.n]));
     return c.json({
       contacts: rows.map((r) => ({
-        ...toContact(r.contact, { identities: idCount.get(r.contact.id) ?? 0, conversations: r.convCount }),
+        ...toContact(r.contact, { identities: idCount.get(r.contact.id) ?? 0, conversations: r.convCount }, r.hasAvatar),
         // postgres-js returns aggregate timestamps as strings, PGlite as
         // Date — coerce rather than trusting the driver.
         last_message_at: r.lastMessageAt ? new Date(r.lastMessageAt).toISOString() : null,
       })),
+    });
+  });
+
+  // Proxied contact photo — the stored avatar_url (or a linked
+  // conversation's picture_url when the row was never backfilled) stays
+  // server-side; the client only ever sees this endpoint.
+  app.get('/:id/avatar', async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const [contact] = await db
+      .select()
+      .from(contacts)
+      .where(and(eq(contacts.id, c.req.param('id')), eq(contacts.workspaceId, workspaceId)))
+      .limit(1);
+    if (!contact) return c.json({ error: 'not found' }, 404);
+    const avatar = await fetchContactAvatar(db, contact);
+    if (!avatar) return c.json({ error: 'avatar unavailable' }, 404);
+    return new Response(avatar.bytes, {
+      headers: {
+        'content-type': avatar.type,
+        'cache-control': 'private, max-age=86400',
+      },
     });
   });
 
@@ -111,7 +140,7 @@ export function contactRoutes(db: Db) {
       .limit(1);
     if (!contact) return c.json({ error: 'not found' }, 404);
 
-    const [identities, convs] = await Promise.all([
+    const [identities, convs, convAvatar] = await Promise.all([
       db
         .select({
           id: contactIdentities.id,
@@ -136,6 +165,16 @@ export function contactRoutes(db: Db) {
         .where(eq(conversations.contactId, contact.id))
         .orderBy(desc(conversations.lastMessageAt))
         .limit(50),
+      db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.contactId, contact.id),
+            isNotNull(sql`(${conversations.userProfile}->>'picture_url')`),
+          ),
+        )
+        .limit(1),
     ]);
 
     // Possible duplicates — same email, phone, or non-generic name on
@@ -169,7 +208,7 @@ export function contactRoutes(db: Db) {
       : [];
 
     return c.json({
-      contact: toContact(contact),
+      contact: toContact(contact, undefined, Boolean(contact.avatarUrl) || convAvatar.length > 0),
       identities: identities.map((i) => ({
         id: i.id,
         platform_user_id: i.platformUserId,

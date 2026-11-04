@@ -1,10 +1,11 @@
-import { eq, sql } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, sql } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
-import { channelBindings, channels, conversations } from '../db/schema.js';
+import { channelBindings, channels, contacts, conversations } from '../db/schema.js';
 import { fetchPlatformProfile } from './channels.js';
 import { getUpload } from './uploads.js';
 
 type ConversationRow = typeof conversations.$inferSelect;
+type ContactRow = typeof contacts.$inferSelect;
 
 // Slack fetches icon_url per message at ingest time with a short fuse —
 // without a cache, 20 seeded messages = 20 upstream Meta fetches and the
@@ -51,7 +52,7 @@ export async function fetchAvatar(
       .where(eq(channelBindings.conversationId, conv.id))
       .limit(1);
     if (bound && profile.id) {
-      const fresh = await fetchPlatformProfile(bound.channel, profile.id);
+      const fresh = await fetchPlatformProfile(db, bound.channel, profile.id);
       if (fresh.picture_url && fresh.picture_url !== profile.picture_url) {
         // Per-key merge — a stale whole-object replace can clobber
         // verification keys a concurrent run just wrote.
@@ -73,4 +74,61 @@ export async function fetchAvatar(
   const type = res.headers.get('content-type') ?? 'image/jpeg';
   cache.set(conv.id, { bytes, type, exp: Date.now() + TTL_MS });
   return { bytes, type };
+}
+
+/** Contact avatar: the row's own avatar_url when set, else the newest linked
+ *  conversation's picture_url — contacts linked before enrich covered
+ *  avatars (or whose picture refreshed after linking) still resolve. */
+export async function fetchContactAvatar(
+  db: Db,
+  contact: ContactRow,
+): Promise<{ bytes: ArrayBuffer; type: string } | null> {
+  const key = `contact:${contact.id}`;
+  const hit = cache.get(key);
+  if (hit && hit.exp > Date.now()) return { bytes: hit.bytes, type: hit.type };
+
+  const url = contact.avatarUrl;
+  if (!url) return conversationAvatar(db, contact.id, key);
+
+  if (url.startsWith('/uploads/')) {
+    const row = await getUpload(db, url.slice('/uploads/'.length));
+    if (!row) return conversationAvatar(db, contact.id, key);
+    const bytes = row.data.buffer.slice(
+      row.data.byteOffset,
+      row.data.byteOffset + row.data.byteLength,
+    ) as ArrayBuffer;
+    cache.set(key, { bytes, type: row.type, exp: Date.now() + TTL_MS });
+    return { bytes, type: row.type };
+  }
+
+  const res = await fetch(url, { signal: AbortSignal.timeout(8_000) }).catch(() => null);
+  if (!res?.ok) return conversationAvatar(db, contact.id, key);
+  const bytes = await res.arrayBuffer();
+  const type = res.headers.get('content-type') ?? 'image/jpeg';
+  cache.set(key, { bytes, type, exp: Date.now() + TTL_MS });
+  return { bytes, type };
+}
+
+/** Newest linked conversation with a profile picture — fetchAvatar then
+ *  handles upload rows, remote fetches, and Meta re-resolution. */
+async function conversationAvatar(
+  db: Db,
+  contactId: string,
+  cacheKey: string,
+): Promise<{ bytes: ArrayBuffer; type: string } | null> {
+  const [conv] = await db
+    .select()
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.contactId, contactId),
+        isNotNull(sql`(${conversations.userProfile}->>'picture_url')`),
+      ),
+    )
+    .orderBy(desc(conversations.lastMessageAt))
+    .limit(1);
+  if (!conv) return null;
+  const avatar = await fetchAvatar(db, conv);
+  if (avatar) cache.set(cacheKey, { ...avatar, exp: Date.now() + TTL_MS });
+  return avatar;
 }
