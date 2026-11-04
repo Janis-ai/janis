@@ -399,7 +399,13 @@ is a day on launch)*
     feature consuming it (e.g., public IG profile enrichment of
     senders) + a screencast of that flow; generic asks get denied.
 15. Google OAuth verification (sensitive scopes) — IN FLIGHT, awaiting
-    approval (2026-10-29, per Mike). Covers the Google files connector
+    approval (2026-10-29, per Mike). 2026-11-04: Google kicked back —
+    video link wasn't public (fixed: youtu.be/Idw7dQ9Ow_0) + asked for
+    test creds. Reviewer login google-review@janis.ai (password reset
+    via scripts/tmp/reset-review-pw.ts, verified live) on "OAuth review
+    workspace" / agent "Meridian Realty Intake" — consent re-runs on the
+    uninstalled Slides/Drive cards with the reviewer's own account.
+    Covers the Google files connector
     (routes/googleConnect.ts): spreadsheets + documents + drive.file —
     deliberately non-restricted scopes (drive.file picker + app-created
     files) so no CASA assessment applies; drive.readonly was dropped for
