@@ -2159,11 +2159,12 @@ details summary:hover { color: var(--text); }
      the time/dot column, its bottom edge with the preview line. The button
      keeps a larger invisible hit area up/left of the glyph. */
   .conv-star {
-    position: absolute; right: 8px; bottom: 9px;
+    position: absolute; right: 13px; bottom: 9px;
     width: 30px; height: 32px; padding: 0;
     justify-content: flex-end; align-items: flex-end;
-    /* Lucide glyphs carry ~2px of viewBox padding — the box overhangs the
-       shared edge slightly so the star's VISUAL right edge lands on it. */
+    /* Lucide glyphs carry ~1.25px of viewBox padding — the box overhangs
+       so the star's VISUAL right edge lands on the 14px inset the stamp
+       column uses; both margins read equal. */
   }
   .conv-row .intent-tag, .conv-row .channel-name, .conv-row .conv-tag { display: none; }
   .msg { max-width: 85%; }
