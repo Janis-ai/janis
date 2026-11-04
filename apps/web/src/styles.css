@@ -1544,7 +1544,10 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-inbox .conv-row .who .name { flex: 0 1 auto; max-width: 100%; }
 .conv-inbox .conv-row .who .tags { flex-basis: 100%; order: 2; margin-top: 2px; }
 .conv-inbox .conv-row .who .preview { flex-basis: 100%; order: 3; }
-.conv-inbox .conv-check, .conv-inbox .conv-star, .conv-inbox .row-actions { display: none; }
+/* The hover rail outranks a plain hide — it must lose in the mini column
+   where the rail would clip at the column edge. */
+.conv-inbox .conv-check, .conv-inbox .conv-star { display: none; }
+.conv-inbox .conv-row:hover .row-actions, .conv-inbox .row-actions { display: none; }
 .conv-inbox .conv-dots { display: none; }
 .conv-inbox .tail { align-items: center; gap: 5px; margin-top: 3px; }
 .conv-inbox .tail .meta { font-size: 11px; }
