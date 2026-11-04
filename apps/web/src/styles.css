@@ -974,7 +974,7 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
    ink on the same flat bg (no two-tone); read rows are regular and muted.
    Single-line on wide screens, stacked on phones (≤720 block). */
 .conv-row {
-  display: flex; align-items: center; gap: 10px; padding: 7px 12px;
+  display: flex; align-items: center; gap: 10px; padding: 7px 24px;
   border-bottom: 1px solid var(--border);
 }
 .conv-row:first-of-type { border-top: 1px solid var(--border); }
@@ -1055,9 +1055,9 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 @media (hover: hover) {
   .conv-row:hover .row-actions { display: inline-flex; }
 }
-/* Right edge stays un-padded so the pager's › button lands on the same
-   inset as the search field's right edge in the head row. */
-.conv-select-all { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 0 0 8px 16px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
+/* Sides pad to the same 24px inset as the head — the pager's › lands on
+   the search field's right edge while the row bleeds past it. */
+.conv-select-all { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 0 24px 8px; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 10px; }
 .bulk-bar {
   position: sticky; top: 0; z-index: 5;
   background: var(--panel); border: 1px solid var(--accent-dim);
@@ -1534,7 +1534,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    hidden) so a scroll anywhere on the list moves the list, not the page. */
 /* Inbox fills the viewport like the conv page — drop the 1100px cap. */
 .layout:has(.inbox-head) .main { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; max-width: none; }
-.conv-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -24px; padding: 0 24px; }
+/* Rows bleed edge-to-edge — the tint + hairlines span .main; the content
+   inset lives in row padding so text still lines up under the head. */
+.conv-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -24px; padding: 0; }
 
 .conv-layout { display: flex; gap: 16px; height: 100%; min-height: 100%; container-type: inline-size; container-name: convl; position: relative; overflow-x: hidden; overflow-x: clip; }
 /* Split-pane inbox column — only on wide screens (≥1200 block below):
