@@ -2052,7 +2052,7 @@ details summary:hover { color: var(--text); }
     width: 30px; height: 32px; padding: 0;
     justify-content: flex-end; align-items: flex-end;
   }
-  .conv-row .agent-tag, .conv-row .intent-tag, .conv-row .channel-name { display: none; }
+  .conv-row .intent-tag, .conv-row .channel-name { display: none; }
   .msg { max-width: 85%; }
   .login-wrap { padding: 16px; }
   .login-card { width: 100%; }
