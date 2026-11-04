@@ -226,7 +226,7 @@ export function ConvRow({
       <span className="conv-avatar-wrap">
         <Avatar c={c} size={32} />
         {/* Select-mode badge — mobile only; rows have no checkbox there. */}
-        <span className="conv-sel-check" aria-hidden><Check size={11} /></span>
+        <span className="conv-sel-check" aria-hidden><Check size={16} /></span>
       </span>
       <div className="who">
         <div className="name">

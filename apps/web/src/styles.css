@@ -1025,12 +1025,11 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 /* Reserved dot slot on desktop — fixed width so the avatar never shifts
    when a row has no attention marker. */
 .conv-avatar-wrap { position: relative; flex-shrink: 0; display: inline-flex; }
-/* Select-mode avatar badge — base state hidden; the ≤720 block shows it. */
+/* Select-mode avatar swap — base state hidden; the ≤720 block shows it.
+   The whole circle becomes a check badge, Gmail-app style. */
 .conv-sel-check {
-  display: none; position: absolute; right: -3px; bottom: -3px;
-  width: 16px; height: 16px; border-radius: 50%;
-  background: var(--accent); color: #fff;
-  border: 2px solid var(--bg);
+  display: none; position: absolute; inset: 0;
+  border-radius: 50%; background: var(--panel-2); color: var(--text);
   align-items: center; justify-content: center; pointer-events: none;
 }
 .conv-dots { display: inline-flex; align-items: center; justify-content: center; gap: 4px; width: 10px; flex-shrink: 0; }
