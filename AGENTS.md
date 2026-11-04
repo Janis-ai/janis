@@ -1442,6 +1442,60 @@ only and partner orgs aren't auto-bridged — NOT needed on dev stores
 "My Store" shows under the app name on the merchant install screen, fix
 via support ticket or org transfer before listing.
 
+## Legacy silent-migration dossier (dry run 2026-11-03)
+
+Payer census (live Stripe): 14,865 "active" subs, only **12 with a >$0
+recurring item** — the rest are $0-licensed zombies. Of the 12, ~7 are real
+customers; the other 5 are internal rigs (Josh's two accounts incl. the
+$600/yr BaseGold, two Meta-review workspaces, and dashtm4 paying $10/mo
+with ZERO subscribed bots — all candidates for cancellation, not
+migration). Real estate: `apps/api/scripts/tmp/payer-dossier.ts` re-runs
+the whole map read-only.
+
+The 7 real payers (Mongo `slack_integrations.stripe_customer.id`):
+- **Air Tahiti** (varoa.boosie@airtahiti.pf, $25/mo) — key g6zzNh2E
+  ALREADY imported (monitor) under "Air Tahiti" ws in the 2026-09-21 wave;
+  2,067 channel docs, 53 member DMs. THE parent-child case: shared with
+  shane.maiau@gmail.com + "janis test 200" (both non-payer). Second key
+  svvVF84y is an unimported duplicate. Chatfuel+DF chatbotairtahiti-qokw.
+- **Oicosmeticstudio** ($10/mo) — biggest Slack estate, 11,026 j-channels;
+  1 manychat bot. NOT imported.
+- **Architeqt10** ($10/mo) — ASalon10 already imported (monitor) under
+  "Architeqt10" ws; 6,436 channel docs; chatfuel. Related: same email
+  domain runs the "Genvate Managed" workspace (agency pattern).
+- **Botsheets HQ** (Josh's own product, $150/mo Platinum) — 5 bots, 2,338
+  channel docs. NOT imported.
+- **trifit** ($10/mo) — 1 chatfuel bot (Rex), 6 channel docs. NOT imported.
+- **jessicavictoria** ($10/mo) — manychat, 1 channel doc, no Slack estate.
+  Lightest — best canary.
+- **aesthetibot** ($10/mo) — webchat/botcopy (not messenger); migrates via
+  the /api/v1 SDK path, no Meta surface.
+
+Current prod state (verified 2026-11-03): ~35 monitor-engine legacy agents
+already imported 2026-09-21 in per-customer workspaces, all with
+legacy_stripe. Fallback path is hybrid-live: every bot-platform call is
+mirrored to wordhopapi and **wordhopapi's answer is authoritative when it
+arrives** — native DF only stands when the mirror fails. So monitor imports
+are safe-by-default; adding DF creds changes nothing customer-visible until
+wordhopapi retires (then migrated agents take over by default).
+
+Remaining to fully migrate a payer silently:
+1. Import bots w/ DF creds (monitor→dialogflow) + messenger channel +
+   legacy_stripe (scripts exist: export-legacy-bots/import-legacy).
+2. Slack team cutover: write slack_installations {migrated:true,
+   mode:'classic', classicConfig from the Mongo doc} + reseed
+   slack_classic_channels/prefs + markLegacyTeamMigrated LAST. NB: no
+   classic-mode installs exist on prod yet; runSlackMigration (self-serve
+   path) does NOT set mode/classicConfig — the token-import shape is
+   janis200-setup.ts, not runSlackMigration.
+3. Parent-child: leave child teams' slack_integrations un-marked — the
+   /in+fallback mirrors keep wordhopapi emitting to them. Air Tahiti's
+   2 children ride the mirror until cross-workspace subscription fan-out
+   is built (emit.ts fans to agent-workspace installs only — known gap).
+   Guard: never let two workspaces hold agents with the same
+   legacy_client_key — agentForKey takes first match.
+4. Rollback per customer = flip migrated off; wordhop-slack resumes.
+
 ## Deferred — hosted chat subdomains (decided 2026-10-28)
 
 Every bubble already gets a shareable hosted page: channelChatUrl falls
