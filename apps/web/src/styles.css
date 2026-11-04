@@ -1558,7 +1558,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .conv-inbox {
     display: block; width: 290px; flex-shrink: 0;
     border-right: 1px solid var(--border);
-    overflow-y: auto; margin: -14px 0 -14px -16px; padding: 8px 0;
+    overflow-y: auto; padding: 8px 12px 8px 0;
   }
   /* Sidebar collapses to its icon rail while a conversation is open —
      same grammar as the dock-open squeeze, kept in lockstep. */
