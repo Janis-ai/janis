@@ -93,6 +93,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-03d — Arg misses (workspace/agent) are results, not Run alerts
+- Same rail conv, 22:35 UTC: copilot passed workspace="OAuth review
+  workspace" (hallucinated — conflated the contact's account traits with
+  an operator workspace, the confusion 2026-11-03b prompted against). The
+  {"error"} reply marked the tool call failed and fired a Run alert.
+- 0836854's miss-not-failure rule now covers visitorWorkspace,
+  visitorAgent and changePlan's inline resolution: bad/absent hints
+  return {result:'no_matching_*'|'ambiguous_*', hint, workspaces|agents}
+  so the model self-corrects without alerting. Real states (unsigned
+  visitor, no admin workspace) keep {"error"}.
+
 ## 2026-11-03c — Inbox rows go Gmail: flat list, unread two-tone, hover rail
 - ConvRow rebuilt as a mail-list row: checkbox → star toggle → alert/unread
   dots → avatar → sender column → label chips (agent/channel/test/intent/
