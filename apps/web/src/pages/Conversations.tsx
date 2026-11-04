@@ -207,6 +207,9 @@ export function ConvRow({
             </span>
           )}
           {c.intent && <span className="channel-tag intent-tag" title="Classified intent">{c.intent}</span>}
+          {c.tags?.map((t) => (
+            <span key={t} className="channel-tag conv-tag" title="Tag">{t}</span>
+          ))}
           {snoozed && (
             <span className="channel-tag" title={`Snoozed until ${new Date(c.snoozed_until!).toLocaleString()}`}>
               <Moon size={11} style={{ verticalAlign: '-1px', marginRight: 3 }} />

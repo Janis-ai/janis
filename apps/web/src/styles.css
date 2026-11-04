@@ -2149,7 +2149,7 @@ details summary:hover { color: var(--text); }
     /* Lucide glyphs carry ~2px of viewBox padding — the box overhangs the
        shared edge slightly so the star's VISUAL right edge lands on it. */
   }
-  .conv-row .intent-tag, .conv-row .channel-name { display: none; }
+  .conv-row .intent-tag, .conv-row .channel-name, .conv-row .conv-tag { display: none; }
   .msg { max-width: 85%; }
   .login-wrap { padding: 16px; }
   .login-card { width: 100%; }
