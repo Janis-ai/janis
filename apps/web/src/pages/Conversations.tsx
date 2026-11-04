@@ -17,10 +17,10 @@ import { usePageTitle } from '../lib/title';
  * param (states/flags/signals); values OR inside a group, groups AND. An
  * empty selection everywhere is the default browse view (no archived).
  * Labels match the conversation detail Status dropdown (Agent = agent-driven). */
-type ConvFilters = { states: string[]; flags: string[]; signals: string[] };
-const EMPTY_FILTERS: ConvFilters = { states: [], flags: [], signals: [] };
+export type ConvFilters = { states: string[]; flags: string[]; signals: string[] };
+export const EMPTY_FILTERS: ConvFilters = { states: [], flags: [], signals: [] };
 
-const FILTER_GROUPS: {
+export const FILTER_GROUPS: {
   key: keyof ConvFilters;
   label: string;
   options: [value: string, label: string][];
@@ -69,7 +69,7 @@ function withFilterValue(f: ConvFilters, value: string): ConvFilters {
   return { ...f, [key]: [...f[key], value] };
 }
 
-function filterCount(f: ConvFilters): number {
+export function filterCount(f: ConvFilters): number {
   return f.states.length + f.flags.length + f.signals.length;
 }
 
@@ -93,7 +93,7 @@ export function snoozeMinutes(minutes: number): number {
 /** useState persisted to localStorage — filters survive navigation.
  * `initial` may be lazy (a migration reader) — it only runs when nothing
  * is stored under `key`. */
-function useSticky<T>(key: string, initial: T | (() => T)): [T, (v: T) => void] {
+export function useSticky<T>(key: string, initial: T | (() => T)): [T, (v: T) => void] {
   const [v, setV] = useState<T>(() => {
     try {
       const s = localStorage.getItem(key);

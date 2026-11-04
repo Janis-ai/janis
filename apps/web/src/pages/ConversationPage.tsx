@@ -4,21 +4,30 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Alert, Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
-import { useAgents, useConversation, useConversations, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
+import { useAgents, useConversation, useConversations, useInvalidateConversations, useMe, useSearch, useUsers } from '../api/hooks';
 import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, StateBadge, surfaceLabel } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 import { useScenarioMatch } from '../lib/scenarioMatch';
-import { ConvRow, SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
+import {
+  ConvRow,
+  EMPTY_FILTERS,
+  FILTER_GROUPS,
+  filterCount,
+  SNOOZE_OPTIONS,
+  snoozeMinutes,
+  useSticky,
+  type ConvFilters,
+} from './Conversations';
 import { ALERT_LABELS } from '../components/Layout';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { BookmarkPlus, Bot, Brain, ChevronLeft, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
+import { BookmarkPlus, Bot, Brain, ChevronLeft, Headset, Info, ListFilter, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -60,8 +69,33 @@ export default function ConversationPage() {
   const params = useParams();
   // Split-pane inbox (wide screens only — .conv-inbox is display:none
   // below the breakpoint): the same browse list the row came from,
-  // scoped to the route's agent when there is one.
-  const inboxQ = useConversations({ agent_id: params.agentId || undefined });
+  // scoped to the route's agent when there is one. It mirrors the
+  // inbox's own sticky filters so the column shows the same view.
+  const [inboxFilters, setInboxFilters] = useSticky<ConvFilters>('conv.filters', EMPTY_FILTERS);
+  const [inboxTab, setInboxTab] = useSticky<'attention' | 'all'>('conv.tab', 'all');
+  const [inboxMine, setInboxMine] = useSticky('conv.mine', false);
+  const [inboxQuery, setInboxQuery] = useSticky('conv.query', '');
+  const [inboxFilterOpen, setInboxFilterOpen] = useState(false);
+  const inboxFilterParams = {
+    states: inboxFilters.states.join(',') || undefined,
+    flags: inboxFilters.flags.join(',') || undefined,
+    signals: inboxFilters.signals.join(',') || undefined,
+    agent_id: params.agentId || undefined,
+    mine: inboxMine,
+  };
+  const inboxQ = useConversations({
+    attention: inboxTab === 'attention' || undefined,
+    ...inboxFilterParams,
+  });
+  const inboxSearch = useSearch(inboxQuery, {
+    attention: inboxTab === 'attention' || undefined,
+    ...inboxFilterParams,
+  });
+  const inboxSearching = inboxQuery.trim().length > 0;
+  const inboxList = inboxSearching
+    ? inboxSearch.data?.conversations
+    : inboxQ.data?.pages.flatMap((p) => p.conversations);
+  const inboxFilterCount = filterCount(inboxFilters) + (inboxMine ? 1 : 0) + (inboxTab === 'attention' ? 1 : 0);
   const inboxBase = params.agentId ? `/agents/${params.agentId}/inbox` : '/conversations';
   const id = params.cid ?? params.id ?? '';
   const [searchParams, setSearchParams] = useSearchParams();
@@ -931,8 +965,97 @@ export default function ConversationPage() {
     <div className="conv-layout">
       {confirmEl}
       <div className="conv-inbox">
+        <div className="conv-inbox-head">
+          <SearchInput
+            className="search-box"
+            placeholder="Search…"
+            value={inboxQuery}
+            onChange={(e) => setInboxQuery(e.target.value)}
+            onClear={() => setInboxQuery('')}
+          />
+          <span className="src-menu-wrap">
+            <button
+              className={`btn${inboxFilterCount ? ' primary' : ''}`}
+              onClick={() => setInboxFilterOpen((o) => !o)}
+              title="Filter conversations"
+              aria-label="Filter conversations"
+            >
+              <ListFilter size={14} style={{ verticalAlign: '-2px' }} />
+              {inboxFilterCount > 0 && <span className="filter-badge">{inboxFilterCount}</span>}
+            </button>
+            {inboxFilterOpen && (
+              <>
+                <div className="menu-backdrop" onClick={() => setInboxFilterOpen(false)} />
+                <div className="menu-pop filter-pop">
+                  <div className="filter-group">
+                    <label className="check filter-group-head">
+                      <input
+                        type="checkbox"
+                        checked={inboxTab === 'attention'}
+                        onChange={() => setInboxTab(inboxTab === 'attention' ? 'all' : 'attention')}
+                      />
+                      Needs attention
+                    </label>
+                  </div>
+                  {FILTER_GROUPS.map((g) => {
+                    const sel = inboxFilters[g.key];
+                    const values = g.options.map(([v]) => v);
+                    const all = values.every((v) => sel.includes(v));
+                    const some = values.some((v) => sel.includes(v));
+                    return (
+                      <div key={g.key} className="filter-group">
+                        <label className="check filter-group-head">
+                          <input
+                            type="checkbox"
+                            checked={all}
+                            ref={(el) => { if (el) el.indeterminate = some && !all; }}
+                            onChange={() => setInboxFilters({ ...inboxFilters, [g.key]: all ? [] : values })}
+                          />
+                          {g.label}
+                        </label>
+                        {g.options.map(([v, l]) => (
+                          <label key={v} className="check filter-opt">
+                            <input
+                              type="checkbox"
+                              checked={sel.includes(v)}
+                              onChange={() =>
+                                setInboxFilters({
+                                  ...inboxFilters,
+                                  [g.key]: sel.includes(v) ? sel.filter((x) => x !== v) : [...sel, v],
+                                })
+                              }
+                            />
+                            {l}
+                          </label>
+                        ))}
+                      </div>
+                    );
+                  })}
+                  <div className="filter-group">
+                    <label className="check filter-opt">
+                      <input
+                        type="checkbox"
+                        checked={inboxMine}
+                        onChange={(e) => setInboxMine(e.target.checked)}
+                      />
+                      Assigned to me
+                    </label>
+                  </div>
+                  <div className="filter-foot">
+                    <button
+                      className="link small"
+                      onClick={() => { setInboxFilters(EMPTY_FILTERS); setInboxMine(false); }}
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
+          </span>
+        </div>
         <div className="conv-list">
-          {inboxQ.data?.pages.flatMap((p) => p.conversations).map((c2) => (
+          {inboxList?.map((c2) => (
             <ConvRow key={c2.id} c={c2} base={inboxBase} selected={c2.id === c.id} />
           ))}
         </div>
