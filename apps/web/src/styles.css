@@ -981,9 +981,11 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .conv-row .who .name {
   flex: 0 0 clamp(140px, 18%, 220px); min-width: 0;
   overflow: hidden; font-weight: 400;
+  /* Read senders sit a step dimmer than unread — Gmail's gray-vs-ink. */
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
 }
 .conv-row .who .name .n { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conv-row.unread .who .name { font-weight: 800; }
+.conv-row.unread .who .name { color: var(--text); font-weight: 800; }
 .conv-row .who .tags {
   flex: 0 1 auto; min-width: 0; overflow: hidden;
   display: inline-flex; align-items: baseline; gap: 4px;
