@@ -1023,7 +1023,10 @@ drizzle-kit/workbox-build, nothing to drop directly).
   2026-11-04, public beta until ~2026-02-02 (§A item 4). Open
   beta-phase leverage: zap templates embedded in product (also the
   early-exit path from beta), Powered-by-Zapier embed, help doc on
-  janis.ai, Zapier Partner Sandbox for version testing. Webhook
+  janis.ai, Zapier Partner Sandbox for version testing. Mike-side
+  hygiene: keep technical contact info current on the dev platform
+  (Zapier asked 2026-11-04 — routes their escalations to the right
+  person). Webhook
   template + event export still cover the manual catch-hook path.
   Still missing: one-click OAuth installs, public /integrations
   directory. Outbound webhooks have retries + deliveries/replay UI
