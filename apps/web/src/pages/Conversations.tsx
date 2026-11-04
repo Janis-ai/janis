@@ -7,7 +7,7 @@ import { api } from '../api/client';
 import { Avatar, displayName, Empty, Md, SearchInput } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
-import { Archive, ArchiveRestore, Bot, ChevronLeft, ChevronRight, Cog, Headset, ListFilter, Mail, MailOpen, Moon, Save, Star, Tag, Trash2, User, UserCheck, UserX, X } from 'lucide-react';
+import { Archive, ArchiveRestore, Bot, Check, ChevronLeft, ChevronRight, Cog, Headset, ListFilter, Mail, MailOpen, Moon, Save, Star, Tag, Trash2, User, UserCheck, UserX, X } from 'lucide-react';
 import { useConfirm, usePrompt } from '../components/Prompt';
 import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
 import { isEditableTarget } from '../lib/keys';
@@ -223,7 +223,11 @@ export function ConvRow({
           />
         )}
       </span>
-      <Avatar c={c} size={32} />
+      <span className="conv-avatar-wrap">
+        <Avatar c={c} size={32} />
+        {/* Select-mode badge — mobile only; rows have no checkbox there. */}
+        <span className="conv-sel-check" aria-hidden><Check size={11} /></span>
+      </span>
       <div className="who">
         <div className="name">
           <span className="n">{displayName(c)}</span>

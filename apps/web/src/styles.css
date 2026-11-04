@@ -1024,6 +1024,15 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .conv-row.unread .meta { color: var(--text); font-weight: 700; }
 /* Reserved dot slot on desktop — fixed width so the avatar never shifts
    when a row has no attention marker. */
+.conv-avatar-wrap { position: relative; flex-shrink: 0; display: inline-flex; }
+/* Select-mode avatar badge — base state hidden; the ≤720 block shows it. */
+.conv-sel-check {
+  display: none; position: absolute; right: -3px; bottom: -3px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--accent); color: #fff;
+  border: 2px solid var(--bg);
+  align-items: center; justify-content: center; pointer-events: none;
+}
 .conv-dots { display: inline-flex; align-items: center; justify-content: center; gap: 4px; width: 10px; flex-shrink: 0; }
 .alert-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
 /* Unread is weight-only on desktop; the tail-dots column exists solely
@@ -2142,6 +2151,9 @@ details summary:hover { color: var(--text); }
   .conv-row .who, .conv-row .tail { user-select: none; -webkit-user-select: none; }
   .conv-row .conv-check { display: none; }
   .conv-select-all { display: none; }
+  /* Selected rows badge the avatar — the checkbox column is gone, so the
+     state has to live where the eye already looks. */
+  .conv-row.sel .conv-sel-check { display: inline-flex; }
   /* Mobile stays flat — the two-tone is desktop-only; :not(.sel) keeps
      the bulk-select tint working on unread rows. */
   .conv-row.unread:not(.sel) { background: transparent; }
