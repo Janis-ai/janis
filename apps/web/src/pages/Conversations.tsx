@@ -667,7 +667,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
                           aria-label={`Delete view ${v.name}`}
                           onClick={() => deleteView(v.id)}
                         >
-                          <X size={12} />
+                          <Trash2 size={13} />
                         </button>
                       </div>
                     ))}
