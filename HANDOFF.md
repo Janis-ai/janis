@@ -93,6 +93,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-04b — Tier-3 scenario judge stops over-matching live replies
+- Every concierge inbox reply was attaching the "unintelligible input"
+  scenario (Expected bar + hides Save-as-scenario): matchPromptsSemantically
+  numbered only the FIRST line of each multi-line exchange, so scenario
+  boundaries bled and the judge (the agent's own model — flash-lite here)
+  matched on topical similarity. Now `=== SCENARIO N ===` / `=== INPUT N ===`
+  block delimiters + a bias-to-null MATCH_SYSTEM. Verified vs prod data:
+  flash-lite + 4o-mini null the two real queries, still hit paraphrases/
+  typos on all positive controls. Same helper backs save-as-scenario
+  dedupe and /tests/match. Committed + pushed 7f9c8b5; DEPLOY HELD by Mike.
+
 ## 2026-11-04a — Sender avatars: Gmail/Gravatar/Slack hydration + contact route
 - fetchPlatformProfile generalized per kind (gained a db param): Meta
   unchanged; gmail → People API otherContacts (sender's Google contact
