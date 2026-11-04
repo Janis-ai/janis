@@ -93,6 +93,22 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-04c — Host-asserted avatars via Janis.identify({ avatar_url })
+- identityClaim accepts avatar_url; verifyIdentitySig returns
+  {verified, avatarSigned} — the avatar is honored only when the signature
+  covers it (hosts sign id|email|name|avatar_url; legacy 3-field sigs
+  still verify identity, avatar ignored). Rationale: picture_url is
+  fetched SERVER-side — an unsigned/swappable claimed url would be a
+  blind-SSRF primitive. Tampered avatar under a 4-field sig fails
+  verification entirely.
+- Flows: resolveIdentity → msg.user.avatarUrl → picture_url (both the
+  /identify patch path and per-message baseProfile merge) → contact
+  avatar_url via enrich coalesce. Janis-user avatar still wins when the
+  claim id is a real user (cross-origin session form).
+- Docs updated: channel settings WebchatIdentity block + widget.js
+  docstring — sig input is `filter(Boolean).join('|')` over id/email/
+  name/avatar_url.
+
 ## 2026-11-04b — Tier-3 scenario judge stops over-matching live replies
 - Every concierge inbox reply was attaching the "unintelligible input"
   scenario (Expected bar + hides Save-as-scenario): matchPromptsSemantically

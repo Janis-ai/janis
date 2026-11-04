@@ -149,12 +149,17 @@ const attachment = z.object({
   size: z.number().int().min(0).max(MAX_UPLOAD_BYTES),
 });
 
-/** Host-asserted identity — `sig` is HMAC-SHA256(identity_secret, `${id}|${email}|${name}`). */
+/** Host-asserted identity — `sig` is HMAC-SHA256(identity_secret, `${id}|${email}|${name}`),
+ *  or `${id}|${email}|${name}|${avatar_url}` when an avatar is asserted. */
 const identityClaim = z.object({
   id: z.string().max(120).optional(),
   name: z.string().max(80).optional(),
   email: z.string().max(200).optional(),
   sig: z.string().max(200).optional(),
+  /** The host user's avatar — counts only when bound into `sig`: picture_url
+   *  is fetched server-side, so a claim the signature doesn't cover would be
+   *  a blind-SSRF primitive. */
+  avatar_url: z.string().max(2000).optional(),
   /** Host-provided context for the agent (plan, company, page, …). Unsigned
    *  — treated as self-reported context, never proof of anything. */
   traits: z.record(z.unknown()).optional(),
@@ -233,16 +238,23 @@ type Claim = z.infer<typeof identityClaim>;
 type ChannelRow = typeof channels.$inferSelect;
 
 /** HMAC check — sig proves the host server (which knows the secret) vouched
- *  for this exact id/email/name triple. */
-function verifyIdentitySig(secret: string, claim: Claim): boolean {
-  if (!claim.sig) return false;
-  const expected = createHmac('sha256', secret)
-    .update(`${claim.id ?? ''}|${claim.email ?? ''}|${claim.name ?? ''}`)
-    .digest('hex');
-  return (
-    expected.length === claim.sig.length &&
-    timingSafeEqual(Buffer.from(expected), Buffer.from(claim.sig))
-  );
+ *  for this exact id/email/name triple, + avatar_url when signed in. Binding
+ *  the avatar in matters: without it a visitor could keep a valid sig and
+ *  swap in an arbitrary URL the server then fetches (blind SSRF). A
+ *  3-field sig on a claim WITH avatar_url still verifies identity — the
+ *  avatar just doesn't count. */
+function verifyIdentitySig(secret: string, claim: Claim): { verified: boolean; avatarSigned: boolean } {
+  if (!claim.sig) return { verified: false, avatarSigned: false };
+  const base = `${claim.id ?? ''}|${claim.email ?? ''}|${claim.name ?? ''}`;
+  const match = (payload: string) => {
+    const expected = createHmac('sha256', secret).update(payload).digest('hex');
+    return (
+      expected.length === claim.sig!.length &&
+      timingSafeEqual(Buffer.from(expected), Buffer.from(claim.sig!))
+    );
+  };
+  const avatarSigned = Boolean(claim.avatar_url) && match(`${base}|${claim.avatar_url}`);
+  return { verified: avatarSigned || match(base), avatarSigned };
 }
 
 /**
@@ -358,7 +370,9 @@ async function resolveIdentity(
   }
   if (!claim) return undefined;
   const secret = (channel.credentials as ChannelCredentials).identity_secret;
-  const verified = secret ? verifyIdentitySig(secret, claim) : false;
+  const { verified, avatarSigned } = secret
+    ? verifyIdentitySig(secret, claim)
+    : { verified: false, avatarSigned: false };
   // A verified claim whose id is a real Janis user is the cross-origin form
   // of a session identity (the /identity endpoint vends exactly this) — it
   // binds the conversation to the user the same way.
@@ -373,6 +387,10 @@ async function resolveIdentity(
     janisUser = Boolean(u);
     avatarUrl = u?.avatarUrl ?? undefined;
   }
+  // Host-asserted avatar — honored only when the signature covered the url,
+  // so it's host-trusted end to end; the Janis user's own upload still wins
+  // when both exist. Unsigned claims can't set a picture.
+  avatarUrl ??= avatarSigned && /^https?:\/\//.test(claim.avatar_url ?? '') ? claim.avatar_url : undefined;
   return {
     id: claim.id,
     name: claim.name,

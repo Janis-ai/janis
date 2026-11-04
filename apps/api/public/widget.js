@@ -120,9 +120,11 @@
   };
 
   // Public API — the embedding site identifies its logged-in user:
-  //   Janis.identify({ id, name, email, sig, traits })
-  // `sig` is HMAC-SHA256 of "id|email|name" with the channel's identity
-  // secret — compute it server-side so identity can't be forged client-side.
+  //   Janis.identify({ id, name, email, sig, avatar_url, traits })
+  // `sig` is HMAC-SHA256 of "id|email|name" (append "|" + avatar_url when
+  // passing one) with the channel's identity secret — compute it server-side
+  // so identity can't be forged client-side. avatar_url is honored only when
+  // the signature covers it — it's fetched server-side.
   // Call with no args to clear identity (e.g. on logout).
   window.Janis = window.Janis || {};
   window.Janis.identify = function (u) {

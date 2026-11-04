@@ -1160,6 +1160,67 @@ describe('webchat authenticated identity', () => {
     expect(p.external_id).toBe('acct_42');
   });
 
+  it('honors avatar_url only when the signature covers it', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const VIS = 'vis_avatar00000001';
+    const user = { id: 'acct_av', email: 'av@acme.test', name: 'Av' };
+    const post = (u: Record<string, unknown>, text = 'hi') =>
+      app.request(`/chat/${channelId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ visitor_id: VIS, text, user: u }),
+      });
+    const profile = async () => {
+      const [conv] = await db
+        .select()
+        .from(conversations)
+        .where(eq(conversations.externalId, `webchat:${VIS}`))
+        .limit(1);
+      return (conv?.userProfile ?? {}) as Record<string, unknown>;
+    };
+
+    // unsigned claim carrying an avatar — the url isn't sig-covered, ignored
+    await post({ ...user, avatar_url: 'https://evil.test/a.png' });
+    expect((await profile()).picture_url).toBeUndefined();
+
+    // a legacy 3-field sig with an avatar tacked on — identity verifies,
+    // the avatar still doesn't count
+    await post({ ...user, avatar_url: 'https://evil.test/b.png', sig: sign('sek_test', user) }, 'hi2');
+    let p = await profile();
+    expect(p.identity_verified).toBe(true);
+    expect(p.picture_url).toBeUndefined();
+
+    // signed WITH the avatar bound in — stored as the conversation picture
+    const avatar = 'https://cdn.acme.test/av.png';
+    const sig4 = createHmac('sha256', 'sek_test')
+      .update(`${user.id}|${user.email}|${user.name}|${avatar}`)
+      .digest('hex');
+    await post({ ...user, avatar_url: avatar, sig: sig4 }, 'hi3');
+    p = await profile();
+    expect(p.identity_verified).toBe(true);
+    expect(p.picture_url).toBe(avatar);
+
+    // swapping the avatar under a 4-field sig breaks verification entirely
+    const VIS2 = 'vis_avatar00000002';
+    await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        visitor_id: VIS2,
+        text: 'tampered',
+        user: { ...user, avatar_url: 'https://evil.test/c.png', sig: sig4 },
+      }),
+    });
+    const [conv2] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, `webchat:${VIS2}`))
+      .limit(1);
+    const p2 = (conv2?.userProfile ?? {}) as Record<string, unknown>;
+    expect(p2.identity_verified).toBe(false);
+    expect(p2.picture_url).toBeUndefined();
+  });
+
   it('identifies via the Janis session cookie on same-origin embeds', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     const [ws] = await db.select().from(workspaces).limit(1);

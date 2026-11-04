@@ -1200,7 +1200,8 @@ function WebchatIdentity({ channel }: { channel: Channel }) {
       <CodeBlock
         title="Your server — sign the identity (Node.js)"
         code={`const sig = crypto.createHmac('sha256', IDENTITY_SECRET)
-  .update(\`\${user.id}|\${user.email}|\${user.name}\`)
+  // append the avatar url to the signed payload when you pass one
+  .update([user.id, user.email, user.name, user.avatar_url].filter(Boolean).join('|'))
   .digest('hex');
 // send sig to the page with the rest of the user payload`}
         lang="js"
@@ -1210,12 +1211,18 @@ function WebchatIdentity({ channel }: { channel: Channel }) {
         code={`Janis.identify({ id: user.id, name: user.name, email: user.email, sig });
 // or unsigned (self-reported name/email only):
 Janis.identify({ id: user.id, name: user.name, email: user.email });
+// signed identities can also carry the user's avatar — it only counts
+// when the signature covers it (see the signing line above):
+Janis.identify({ id: user.id, name: user.name, email: user.email, sig,
+  avatar_url: user.avatar_url });
 // pass extra context the agent can use (plan, company, page…):
 Janis.identify({ id: user.id, name: user.name, email: user.email, sig,
   traits: { plan: 'pro', company: 'Acme Inc' } });`}
         lang="js"
       />
       <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+        <span className="mono">avatar_url</span> shows the visitor's picture in the inbox —
+        it must be inside the signature, so unsigned claims can't set it.{' '}
         <span className="mono">traits</span> reaches the agent as host-provided context —
         unsigned traits are labelled self-reported, so don't use them as proof of entitlement.
       </div>
