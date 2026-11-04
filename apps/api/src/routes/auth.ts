@@ -843,21 +843,31 @@ export function authRoutes(db: Db) {
    *  sign-in (an SSO pass repairs an unverified password-only account). The
    *  personal workspace is provisioned in issueSession so invite-created
    *  users heal on their first login too. */
-  const findOrProvisionUser = async (rawEmail: string, name: string) => {
+  const findOrProvisionUser = async (rawEmail: string, name: string, picture?: string) => {
     const email = rawEmail.trim().toLowerCase();
     const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
     if (existing) {
-      if (!existing.emailVerifiedAt) {
-        await db
-          .update(users)
-          .set({ emailVerifiedAt: new Date() })
-          .where(eq(users.id, existing.id));
+      const patch: Partial<typeof users.$inferInsert> = {};
+      if (!existing.emailVerifiedAt) patch.emailVerifiedAt = new Date();
+      // Provider photo refreshes on every sign-in — except a user's own
+      // /uploads/ avatar, which is deliberately chosen and never stomped.
+      if (picture && !existing.avatarUrl?.startsWith('/uploads/')) {
+        patch.avatarUrl = picture;
+      }
+      if (Object.keys(patch).length) {
+        await db.update(users).set(patch).where(eq(users.id, existing.id));
+        if (patch.avatarUrl) existing.avatarUrl = patch.avatarUrl;
       }
       return existing;
     }
     const [user] = await db
       .insert(users)
-      .values({ email, name: name || email, emailVerifiedAt: new Date() })
+      .values({
+        email,
+        name: name || email,
+        emailVerifiedAt: new Date(),
+        ...(picture ? { avatarUrl: picture } : {}),
+      })
       .returning();
     return user;
   };
@@ -890,12 +900,12 @@ export function authRoutes(db: Db) {
 
   const finishOAuth = async (
     c: Context,
-    profile: { email?: string; email_verified?: boolean; name?: string } | null,
+    profile: { email?: string; email_verified?: boolean; name?: string; picture?: string } | null,
   ) => {
     if (!profile?.email || profile.email_verified === false) {
       return oauthError(c, 'sign-in failed: no verified email from provider');
     }
-    const user = await findOrProvisionUser(profile.email, profile.name ?? '');
+    const user = await findOrProvisionUser(profile.email, profile.name ?? '', profile.picture);
     await issueSession(c, user.id);
     deleteCookie(c, OAUTH_STATE_COOKIE, { path: '/' });
     return c.redirect(`${requestWebOrigin(c)}/conversations`);
@@ -944,6 +954,7 @@ export function authRoutes(db: Db) {
       email?: string;
       email_verified?: boolean;
       name?: string;
+      picture?: string;
     };
     return finishOAuth(c, info);
   };
@@ -1123,6 +1134,7 @@ export function authRoutes(db: Db) {
       email?: string;
       email_verified?: boolean;
       name?: string;
+      picture?: string;
     };
     if (!info.ok) return oauthError(c, 'Slack profile lookup failed');
     return finishOAuth(c, info);

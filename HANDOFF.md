@@ -124,6 +124,13 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   community installs, per-thread (vs per-user) conversation mode.
 - Committed + pushed 5e1919a; NOT deployed per Mike.
 
+## 2026-11-04d — Sign-in captures the OAuth profile photo
+- Google + Slack sign-in read `picture` from userinfo → users.avatar_url
+  via findOrProvisionUser. Refreshes on every sign-in EXCEPT a user's own
+  /uploads/ avatar, which never gets stomped. Existing users pick it up on
+  their next login — the concierge/identify picture_url path then carries
+  it automatically.
+
 ## 2026-11-04c — Host-asserted avatars via Janis.identify({ avatar_url })
 - identityClaim accepts avatar_url; verifyIdentitySig returns
   {verified, avatarSigned} — the avatar is honored only when the signature
