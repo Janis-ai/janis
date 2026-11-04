@@ -887,6 +887,7 @@ export default function Settings() {
                     ) : me?.user.role === 'admin' && u.id !== me.user.id ? (
                       <select
                         value={u.role}
+                        style={{ maxWidth: 120 }}
                         onChange={(e) => {
                           const role = e.target.value;
                           if (role !== 'owner') {
@@ -942,8 +943,8 @@ export default function Settings() {
                 });
               }}
             >
-              <input className="grow" placeholder="teammate@email.com" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
-              <input placeholder="name (optional)" style={{ width: 140 }} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <input style={{ flex: '2 1 160px' }} placeholder="teammate@email.com" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} required />
+              <input placeholder="name (optional)" style={{ flex: '1 1 100px' }} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
                 <option value="member">member</option>
                 <option value="admin">admin</option>

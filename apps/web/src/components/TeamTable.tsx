@@ -17,8 +17,8 @@ export const teamTd: CSSProperties = { padding: '8px 8px 8px 0', verticalAlign: 
 
 const COLUMNS = [
   { icon: Users, label: 'Member' },
-  { icon: Bell, label: 'Alerts', width: 96 },
-  { icon: Shield, label: 'Role', width: 200 },
+  { icon: Bell, label: 'Alerts', width: 48 },
+  { icon: Shield, label: 'Role', width: 130 },
 ] as const;
 
 export function TeamTable({ children }: { children: ReactNode }) {
@@ -57,7 +57,7 @@ export function MemberCell({
   children?: ReactNode;
 }) {
   return (
-    <td style={teamTd}>
+    <td style={{ ...teamTd, overflowWrap: 'anywhere' }}>
       {name}
       {isYou && <span className="muted"> (You)</span>}{' '}
       <span className="muted">· {email}</span>
