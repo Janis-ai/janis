@@ -982,7 +982,7 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
    preview and clip whole at the column edge, never squeezing the name. */
 .conv-row .who .name {
   flex: 0 0 clamp(140px, 18%, 220px); min-width: 0;
-  overflow: hidden; font-weight: 500;
+  overflow: hidden; font-weight: 400;
 }
 .conv-row .who .name .n { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conv-row.unread .who .name { font-weight: 700; }
