@@ -1527,7 +1527,8 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .inbox-head:has(.menu-pop) { z-index: 31; }
 /* The rows are the scroller on inbox pages — .main locks (flex column +
    hidden) so a scroll anywhere on the list moves the list, not the page. */
-.layout:has(.inbox-head) .main { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; }
+/* Inbox fills the viewport like the conv page — drop the 1100px cap. */
+.layout:has(.inbox-head) .main { display: flex; flex-direction: column; overflow: hidden; padding-bottom: 0; max-width: none; }
 .conv-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -24px; padding: 0 24px; }
 
 .conv-layout { display: flex; gap: 16px; height: 100%; min-height: 100%; container-type: inline-size; container-name: convl; position: relative; overflow-x: hidden; overflow-x: clip; }
