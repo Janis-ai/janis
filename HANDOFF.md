@@ -93,6 +93,28 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-03c — Inbox rows go Gmail: flat list, unread two-tone, hover rail
+- ConvRow rebuilt as a mail-list row: checkbox → star toggle → alert/unread
+  dots → avatar → sender column → label chips (agent/channel/test/intent/
+  snooze) → preview → tail (state badge + Gmail-style stamp + hover rail).
+  Flat hairline-separated rows replace the 8px-gap cards.
+- Unread/read: unread rows get panel bg + bold name + bold bright preview;
+  read rows sit flat and muted (the two-tone Gmail uses to split new/seen).
+- Hover rail (pointer devices only): archive/unarchive, mark read/unread,
+  snooze (moon-over-select, same SNOOZE_OPTIONS), delete — replaces the
+  timestamp on hover. The checkbox stays visible (deliberate deviation
+  from Gmail's hover-reveal — bulk triage is a primary flow here).
+  Delete still goes through the confirm dialog.
+- Chips moved out of the sender column into .tags so the name keeps its
+  width; the agent tag now only renders when the row's agent differs from
+  the current context (was redundant noise on scoped inboxes).
+- Mobile (≤720): two-line rows — name+chips line 1, preview line 2,
+  timestamp top-right, badge beneath; chips wrap under the name when the
+  line fills (label-row look). Touch gets the same verbs via select +
+  bulk bar; no hover rail.
+- Timestamp switched from timeAgo to a Gmail stamp: clock time today,
+  "Nov 2" this year, "11/2/25" older.
+
 ## 2026-11-03b — Copilot: 'this conversation' referent + contact-account scoping
 - Prod transcript (rail conv u:1bb91d38…, 19:04–19:13): on ambiguous asks
   ('what conversation is this', 'who is the customer in this thread') the

@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type MouseEvent } from 'react';
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
 import { useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
 import { api } from '../api/client';
-import { Avatar, displayName, Empty, Md, SearchInput, StateBadge, surfaceLabel, timeAgo } from '../components/bits';
+import { Avatar, displayName, Empty, Md, SearchInput, StateBadge, surfaceLabel } from '../components/bits';
 import Onboarding from '../components/Onboarding';
 import DiscoveryCards from '../components/DiscoveryCards';
 import { Archive, ArchiveRestore, Bot, Cog, Headset, ListFilter, Mail, MailOpen, Moon, Save, Star, Tag, Trash2, User, UserCheck, UserX, X } from 'lucide-react';
@@ -112,6 +112,18 @@ function useSticky<T>(key: string, initial: T | (() => T)): [T, (v: T) => void] 
   ];
 }
 
+/** Gmail-style list stamp — clock time today, "Nov 2" this year, "11/2/25" older. */
+function listTime(iso: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString())
+    return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (d.getFullYear() === now.getFullYear())
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return d.toLocaleDateString([], { month: 'numeric', day: 'numeric', year: '2-digit' });
+}
+
 function ConvRow({
   c,
   agentName,
@@ -119,6 +131,7 @@ function ConvRow({
   onToggle,
   focused,
   base,
+  onAction,
 }: {
   c: Conversation;
   agentName?: string;
@@ -128,14 +141,27 @@ function ConvRow({
   /** Inbox base path — agent-scoped mounts link to /agents/:id/inbox/:conv
    *  so the sidebar keeps the agent context open on the detail page. */
   base: string;
+  /** Hover-rail quick actions — same verbs as the bulk bar, single id. */
+  onAction?: (c: Conversation, action: string, extra?: Record<string, unknown>) => void;
 }) {
   const snoozed = c.snoozed_until && new Date(c.snoozed_until) > new Date();
+  const archived = c.state === 'archived';
   const rowRef = useRef<HTMLAnchorElement>(null);
   useEffect(() => {
     if (focused) rowRef.current?.scrollIntoView({ block: 'nearest' });
   }, [focused]);
+  // Row actions live inside the <a> — every click must not navigate.
+  const act = (action: string) => (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onAction?.(c, action);
+  };
   return (
-    <Link to={`${base}/${c.id}`} className={`conv-row${focused ? ' kbd-focus' : ''}`} ref={rowRef}>
+    <Link
+      to={`${base}/${c.id}`}
+      className={`conv-row${c.is_unread ? ' unread' : ''}${selected ? ' sel' : ''}${focused ? ' kbd-focus' : ''}`}
+      ref={rowRef}
+    >
       {onToggle && (
         <input
           type="checkbox"
@@ -145,15 +171,29 @@ function ConvRow({
           onChange={() => onToggle(c.id)}
         />
       )}
-      {c.open_alert_count > 0 && (
-        <span className="alert-dot" title={`${c.open_alert_count} open alert${c.open_alert_count === 1 ? '' : 's'}`} />
+      <button
+        type="button"
+        className={`conv-star${c.is_starred ? ' on' : ''}`}
+        title={c.is_starred ? 'Unstar' : 'Star'}
+        aria-label={c.is_starred ? 'Unstar' : 'Star'}
+        onClick={act('star')}
+      >
+        <Star size={15} fill={c.is_starred ? 'currentColor' : 'none'} />
+      </button>
+      {(c.open_alert_count > 0 || c.is_unread) && (
+        <span className="conv-dots">
+          {c.open_alert_count > 0 && (
+            <span className="alert-dot" title={`${c.open_alert_count} open alert${c.open_alert_count === 1 ? '' : 's'}`} />
+          )}
+          {c.is_unread && <span className="unread-dot" title="Unread" />}
+        </span>
       )}
-      {c.is_unread && <span className="unread-dot" title="Unread" />}
-      <Avatar c={c} size={34} />
+      <Avatar c={c} size={32} />
       <div className="who">
-        <div className={`name ${c.is_unread ? 'unread' : ''}`}>
-          {c.is_starred && <Star size={13} fill="currentColor" style={{ verticalAlign: '-1px', marginRight: 3, color: 'var(--accent)' }} />}
-          {displayName(c)}
+        <div className="name">
+          <span className="n">{displayName(c)}</span>
+        </div>
+        <span className="tags">
           {agentName && <span className="agent-tag">{agentName}</span>}
           {c.user_profile?.channel && (
             <span className="channel-tag">
@@ -177,13 +217,60 @@ function ConvRow({
               {new Date(c.snoozed_until!).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
             </span>
           )}
-        </div>
+        </span>
         <div className="preview">
           {c.last_message_preview ? <Md>{c.last_message_preview}</Md> : null}
         </div>
       </div>
-      <StateBadge state={c.state} />
-      <div className="meta">{timeAgo(c.last_message_at)}</div>
+      <div className="tail">
+        <StateBadge state={c.state} />
+        <span className="meta">{listTime(c.last_message_at)}</span>
+        <span className="row-actions">
+          <button
+            type="button"
+            className="row-act"
+            title={archived ? 'Unarchive' : 'Archive'}
+            aria-label={archived ? 'Unarchive' : 'Archive'}
+            onClick={act(archived ? 'unarchive' : 'archive')}
+          >
+            {archived ? <ArchiveRestore size={15} /> : <Archive size={15} />}
+          </button>
+          <button
+            type="button"
+            className="row-act"
+            title={c.is_unread ? 'Mark as read' : 'Mark as unread'}
+            aria-label={c.is_unread ? 'Mark as read' : 'Mark as unread'}
+            onClick={act('toggle_read')}
+          >
+            {c.is_unread ? <MailOpen size={15} /> : <Mail size={15} />}
+          </button>
+          <span className="row-act row-snz" title="Snooze" aria-label="Snooze">
+            <Moon size={15} />
+            <select
+              value=""
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => {
+                const m = Number(e.target.value);
+                e.target.value = '';
+                onAction?.(c, m === 0 ? 'unsnooze' : 'snooze', m === 0 ? {} : { minutes: snoozeMinutes(m) });
+              }}
+            >
+              <option value="">Snooze…</option>
+              {SNOOZE_OPTIONS.map(([l, m]) => <option key={l} value={m}>{l}</option>)}
+              <option value="0">Unsnooze</option>
+            </select>
+          </span>
+          <button
+            type="button"
+            className="row-act danger"
+            title="Delete"
+            aria-label="Delete"
+            onClick={act('delete')}
+          >
+            <Trash2 size={15} />
+          </button>
+        </span>
+      </div>
     </Link>
   );
 }
@@ -284,8 +371,13 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   });
 
   const searching = query.trim().length > 0;
+  // The agent tag is only informative on mixed rows — inside a scoped
+  // inbox every row carries the same one, so it earns its width only
+  // when the conversation belongs to a different agent than the context.
   const agentName = (c: Conversation) =>
-    agents?.agents.find((a) => a.id === c.agent_id)?.name;
+    c.agent_id === agentId
+      ? undefined
+      : agents?.agents.find((a) => a.id === c.agent_id)?.name;
 
   const applyView = (v: SavedView) => {
     const f = v.filters;
@@ -375,29 +467,12 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     const onKey = (e: KeyboardEvent) => {
       if (isEditableTarget(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
       const cur = focusIdx >= 0 ? list?.[focusIdx] : undefined;
-      const one = async (action: string, extra: Record<string, unknown> = {}) => {
-        if (!cur) return;
-        await api('/api/conversations/bulk', {
-          method: 'POST',
-          body: JSON.stringify({ ids: [cur.id], action, ...extra }),
-        });
-        void qc.invalidateQueries({ queryKey: ['conversations'] });
-        void qc.invalidateQueries({ queryKey: ['attention-count'] });
-      };
-      const patch = async (fields: Record<string, unknown>) => {
-        if (!cur) return;
-        await api(`/api/conversations/${cur.id}`, {
-          method: 'PATCH',
-          body: JSON.stringify(fields),
-        });
-        void qc.invalidateQueries({ queryKey: ['conversations'] });
-      };
       if (e.key === 'j') setFocusIdx((i) => Math.min(i + 1, (list?.length ?? 1) - 1));
       else if (e.key === 'k') setFocusIdx((i) => Math.max(i - 1, 0));
       else if (e.key === 'Enter' && cur) navigate(`${inboxBase}/${cur.id}`);
-      else if (e.key === 'e' && cur) void one(cur.state === 'archived' ? 'unarchive' : 'archive');
-      else if (e.key === 's' && cur) void patch({ is_starred: !cur.is_starred });
-      else if (e.key === 'u' && cur) void patch({ is_unread: !cur.is_unread });
+      else if (e.key === 'e' && cur) void actOne(cur.id, cur.state === 'archived' ? 'unarchive' : 'archive');
+      else if (e.key === 's' && cur) void patchOne(cur.id, { is_starred: !cur.is_starred });
+      else if (e.key === 'u' && cur) void patchOne(cur.id, { is_unread: !cur.is_unread });
       else if (e.key === 'x' && cur) toggle(cur.id);
       else return;
       e.preventDefault();
@@ -420,6 +495,34 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     } finally {
       setBusy(false);
     }
+  };
+
+  // Single-row verbs — the hover rail and the j/k/x keyboard triage share
+  // these; bulk() above is only for the checked-set bar.
+  const actOne = async (id: string, action: string, extra: Record<string, unknown> = {}) => {
+    await api('/api/conversations/bulk', {
+      method: 'POST',
+      body: JSON.stringify({ ids: [id], action, ...extra }),
+    });
+    void qc.invalidateQueries({ queryKey: ['conversations'] });
+    void qc.invalidateQueries({ queryKey: ['attention-count'] });
+  };
+  const patchOne = async (id: string, fields: Record<string, unknown>) => {
+    await api(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(fields) });
+    void qc.invalidateQueries({ queryKey: ['conversations'] });
+  };
+  const rowAction = async (c: Conversation, action: string, extra: Record<string, unknown> = {}) => {
+    if (action === 'star') return patchOne(c.id, { is_starred: !c.is_starred });
+    if (action === 'toggle_read') return patchOne(c.id, { is_unread: !c.is_unread });
+    if (action === 'delete') {
+      const ok = await confirm(
+        "Delete this conversation permanently? This can't be undone.",
+        [{ key: 'delete', label: 'Delete', danger: true }],
+        true,
+      );
+      if (ok !== 'delete') return;
+    }
+    return actOne(c.id, action, extra);
   };
 
   // Zero agents = nothing to inbox — first-run workspaces land on the
@@ -730,7 +833,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
 
       {/* The list is the scroll region — .main locks when .inbox-head is
           present, so only rows move. */}
-      <div className="conv-list">
+      <div className={`conv-list${selected.size ? ' sel' : ''}`}>
       {searching ? (
         searchPending ? (
           <div className="row" style={{ justifyContent: 'center', marginTop: 24 }}>
@@ -741,7 +844,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         <>
           {hits && hits.conversations.length === 0 && <Empty>No matches.</Empty>}
           {hits?.conversations.map((c, i) => (
-            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} base={inboxBase} />
+            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} base={inboxBase} onAction={rowAction} />
           ))}
           {hits && hits.messages.length > 0 && (
             <div className="card" style={{ marginTop: 16 }}>
@@ -798,7 +901,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             </div>
           )}
           {convList?.map((c, i) => (
-            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} base={inboxBase} />
+            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} base={inboxBase} onAction={rowAction} />
           ))}
           {hasNextPage && (
             <div style={{ textAlign: 'center', marginTop: 12 }}>

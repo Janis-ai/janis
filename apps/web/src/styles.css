@@ -964,21 +964,76 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .badge.neutral { background: var(--panel-2); color: var(--muted); }
 .badge.negative { background: #7f1d1d; color: #fca5a5; }
 
+/* Gmail-style flat rows — hairline-separated, not cards. Unread gets the
+   elevated panel + bold ink; read rows sit flat on the page bg (the two-tone
+   Gmail uses to separate new from seen). Single-line on wide screens,
+   stacked on phones (≤720 block). */
 .conv-row {
-  display: flex; align-items: center; gap: 12px; padding: 10px 16px 3px;
-  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
-  flex-wrap: wrap;
+  display: flex; align-items: center; gap: 10px; padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
 }
+.conv-row:first-of-type { border-top: 1px solid var(--border); }
+.conv-row.unread { background: var(--panel); }
 .conv-row:hover { background: var(--panel-2); }
-.conv-row + .conv-row { margin-top: 8px; }
-.conv-row .who { flex: 1 1 220px; min-width: 0; }
-.conv-row .who .name { font-weight: 600; }
-.conv-row .who .preview { color: var(--muted); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.conv-row .meta { text-align: right; font-size: 12px; color: var(--muted); }
+.conv-row.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.conv-row.sel:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.conv-row .who { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
+/* Sender is its own column (Gmail) — chips live in .tags between name and
+   preview and clip whole at the column edge, never squeezing the name. */
+.conv-row .who .name {
+  flex: 0 0 clamp(140px, 18%, 220px); min-width: 0;
+  overflow: hidden; font-weight: 500;
+}
+.conv-row .who .name .n { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conv-row.unread .who .name { font-weight: 700; }
+.conv-row .who .tags {
+  flex: 0 1 auto; min-width: 0; overflow: hidden;
+  display: inline-flex; align-items: baseline; gap: 4px;
+}
+.conv-row .who .tags:empty { display: none; }
+.conv-row .who .tags > * { flex-shrink: 0; margin-left: 0; }
+.conv-row .who .tags .channel-tag, .conv-row .who .tags .agent-tag {
+  max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.conv-row .who .preview {
+  flex: 1; min-width: 0;
+  color: var(--muted); font-size: 13px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.conv-row.unread .who .preview { color: var(--text); font-weight: 600; }
+.conv-row .tail { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.conv-row .meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.conv-dots { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .alert-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
 .unread-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
-.conv-row .who .name.unread { font-weight: 700; }
 .conv-check { flex-shrink: 0; accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+.conv-star {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 6px;
+  background: none; color: var(--muted); cursor: pointer; flex-shrink: 0;
+}
+.conv-star:hover { color: var(--warn); }
+.conv-star.on { color: var(--warn); }
+.conv-star:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Hover rail — archive / read / snooze / delete replaces the timestamp
+   while the row is hovered. Pointer devices only; on touch the same verbs
+   live behind select + the bulk bar. The checkbox stays put — the rail is
+   the only hover-only affordance. */
+.row-actions { display: none; align-items: center; gap: 2px; }
+.row-act {
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; padding: 0; border: 0; border-radius: 8px;
+  background: none; color: var(--muted); cursor: pointer;
+}
+.row-act:hover { background: color-mix(in srgb, var(--text) 12%, transparent); color: var(--text); }
+.row-act.danger:hover { color: var(--danger); }
+.row-act:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.row-act select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
+@media (hover: hover) {
+  .conv-row:hover .meta { display: none; }
+  .conv-row:hover .row-actions { display: inline-flex; }
+}
 .conv-select-all { position: sticky; top: 0; z-index: 5; background: var(--bg); padding: 0 16px 8px; font-size: 12px; color: var(--muted); }
 .bulk-bar {
   position: sticky; top: 0; z-index: 5;
@@ -1949,7 +2004,7 @@ details summary:hover { color: var(--text); }
 
   /* Rows stack instead of squeezing — asset rows carry a name plus up to
      two wide Connect/Remove buttons that can't fit side by side. */
-  .row, .filters, .asset-row, .composer-bar, .conv-row, .landing-nav { flex-wrap: wrap; }
+  .row, .filters, .asset-row, .composer-bar, .landing-nav { flex-wrap: wrap; }
   /* flex items must be allowed to shrink below their content width or long
      names/selects/inputs push the row past the viewport */
   .grow, .asset-row > *, .row > * { min-width: 0; }
@@ -1961,14 +2016,17 @@ details summary:hover { color: var(--text); }
   /* the title must claim its own line — with min-width:0 + anywhere
      wrapping it can otherwise be squeezed to one character per line */
   .row > .page-title { flex-basis: 100%; }
-  /* keep the name column wide enough that the state badge + timestamp
-     wrap beneath it instead of piling onto the name */
-  .conv-row .who { flex: 1 1 140px; }
-  .conv-row .who .name { overflow-wrap: anywhere; }
-  /* triage-on-a-phone: drop secondary chips (agent, page disambiguator,
-     intent) so a row reads name + channel + preview at a glance, and
-     card-ify the row so the tap target is obvious */
-  .conv-row { border: 1px solid var(--border); border-radius: 10px; padding: 10px; }
+  /* Phone rows stack — name + timestamp on line 1, preview on line 2
+     (Gmail-app style). Secondary chips (agent, page disambiguator,
+     intent) drop so the row reads name + channel + preview at a glance. */
+  .conv-row { align-items: flex-start; gap: 8px; padding: 9px 10px; }
+  /* Name + chips share line 1, preview wraps to line 2. */
+  .conv-row .who { flex-wrap: wrap; row-gap: 1px; column-gap: 8px; }
+  .conv-row .who .name { flex: 0 1 auto; max-width: 100%; }
+  .conv-row .who .preview { flex-basis: 100%; }
+  .conv-row .tail { flex-direction: column; align-items: flex-end; gap: 3px; padding-top: 1px; }
+  .conv-row .tail .meta { order: -1; font-size: 11px; }
+  .conv-row .tail .badge { font-size: 9px; padding: 1px 7px; }
   .conv-row .agent-tag, .conv-row .intent-tag, .conv-row .channel-name { display: none; }
   .msg { max-width: 85%; }
   .login-wrap { padding: 16px; }
