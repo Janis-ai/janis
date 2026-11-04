@@ -776,32 +776,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         {/* The agent dimension is whole-app context — this picker switches
             it everywhere (nav subsection, Copilot, the other shared pages),
             and "All agents" leaves context entirely. */}
-        {!searching && total > 0 && (
-          <div className="inbox-pager">
-            <span className="muted">{pageStart}–{Math.min(pageEnd, total)} of {total.toLocaleString()}</span>
-            <button
-              className="btn icon"
-              aria-label="Previous page"
-              title="Previous page"
-              disabled={pageIdx === 0}
-              onClick={() => setPageIdx((i) => i - 1)}
-            >
-              <ChevronLeft size={15} />
-            </button>
-            <button
-              className="btn icon"
-              aria-label="Next page"
-              title="Next page"
-              disabled={!data?.next_cursor}
-              onClick={() => {
-                setCursorStack((s) => [...s.slice(0, pageIdx + 1), data!.next_cursor!]);
-                setPageIdx((i) => i + 1);
-              }}
-            >
-              <ChevronRight size={15} />
-            </button>
-          </div>
-        )}
       </div>
       </div>
 
@@ -939,6 +913,32 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
                 />
                 Select all loaded
               </label>
+              {!searching && total > 0 && (
+                <div className="inbox-pager">
+                  <span className="muted">{pageStart}–{Math.min(pageEnd, total)} of {total.toLocaleString()}</span>
+                  <button
+                    className="btn icon"
+                    aria-label="Previous page"
+                    title="Previous page"
+                    disabled={pageIdx === 0}
+                    onClick={() => setPageIdx((i) => i - 1)}
+                  >
+                    <ChevronLeft size={15} />
+                  </button>
+                  <button
+                    className="btn icon"
+                    aria-label="Next page"
+                    title="Next page"
+                    disabled={!data?.next_cursor}
+                    onClick={() => {
+                      setCursorStack((s) => [...s.slice(0, pageIdx + 1), data!.next_cursor!]);
+                      setPageIdx((i) => i + 1);
+                    }}
+                  >
+                    <ChevronRight size={15} />
+                  </button>
+                </div>
+              )}
             </div>
           )}
           {convList?.map((c, i) => (
