@@ -98,8 +98,10 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   dots → avatar → sender column → label chips (agent/channel/test/intent/
   snooze) → preview → tail (state badge + Gmail-style stamp + hover rail).
   Flat hairline-separated rows replace the 8px-gap cards.
-- Unread/read: unread rows get panel bg + bold name + bold bright preview;
-  read rows sit flat and muted (the two-tone Gmail uses to split new/seen).
+- Unread/read: unread rows get bold name + bold bright preview on the
+  same flat bg (no two-tone, no dot on desktop — weight carries it);
+  read rows are regular weight and muted. Mobile shows the unread dot
+  right of the timestamp (Gmail-app style).
 - Hover rail (pointer devices only): archive/unarchive, mark read/unread,
   snooze (moon-over-select, same SNOOZE_OPTIONS), delete — replaces the
   timestamp on hover. The checkbox stays visible (deliberate deviation

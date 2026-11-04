@@ -964,16 +964,14 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .badge.neutral { background: var(--panel-2); color: var(--muted); }
 .badge.negative { background: #7f1d1d; color: #fca5a5; }
 
-/* Gmail-style flat rows — hairline-separated, not cards. Unread gets the
-   elevated panel + bold ink; read rows sit flat on the page bg (the two-tone
-   Gmail uses to separate new from seen). Single-line on wide screens,
-   stacked on phones (≤720 block). */
+/* Gmail-style flat rows — hairline-separated, not cards. Unread is bold
+   ink on the same flat bg (no two-tone); read rows are regular and muted.
+   Single-line on wide screens, stacked on phones (≤720 block). */
 .conv-row {
   display: flex; align-items: center; gap: 10px; padding: 7px 12px;
   border-bottom: 1px solid var(--border);
 }
 .conv-row:first-of-type { border-top: 1px solid var(--border); }
-.conv-row.unread { background: var(--panel); }
 .conv-row:hover { background: var(--panel-2); }
 .conv-row.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .conv-row.sel:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
