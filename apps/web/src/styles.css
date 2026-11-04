@@ -563,11 +563,12 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .filter-view-name:hover { background: var(--panel-2); }
 .filter-view-del {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%;
-  background: var(--panel-2); color: var(--muted); cursor: pointer;
+  width: 24px; height: 24px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); cursor: pointer;
   flex-shrink: 0;
 }
-.filter-view-del:hover { color: var(--danger); }
+.filter-view-del:hover { color: var(--danger); border-color: var(--danger); }
 .filter-save-view {
   display: flex; align-items: center; gap: 6px; width: 100%;
   padding: 7px 10px; font-size: 12px; font-weight: 600;
