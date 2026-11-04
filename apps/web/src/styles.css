@@ -1530,7 +1530,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    a slim stacked list reusing conv-row, current conversation tinted. */
 .conv-inbox { display: none; }
 .conv-inbox-head {
-  display: flex; gap: 6px; padding: 0 10px 8px;
+  display: flex; gap: 6px; padding: 12px 10px 8px;
   position: sticky; top: 0; z-index: 5; background: var(--bg);
 }
 .conv-inbox-head .src-menu-wrap { position: relative; flex-shrink: 0; }
