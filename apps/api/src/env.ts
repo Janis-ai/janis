@@ -84,6 +84,9 @@ export const env = {
   // The Janis operator workspace — gates the account_status builtin tool so
   // only our own concierge agent can look up a signed-in user's plan.
   operatorWorkspaceId: process.env.JANIS_OPERATOR_WORKSPACE_ID ?? '',
+  // Shared secret for operator-only HTTP routes (billing plan override).
+  // Empty = the route refuses every call. Sent as the x-internal-key header.
+  internalAdminKey: process.env.JANIS_INTERNAL_ADMIN_KEY ?? '',
   llmBaseUrl: process.env.JANIS_LLM_BASE_URL ?? 'https://api.openai.com/v1',
   llmModel: process.env.JANIS_LLM_MODEL ?? 'gpt-4o-mini',
   // Second model tried when the primary keeps failing on 429/5xx/timeouts

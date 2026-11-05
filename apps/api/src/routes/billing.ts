@@ -244,6 +244,16 @@ export function billingRoutes(db: Db) {
 
   // PATCH /api/billing/plan {plan} — admin-only override (support/dev tool)
   app.patch('/plan', async (c) => {
+    // Operator-only: this writes a plan with no payment, so it can't exist
+    // for merchants — 404 keeps the route invisible to probing. Support
+    // calls it with the JANIS_INTERNAL_ADMIN_KEY header (e.g. comping an
+    // account to 'internal'); admins still need workspace admin rights.
+    if (
+      !env.internalAdminKey ||
+      c.req.header('x-internal-key') !== env.internalAdminKey
+    ) {
+      return c.json({ error: 'not found' }, 404);
+    }
     if (c.get('role') !== 'admin') return c.json({ error: 'admin only' }, 403);
     const { plan } = (await c.req.json()) as { plan?: string };
     if (!plan || !PLANS[plan]) {

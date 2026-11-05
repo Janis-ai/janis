@@ -17,6 +17,7 @@ import { setStripeClient } from '../lib/stripe.js';
 vi.hoisted(() => {
   process.env.STRIPE_SECRET_KEY = 'sk_test_fake';
   process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
+  process.env.JANIS_INTERNAL_ADMIN_KEY = 'test-internal-key';
 });
 
 let db: Db;
@@ -348,12 +349,34 @@ describe('shopify rail gating', () => {
   it('refuses the no-billing plan override', async () => {
     const res = await api.request('/api/billing/plan', {
       method: 'PATCH',
-      headers: { cookie: railCookie, 'content-type': 'application/json' },
+      headers: {
+        cookie: railCookie,
+        'content-type': 'application/json',
+        'x-internal-key': 'test-internal-key',
+      },
       body: JSON.stringify({ plan: 'scale' }),
     });
     expect(res.status).toBe(409);
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, railWsId));
     expect(ws.plan).toBe('pro');
+  });
+
+  it('hides the plan override from workspace admins entirely', async () => {
+    // The free-plan exploit: signup → workspace admin → PATCH plan for a
+    // paid/uncapped tier without paying. Without the internal key the route
+    // doesn't exist — for rail workspaces or anyone else.
+    const res = await api.request('/api/billing/plan', {
+      method: 'PATCH',
+      headers: { cookie: railCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ plan: 'internal' }),
+    });
+    expect(res.status).toBe(404);
+    const plain = await api.request('/api/billing/plan', {
+      method: 'PATCH',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ plan: 'scale' }),
+    });
+    expect(plain.status).toBe(404);
   });
 
   it('refuses a Stripe portal session + domain add-on', async () => {
