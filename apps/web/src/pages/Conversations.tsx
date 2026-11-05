@@ -448,8 +448,16 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     const col = colRef.current;
     const list = listRef.current;
     if (wasOpen.current !== null && wasOpen.current !== open && col && list) {
-      if (open) col.scrollTop = openListScroll.current;
-      else list.scrollTop = openColScroll.current;
+      if (open) {
+        col.scrollTop = openListScroll.current;
+        // The selected row must stay visible — mini rows are taller, so
+        // the inherited offset can push a bottom-edge row off screen.
+        col
+          .querySelector<HTMLElement>('.conv-row.sel')
+          ?.scrollIntoView({ block: 'nearest' });
+      } else {
+        list.scrollTop = openColScroll.current;
+      }
     }
     wasOpen.current = open;
   }, [openConvId]);
