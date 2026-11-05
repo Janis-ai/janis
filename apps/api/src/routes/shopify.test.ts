@@ -179,7 +179,9 @@ const stubShopifyApi = (
                         appSubscription: {
                           id: 'sub_1',
                           status: 'PENDING',
-                          lineItems: [{ id: 'li_1' }],
+                          lineItems: [
+                            { id: 'li_1', plan: { pricingDetails: { __typename: 'AppUsagePricingDetails' } } },
+                          ],
                         },
                         userErrors: [],
                       },
@@ -221,7 +223,9 @@ const stubShopifyApi = (
                 node: {
                   currentPeriodEnd:
                     opts.periodEnd ?? new Date(Date.now() + 30 * 86_400_000).toISOString(),
-                  lineItems: [{ id: 'li_1' }],
+                  lineItems: [
+                    { id: 'li_1', plan: { pricingDetails: { __typename: 'AppUsagePricingDetails' } } },
+                  ],
                 },
               },
             }),

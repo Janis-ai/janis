@@ -1312,12 +1312,16 @@ export async function startBillingSubscription(
   const res = await shopifyGraphql(
     row.shop,
     token,
-    `mutation { appSubscriptionCreate(name: ${JSON.stringify(`Janis ${plan.name}`)}, returnUrl: ${JSON.stringify(returnUrl)}, test: ${test}, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: ${amount}, currencyCode: USD}, interval: EVERY_30_DAYS}, ${usage}}}]) { confirmationUrl appSubscription { id status lineItems { id } } userErrors { field message } } }`,
+    `mutation { appSubscriptionCreate(name: ${JSON.stringify(`Janis ${plan.name}`)}, returnUrl: ${JSON.stringify(returnUrl)}, test: ${test}, lineItems: [{plan: {appRecurringPricingDetails: {price: {amount: ${amount}, currencyCode: USD}, interval: EVERY_30_DAYS}}}, {plan: {${usage}}}]) { confirmationUrl appSubscription { id status lineItems { id plan { pricingDetails { __typename } } } } userErrors { field message } } }`,
   );
   const out = (res.data as {
     appSubscriptionCreate?: {
       confirmationUrl?: string;
-      appSubscription?: { id: string; status: string; lineItems?: { id: string }[] };
+      appSubscription?: {
+        id: string;
+        status: string;
+        lineItems?: { id: string; plan?: { pricingDetails?: { __typename?: string } } }[];
+      };
       userErrors?: { message: string }[];
     };
   })?.appSubscriptionCreate;
@@ -1333,7 +1337,9 @@ export async function startBillingSubscription(
         subscriptionId: out.appSubscription.id,
         plan: planKey,
         status: out.appSubscription.status ?? 'PENDING',
-        usageLineItemId: out.appSubscription.lineItems?.[0]?.id,
+        usageLineItemId: out.appSubscription.lineItems?.find(
+          (li) => li.plan?.pricingDetails?.__typename === 'AppUsagePricingDetails',
+        )?.id,
         usageBilledCents: 0,
         usagePeriodEnd: undefined,
         usageCapHit: '',
@@ -1491,14 +1497,20 @@ async function subscriptionUsageState(
     token,
     // QueryRoot has no appSubscription — AppSubscription is only reachable
     // via node() (or appInstallation.allSubscriptions).
-    `{ node(id: ${JSON.stringify(shopBilling(row).subscriptionId!)}) { ... on AppSubscription { currentPeriodEnd lineItems { id } } } }`,
+    `{ node(id: ${JSON.stringify(shopBilling(row).subscriptionId!)}) { ... on AppSubscription { currentPeriodEnd lineItems { id plan { pricingDetails { __typename } } } } } }`,
   );
   const sub = (res.data as {
-    node?: { currentPeriodEnd?: string; lineItems?: { id: string }[] };
+    node?: {
+      currentPeriodEnd?: string;
+      lineItems?: { id: string; plan?: { pricingDetails?: { __typename?: string } } }[];
+    };
   })?.node;
+  const usageItem = sub?.lineItems?.find(
+    (li) => li.plan?.pricingDetails?.__typename === 'AppUsagePricingDetails',
+  );
   return {
     periodEnd: sub?.currentPeriodEnd ?? null,
-    usageLineItemId: sub?.lineItems?.[0]?.id ?? null,
+    usageLineItemId: usageItem?.id ?? null,
   };
 }
 
