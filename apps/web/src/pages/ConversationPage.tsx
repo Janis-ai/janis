@@ -5,7 +5,7 @@ import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Alert, Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useConversationBrief, useConversations, useInvalidateConversations, useMe, useSearch, useUsers } from '../api/hooks';
-import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, StateBadge, surfaceLabel } from '../components/bits';
+import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, surfaceLabel } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
@@ -1134,22 +1134,23 @@ export default function ConversationPage() {
           >
             <ChevronLeft size={20} />
           </button>
-          <Avatar c={c} size={30} />
-          <div className="cmh-id">
-            <div className="cmh-name">{name}</div>
-            <div className="cmh-sub">
-              {surfaceLabel(p)}{p.channel_name ? ` · ${p.channel_name}` : ''}{' · '}
-              <button
-                className="cmh-state"
-                aria-label="Conversation status — open details"
-                title="Status — open details"
-                onClick={() => setSideOpen(true)}
-              >
-                <StateBadge state={c.state} />
-              </button>
-            </div>
-          </div>
-          <span className="grow" />
+          {/* The who/channel/state block lives in the details panel — the
+              head carries the conversation search instead. */}
+          <SearchInput
+            className="conv-search"
+            placeholder="Search this conversation…"
+            aria-label="Search this conversation"
+            value={convQ}
+            onChange={(e) => setConvQ(e.target.value)}
+            onClear={() => { setConvQ(''); setConvHits(null); }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && convHits?.length) jumpToHit(convHits[0].id);
+              if (e.key === 'Escape') {
+                setConvQ('');
+                setConvHits(null);
+              }
+            }}
+          />
           <button
             className="cmh-info cmh-copilot"
             aria-label="Ask Janis"
@@ -1198,21 +1199,6 @@ export default function ConversationPage() {
             <ScrollText size={15} />
             <span className="btn-label">Summarize</span>
           </button>
-          <SearchInput
-            className="conv-search"
-            placeholder="Search this conversation…"
-            aria-label="Search this conversation"
-            value={convQ}
-            onChange={(e) => setConvQ(e.target.value)}
-            onClear={() => { setConvQ(''); setConvHits(null); }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && convHits?.length) jumpToHit(convHits[0].id);
-              if (e.key === 'Escape') {
-                setConvQ('');
-                setConvHits(null);
-              }
-            }}
-          />
           {viewers.filter((v) => v.id !== me?.user.id).length > 0 && (
             <span
               className="muted"
