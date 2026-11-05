@@ -569,19 +569,19 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     });
 
   const list = searching ? hits?.conversations : convList;
-  // Cold open only (load/refresh straight into a conversation): pin the
-  // selected row as high as it scrolls once real rows land. In-session
-  // selections never jump — the row the user clicked is already in view.
-  // scroll-margin-top keeps it clear of the sticky head; a last row just
-  // settles at the bottom.
-  const mountOpen = useRef(Boolean(openConvId));
-  const selPinned = useRef<string | null>(null);
+  // Cold open only (load/refresh straight into a conversation): pin THE
+  // mounted conversation's row as high as it scrolls once real rows
+  // land — and only that one. Later in-session selections never scroll:
+  // the row the user clicked is already in view. scroll-margin-top keeps
+  // it clear of the sticky head; a last row just settles at the bottom.
+  const mountConv = useRef<string | null>(openConvId);
+  const selPinned = useRef(false);
   useLayoutEffect(() => {
-    if (!mountOpen.current || !openConvId || selPinned.current === openConvId) return;
+    if (!mountConv.current || selPinned.current || openConvId !== mountConv.current) return;
     const row = colRef.current?.querySelector<HTMLElement>('.conv-row.sel');
     if (!row) return;
     row.scrollIntoView({ block: 'start' });
-    selPinned.current = openConvId;
+    selPinned.current = true;
   }, [openConvId, list]);
   // The funnel's badge counts the assignee flag too — it lives in the
   // popover since the header went icon-only.
