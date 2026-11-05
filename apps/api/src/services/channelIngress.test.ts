@@ -871,15 +871,20 @@ describe('hosted handoff offers', () => {
     // teammate… Want me to get a human teammate?\n[OFFER_HUMAN]". Asking
     // someone who already asked is the wrong rung: the offer upgrades to a
     // real handoff and the redundant question never ships.
+    // first call: the tagged agent reply; second: the localized handoff
+    // line composed for the bare-tag upgrade.
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockImplementation(() =>
-        Promise.resolve(
+      vi
+        .fn()
+        .mockResolvedValueOnce(
           llmResponse(
             "I understand—I'll connect you with a human teammate who can help you further. Want me to get a human teammate to take a look with you?\n[OFFER_HUMAN]",
           ),
+        )
+        .mockResolvedValue(
+          llmResponse('One moment — a human teammate will be right with you.'),
         ),
-      ),
     );
     const { hash, preview } = generateApiKey();
     const [hosted] = await db
@@ -931,11 +936,18 @@ describe('hosted handoff offers', () => {
     // Same fumble without the tag: "Want me to get a human teammate?" as a
     // plain reply to "human" is a redundant offer — the handoff is already
     // earned, so the reply swaps for a truthful line and escalates.
+    // first call: the untagged offer reply; second: the localized handoff
+    // line composed for the salvaged escalation.
     vi.stubGlobal(
       'fetch',
-      vi.fn().mockImplementation(() =>
-        Promise.resolve(llmResponse('Want me to get a human teammate to take a look with you?')),
-      ),
+      vi
+        .fn()
+        .mockResolvedValueOnce(
+          llmResponse('Want me to get a human teammate to take a look with you?'),
+        )
+        .mockResolvedValue(
+          llmResponse('One moment — a human teammate will be right with you.'),
+        ),
     );
     const { hash, preview } = generateApiKey();
     const [hosted] = await db
