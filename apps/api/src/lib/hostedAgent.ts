@@ -4052,7 +4052,7 @@ export async function complete(
                     : await callTool(tool, args, secrets, {
                         shopper_context: ctx?.shopperMarket
                           ? { country: ctx.shopperMarket }
-                          : null,
+                          : {},
                       })
                   : `error: unknown tool ${call.function.name}`;
           if (result.startsWith('error') || result.startsWith('{"error"')) outcome = 'failed';
@@ -6587,7 +6587,7 @@ async function replyAsHostedAgent(
         try {
           const t2 = Date.now();
           const r2 = await callTool(productSearch, selfArgs, secrets, {
-            shopper_context: shopperMarket ? { country: shopperMarket } : null,
+            shopper_context: shopperMarket ? { country: shopperMarket } : {},
           });
           const backstop = /^\s*(error|\{"error)/.test(r2)
             ? null
@@ -6869,7 +6869,7 @@ async function replyAsHostedAgent(
             const fetchArgs: Record<string, unknown> = { [searchQueryArg]: name };
             if (Object.keys(productSearch.params ?? {}).includes('limit')) fetchArgs.limit = '3';
             let r = await callTool(productSearch, fetchArgs, secrets, {
-              shopper_context: shopperMarket ? { country: shopperMarket } : null,
+              shopper_context: shopperMarket ? { country: shopperMarket } : {},
             });
             if (!r.startsWith('{')) continue;
             r = filterRowsByQuery(productSearch.widget, { [searchQueryArg]: name }, r);
