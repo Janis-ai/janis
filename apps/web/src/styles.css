@@ -1872,6 +1872,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    range or specificity). */
 @container convl (min-width: 681px) {
   .conv-side { width: var(--rail-w, 280px); }
+  /* The transcript column never squeezes below its controls' floor —
+     siblings clip/drawer before its buttons wrap away. */
+  .conv-main { min-width: 420px; }
 }
 .card.suggestion { border-color: var(--accent); }
 /* The Ask Janis rail claims ~340px — on the conversation screen at mid widths
