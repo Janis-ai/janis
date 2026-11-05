@@ -326,6 +326,14 @@ export async function callTool(
   ctxArgs?: Record<string, unknown>,
 ): Promise<string> {
   if (ctxArgs) args = { ...args, ...ctxArgs };
+  // Templates that read run context still execute for callers that pass
+  // none (approvals, concierge, tests) — pre-fill the shopper's pricing
+  // context so the variable is always a valid non-null object.
+  if (
+    tool.bodyTemplate?.includes('${shopper_context') &&
+    (args.shopper_context === undefined || args.shopper_context === null)
+  )
+    args = { ...args, shopper_context: {} };
   // A partial def (hand-edited config JSON, a stale pending-action snapshot)
   // must degrade to a tool error, not a throw — callers surface the string.
   if (typeof tool.url !== 'string' || !tool.url) {
