@@ -516,7 +516,9 @@ export default function Layout() {
   // and details rail are the later victims. An explicit expand always
   // wins (the conv split then compresses its own panels). Measured in
   // convl units so it agrees exactly with the split's own cascade.
-  const [navTight, setNavTight] = useState(false);
+  // Starts true: the rail is revealed collapsed and only expands once
+  // the measure proves the four panes fit — never the reverse flash.
+  const [navTight, setNavTight] = useState(true);
   useEffect(() => {
     if (!isConvPage) return;
     const measure = () => {

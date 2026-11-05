@@ -2165,6 +2165,11 @@ details summary:hover { color: var(--text); }
     transform: none;
     box-shadow: 12px 0 32px rgba(0,0,0,.4);
   }
+  /* A collapsed rail slides off AS a rail — the .mini width rules are
+     ≥721-only, so without this the sidebar re-expands to drawer width
+     for its last frame on screen (uncollapse-then-hide). */
+  .sidebar.mini { width: 60px; overflow: hidden; }
+  .layout.nav-open .sidebar.mini { width: min(300px, 85vw); }
   .nav-scrim {
     position: fixed; inset: 0; z-index: 65; border: 0; padding: 0;
     background: rgba(8,10,14,.45); cursor: default;
