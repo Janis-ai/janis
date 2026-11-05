@@ -1731,6 +1731,25 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 }
 .transcript > * { transition: opacity .15s ease; }
 .transcript.switching > :not(.conv-fetch) { opacity: .45; }
+/* Cold-load skeletons — mirror the real inbox rows and conversation
+   columns so content lands without a jump or a blank page. The pulse
+   reuses the nav-skel keyframes. */
+.skel { display: block; border-radius: 6px; background: var(--panel-2); animation: nav-skel-pulse 1.4s ease-in-out infinite; }
+.conv-row.skel-row { pointer-events: none; }
+.skel-avatar { width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0; }
+.skel-avatar.lg { width: 44px; height: 44px; }
+.skel-line { height: 12px; margin: 2px 0; }
+.skel-line.thin { height: 9px; }
+.skel-time { width: 42px; height: 10px; }
+.skel-btn { width: 34px; height: 32px; border-radius: 8px; flex-shrink: 0; }
+.skel-ic { width: 34px; height: 33px; border-radius: 8px; flex-shrink: 0; }
+.skel-field { height: 32px; border-radius: 8px; flex: 1 1 0; min-width: 0; }
+.skel-msg { border-radius: 14px; max-width: 75%; }
+.skel-msg.in { align-self: flex-start; }
+.skel-msg.out { align-self: flex-end; }
+.skel-composer { width: 100%; height: 76px; border-radius: 10px; }
+.skel-card { display: flex; flex-direction: column; gap: 10px; }
+.skel-card .profile-head { display: flex; align-items: center; gap: 10px; margin: 4px 0 2px; }
 .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
 .conv-actions .btn { padding: 7px 10px; }
 .conv-foot { flex-shrink: 0; padding: 4px 0 22px; }

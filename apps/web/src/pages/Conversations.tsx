@@ -313,6 +313,27 @@ export function ConvRow({
   );
 }
 
+/** List placeholder while the inbox loads — same shape as ConvRow
+    (avatar, name, preview, stamp) so real rows land without a jump. */
+export function ConvRowSkeleton({ i }: { i: number }) {
+  return (
+    <div className="conv-row skel-row" aria-hidden>
+      <span className="skel skel-avatar" />
+      <div className="who">
+        <div className="name">
+          <span className="skel skel-line" style={{ width: `${48 + ((i * 13) % 40)}%` }} />
+        </div>
+        <div className="preview">
+          <span className="skel skel-line thin" style={{ width: `${58 + ((i * 19) % 38)}%` }} />
+        </div>
+      </div>
+      <div className="tail">
+        <span className="skel skel-line skel-time" />
+      </div>
+    </div>
+  );
+}
+
 /** Conversations: triage (needs attention) + search/browse of everything.
  *  `scopeAgent` pins the list to one agent — the /agents/:id/inbox mount —
  *  and turns the agent picker into a whole-context switcher. */
@@ -939,9 +960,8 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         </>
         )
       ) : convsPending ? (
-        <div className="row" style={{ justifyContent: 'center', marginTop: 24 }}>
-          <span className="spin" />
-          <span className="muted">Loading conversations…</span>
+        <div role="status" aria-label="Loading conversations">
+          {Array.from({ length: 14 }, (_, i) => <ConvRowSkeleton key={i} i={i} />)}
         </div>
       ) : (
         <>

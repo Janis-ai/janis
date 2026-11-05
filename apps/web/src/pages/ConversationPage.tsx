@@ -13,6 +13,7 @@ import { type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow'
 import { useScenarioMatch } from '../lib/scenarioMatch';
 import {
   ConvRow,
+  ConvRowSkeleton,
   EMPTY_FILTERS,
   FILTER_GROUPS,
   filterCount,
@@ -104,6 +105,68 @@ interface OutEntry {
   /** false when the channel says retrying can't help (closed 24h window) */
   retryable?: boolean;
   ts: number;
+}
+
+/** Cold-load placeholder — mirrors the real .conv-layout columns (split
+    inbox, head + actions + transcript + composer, details rail) so the
+    conversation lands without a page-level jump or a blank void. The
+    cmh-* icon classes ride the real conditional-visibility rules, so the
+    rail/dock presence already hides what the loaded head would hide. */
+const SKEL_BUBBLES: [dir: 'in' | 'out', width: string, height: number][] = [
+  ['in', '46%', 42], ['out', '62%', 56], ['in', '38%', 40], ['out', '55%', 42],
+  ['in', '52%', 56], ['out', '34%', 40], ['in', '28%', 38], ['out', '48%', 42],
+];
+
+function ConversationSkeleton() {
+  return (
+    <div className="conv-layout" role="status" aria-label="Loading conversation">
+      <div className="conv-inbox" aria-hidden>
+        <div className="conv-inbox-head">
+          <span className="skel skel-btn" />
+          <span className="skel skel-field" />
+        </div>
+        <div className="conv-list">
+          {Array.from({ length: 16 }, (_, i) => <ConvRowSkeleton key={i} i={i} />)}
+        </div>
+      </div>
+      <div className="conv-main" aria-hidden>
+        <div className="conv-mobile-head">
+          <span className="skel skel-ic" />
+          <span className="skel skel-field" />
+          <span className="skel skel-ic cmh-info cmh-copilot" />
+          <span className="skel skel-ic cmh-info" />
+        </div>
+        <div className="row conv-actions">
+          {Array.from({ length: 6 }, (_, i) => <span key={i} className="skel skel-ic" />)}
+        </div>
+        <div className="transcript">
+          {SKEL_BUBBLES.map(([d, w, h], i) => (
+            <div key={i} className={`skel skel-msg ${d}`} style={{ width: w, height: h }} />
+          ))}
+        </div>
+        <div className="conv-foot">
+          <span className="skel skel-composer" />
+        </div>
+      </div>
+      <aside className="conv-side" aria-hidden>
+        <div className="card skel-card">
+          <div className="profile-head">
+            <span className="skel skel-avatar lg" />
+            <span className="skel skel-line" style={{ width: '42%' }} />
+          </div>
+          <span className="skel skel-line thin" style={{ width: '72%' }} />
+          <span className="skel skel-line thin" style={{ width: '58%' }} />
+          <span className="skel skel-line thin" style={{ width: '64%' }} />
+        </div>
+        {['Status', 'Assign to', 'Intent', 'Tags'].map((t) => (
+          <div key={t} className="card skel-card">
+            <strong>{t}</strong>
+            <span className="skel skel-field" />
+          </div>
+        ))}
+      </aside>
+    </div>
+  );
 }
 
 export default function ConversationPage() {
@@ -844,7 +907,7 @@ export default function ConversationPage() {
     if (wsSwitch !== 'failed') {
       // Deep link into another workspace (alert emails) — the switch attempt
       // is in flight (or hasn't started); hold the loading state.
-      return <div className="muted">Loading conversation…</div>;
+      return <ConversationSkeleton />;
     }
     return (
       <div className="muted">
@@ -852,7 +915,7 @@ export default function ConversationPage() {
       </div>
     );
   }
-  if (!data) return <div className="muted">Loading conversation…</div>;
+  if (!data) return <ConversationSkeleton />;
   const { conversation: c, messages, alerts, suggestions } = data;
   const brief = briefQ.data?.summary ?? null;
   const refreshBrief = async () => {
