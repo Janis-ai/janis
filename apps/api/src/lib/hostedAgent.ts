@@ -5485,6 +5485,17 @@ export async function runHostedEvent(
       'agent',
       undefined,
       {
+        // An empty run stores the placeholder text for transparency but is
+        // NOT a draft — the card shows "couldn't draft" instead of offering
+        // a Send that ships a fabricated reply. Components/actions still
+        // count as content — a widget-only draft sends fine.
+        ...(draft ||
+        result?.widgets?.length ||
+        widgets.length ||
+        buttons.length ||
+        result?.proposedActions?.length
+          ? {}
+          : { empty_draft: true }),
         // Tool-produced widgets plus inline WIDGET: specs parsed from the
         // draft text — either rides the card and the eventual reply send.
         ...(result?.widgets?.length || widgets.length

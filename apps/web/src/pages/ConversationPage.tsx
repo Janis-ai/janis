@@ -1926,7 +1926,12 @@ export default function ConversationPage() {
                     {suggestions[0].notes}
                   </div>
                 )}
-                {draftSent ? (
+                {suggestions[0].payload?.empty_draft ? (
+                  <div className="muted" style={{ fontStyle: 'italic' }}>
+                    The agent couldn't draft a reply this time — nothing usable came
+                    back. Try again.
+                  </div>
+                ) : draftSent ? (
                   <div className="muted" style={{ fontStyle: 'italic' }}>
                     reply sent — the actions below still need a decision
                   </div>
@@ -2063,7 +2068,11 @@ export default function ConversationPage() {
               {!draftSent && (
               <button
                 className="btn primary"
-                disabled={!(suggestions?.length > 0) || outbox.some((o) => o.status === 'pending')}
+                disabled={
+                  !(suggestions?.length > 0) ||
+                  !!suggestions[0].payload?.empty_draft ||
+                  outbox.some((o) => o.status === 'pending')
+                }
                 onClick={() => {
                   const s = suggestions[0];
                   send([], undefined, {
@@ -2091,7 +2100,7 @@ export default function ConversationPage() {
               {!draftSent && (
               <button
                 className="btn"
-                disabled={!(suggestions?.length > 0)}
+                disabled={!(suggestions?.length > 0) || !!suggestions[0].payload?.empty_draft}
                 title="Edit the text in the composer before sending — components stay attached"
                 onClick={() => {
                   const s = suggestions[0];
