@@ -788,6 +788,7 @@ export async function handleChannelMessage(
   // repeats keep the counts balanced (each delivery pairs both halves) so
   // they still ingest — same rule serves card retries from botIngest.
   if ((channel.kind === 'chatfuel' || channel.kind === 'manychat') && msg.text) {
+    const msgText = msg.text;
     const halves = await db
       .select({
         via: sql<string | null>`${messages.payload}->>'via'`,
@@ -798,7 +799,7 @@ export async function handleChannelMessage(
         and(
           eq(messages.conversationId, conv.id),
           eq(messages.direction, 'in'),
-          eq(messages.text, msg.text),
+          eq(messages.text, msgText),
           gt(messages.createdAt, new Date(Date.now() - 90_000)),
         ),
       );

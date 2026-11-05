@@ -198,6 +198,7 @@ export function botIngestRoutes(db: Db) {
     // (completes a pair) from a genuine REPEAT (tips the balance) — paired
     // deliveries sit at v == m.
     if (norm.text) {
+      const normText = norm.text;
       const matching = () =>
         db
           .select({
@@ -218,7 +219,7 @@ export function botIngestRoutes(db: Db) {
                 ),
               ),
               eq(messages.direction, 'in'),
-              eq(messages.text, norm.text),
+              eq(messages.text, normText),
               gt(messages.createdAt, new Date(Date.now() - 90_000)),
             ),
           );
