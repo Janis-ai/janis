@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Attachment } from '@janis/shared';
 import { useAgentWidgets, useSavedReplies } from '../api/hooks';
-import { Bot, Brain, Check, FileText, Headset, Image, Lock, Paperclip, Shapes, Smile, Sparkles, X } from 'lucide-react';
+import { Bot, Brain, Check, FileText, Headset, Image, Lock, Paperclip, Plus, Shapes, Smile, Sparkles, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 
 export default function Composer({
@@ -59,6 +59,7 @@ export default function Composer({
   const [compOpen, setCompOpen] = useState(false);
   const [compArgsFor, setCompArgsFor] = useState<string | null>(null);
   const [compArgs, setCompArgs] = useState('');
+  const [plusOpen, setPlusOpen] = useState(false);
   // Phone width gets terse placeholders + an icon-face mode picker —
   // the verbose "(Enter sends…)" hint means nothing on a touch keyboard
   // anyway.
@@ -79,13 +80,14 @@ export default function Composer({
   // Dismiss the emoji/replies popovers on Escape or a click outside the
   // composer — re-clicking the trigger button is not the obvious close path.
   useEffect(() => {
-    if (!emojiOpen && !repliesOpen && !sendasOpen && !compOpen) return;
+    if (!emojiOpen && !repliesOpen && !sendasOpen && !compOpen && !plusOpen) return;
     const close = (e: MouseEvent) => {
       if (!boxRef.current?.contains(e.target as Node)) {
         setEmojiOpen(false);
         setRepliesOpen(false);
         setSendasOpen(false);
         setCompOpen(false);
+        setPlusOpen(false);
       }
     };
     const esc = (e: KeyboardEvent) => {
@@ -94,6 +96,7 @@ export default function Composer({
         setRepliesOpen(false);
         setSendasOpen(false);
         setCompOpen(false);
+        setPlusOpen(false);
       }
     };
     // Capture phase: the emoji picker's keydown handler stops propagation
@@ -104,7 +107,7 @@ export default function Composer({
       document.removeEventListener('mousedown', close);
       document.removeEventListener('keydown', esc, true);
     };
-  }, [emojiOpen, repliesOpen, sendasOpen, compOpen]);
+  }, [emojiOpen, repliesOpen, sendasOpen, compOpen, plusOpen]);
 
   // autosize: grow with content up to ~8 lines; no scrollbar until it overflows
   useEffect(() => {
@@ -230,12 +233,29 @@ export default function Composer({
         />
 
         <div className="composer-bar">
-          <button type="button" className="btn icon" title="Emoji" aria-label="Emoji picker" onClick={() => setEmojiOpen((o) => !o)}><Smile size={16} /></button>
+          {/* Narrow screens can't fit every affordance — emoji/replies/
+              components/suggest collapse into one + menu; attach, mode and
+              Send stay on the bar. */}
+          {narrow && (
+            <button
+              type="button"
+              className={`btn icon${plusOpen ? ' sendas-on' : ''}`}
+              title="More"
+              aria-label="More composer actions"
+              aria-expanded={plusOpen}
+              onClick={() => setPlusOpen((o) => !o)}
+            >
+              <Plus size={16} />
+            </button>
+          )}
+          {!narrow && (
+            <button type="button" className="btn icon" title="Emoji" aria-label="Emoji picker" onClick={() => setEmojiOpen((o) => !o)}><Smile size={16} /></button>
+          )}
           <button type="button" className="btn icon" title="Attach file" aria-label="Attach file" onClick={() => fileRef.current?.click()}><Paperclip size={16} /></button>
-          {(savedReplies?.saved_replies.length ?? 0) > 0 && (
+          {!narrow && (savedReplies?.saved_replies.length ?? 0) > 0 && (
             <button type="button" className="btn icon" title="Saved replies" aria-label="Saved replies" onClick={() => setRepliesOpen((o) => !o)}><FileText size={16} /></button>
           )}
-          {onSendComponent && (agentWidgets?.widgets.length ?? 0) > 0 && (
+          {!narrow && onSendComponent && (agentWidgets?.widgets.length ?? 0) > 0 && (
             <button
               type="button"
               className="btn icon"
@@ -246,7 +266,7 @@ export default function Composer({
               <Shapes size={16} />
             </button>
           )}
-          {onSuggest && (
+          {!narrow && onSuggest && (
             <button
               type="button"
               className={`btn icon${suggestActive && sendAs !== 'note' && sendAs !== 'teach' ? ' suggest-on' : ''}`}
@@ -330,6 +350,56 @@ export default function Composer({
               {sendAs === mode && <Check size={14} className="ck" />}
             </button>
           ))}
+        </div>
+      )}
+      {plusOpen && (
+        <div className="emoji-pop reply-pop">
+          <div className="row" style={{ padding: '4px 8px 0', alignItems: 'center' }}>
+            <span className="muted grow" style={{ fontSize: 11.5 }}>Composer actions</span>
+            <button
+              type="button"
+              className="btn icon sm"
+              aria-label="Close actions"
+              onClick={() => setPlusOpen(false)}
+            >
+              <X size={13} />
+            </button>
+          </div>
+          <button
+            type="button"
+            className="reply-item"
+            onClick={() => { setPlusOpen(false); setEmojiOpen(true); }}
+          >
+            <span className="row" style={{gap:8,alignItems:'center'}}><Smile size={14} /><strong>Emoji</strong></span>
+          </button>
+          {(savedReplies?.saved_replies.length ?? 0) > 0 && (
+            <button
+              type="button"
+              className="reply-item"
+              onClick={() => { setPlusOpen(false); setRepliesOpen(true); }}
+            >
+              <span className="row" style={{gap:8,alignItems:'center'}}><FileText size={14} /><strong>Saved replies</strong></span>
+            </button>
+          )}
+          {onSendComponent && (agentWidgets?.widgets.length ?? 0) > 0 && (
+            <button
+              type="button"
+              className="reply-item"
+              onClick={() => { setPlusOpen(false); setCompOpen(true); }}
+            >
+              <span className="row" style={{gap:8,alignItems:'center'}}><Shapes size={14} /><strong>Send a component</strong></span>
+            </button>
+          )}
+          {onSuggest && (
+            <button
+              type="button"
+              className="reply-item"
+              disabled={sendAs === 'note' || sendAs === 'teach'}
+              onClick={() => { setPlusOpen(false); onSuggest(); }}
+            >
+              <span className="row" style={{gap:8,alignItems:'center'}}><Sparkles size={14} /><strong>Suggest a reply</strong></span>
+            </button>
+          )}
         </div>
       )}
       {compOpen && onSendComponent && (

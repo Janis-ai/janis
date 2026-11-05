@@ -997,7 +997,10 @@ export function systemPrompt(
   }
   if (opts.forSuggestion) {
     parts.push(
-      '\nNow write the reply you would send to the customer right now — your single best, most confident answer to their latest message, in your own voice. If details are missing, give the best answer you can and ask one targeted follow-up rather than hedging or deferring. Output only the reply text — no speaker labels, no preamble; never output [HANDOFF] in a draft. When the reply needs an action — sending a verification email, updating a profile, a gated tool — CALL that tool so it attaches to the draft as an operator-decidable card; never narrate an action you did not take, and never mention consoles, approvals or internal steps to the customer.',
+      '\nNow write the reply you would send to the customer right now — your single best, most confident answer to their latest message, in your own voice. If details are missing, give the best answer you can and ask one targeted follow-up rather than hedging or deferring. Output only the reply text — no speaker labels, no preamble; never output [HANDOFF] in a draft. When the reply needs an action — sending a verification email, updating a profile, a gated tool — CALL that tool so it attaches to the draft as an operator-decidable card; never narrate an action you did not take, and never mention consoles, approvals or internal steps to the customer.' +
+        (opts.operator
+          ? ' For apply/save work (a component, a knowledge entry, a settings change) call the apply_*/save_widget tool so the approval card carries it — never emit raw JSON, code blocks or spec blobs in the draft text.'
+          : ''),
     );
   } else {
     parts.push(
