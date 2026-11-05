@@ -114,6 +114,16 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   transcript bubbles, composer, labeled rail cards) with nav-skel-pulse
   blocks; inbox list's spinner gate uses the same row skeletons.
   Probe: scripts/ui/tmp-skel.mjs.
+- Inbox resize-not-remount (13fafaf3 + 95b66367): /conversations/:id and
+  /agents/:id/inbox/:cid nest under the inbox routes, so Conversations
+  stays mounted and the same column node flips .inbox-col → .conv-inbox
+  (width transition, detail pane slides in). Scroll offset is captured
+  during render — post-flip the ex-scroller already reads 0 — handed to
+  the new scroller, then the .sel row scrollIntoView({block:'nearest'})
+  keeps the selection visible. ConversationPage lost its duplicate mini
+  inbox; it returns only conv-main + conv-side inside the parent's
+  .conv-layout. Route shapes: params.cid ?? params.id = conv;
+  agentParam = params.agentId ?? (params.cid ? params.id : undefined).
 
 ## 2026-11-04h — Operator brief: on-demand Summarize card
 - GET /api/conversations/:id/summary writes a one-look digest (headline +
