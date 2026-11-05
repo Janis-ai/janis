@@ -144,7 +144,7 @@ export default function ConversationPage() {
   const navigate = useNavigate();
   const jumpMsg = searchParams.get('msg'); // search-result deep link
   const returnScroll = searchParams.get('scroll'); // agent-page breadcrumb round-trip
-  const { data, error: loadError } = useConversation(id);
+  const { data, error: loadError, isPlaceholderData } = useConversation(id);
   // Operator brief — on demand via the Summarize button. Enabled flips the
   // query on; the server decides whether there's anything worth writing.
   const [briefOpen, setBriefOpen] = useState(false);
@@ -152,10 +152,10 @@ export default function ConversationPage() {
   // A merged conversation (visitor adoption) returns the survivor with
   // merged_from set — swap the URL to the surviving id silently.
   useEffect(() => {
-    if (data?.merged_from && data.conversation.id !== id) {
+    if (!isPlaceholderData && data?.merged_from && data.conversation.id !== id) {
       navigate(`/conversations/${data.conversation.id}`, { replace: true });
     }
-  }, [data, id, navigate]);
+  }, [data, id, isPlaceholderData, navigate]);
   usePageTitle(data ? displayName(data.conversation) : 'Conversation');
   const { data: agents } = useAgents();
   const { data: users } = useUsers();
@@ -305,7 +305,7 @@ export default function ConversationPage() {
   // messages render, then drop the param so refetches don't re-pin it.
   const restoredFor = useRef('');
   useLayoutEffect(() => {
-    if (!returnScroll || !data?.messages.length || restoredFor.current === id) return;
+    if (!returnScroll || !data?.messages.length || data.conversation.id !== id || restoredFor.current === id) return;
     const el = transcriptRef.current;
     if (!el) return;
     restoredFor.current = id;
@@ -372,7 +372,7 @@ export default function ConversationPage() {
     const oldest = win
       ? win.msgs[0]?.created_at
       : (older[0]?.created_at ?? data?.messages[0]?.created_at);
-    if (!hasMore || fetchingOlder || !oldest) return;
+    if (!hasMore || fetchingOlder || !oldest || data?.conversation.id !== id) return;
     setFetchingOlder(true);
     const el = transcriptRef.current;
     const prevHeight = el?.scrollHeight ?? 0;
@@ -423,7 +423,7 @@ export default function ConversationPage() {
   // already in the loaded pages just scroll to it, otherwise fetch the
   // centered window and render that instead of the latest page.
   useEffect(() => {
-    if (!jumpMsg || !data) {
+    if (!jumpMsg || !data || data.conversation.id !== id) {
       if (!jumpMsg) jumpedFor.current = '';
       return;
     }
@@ -542,7 +542,7 @@ export default function ConversationPage() {
   // unread conv freshly opened and got re-read immediately.
   const markedReadFor = useRef('');
   useEffect(() => {
-    if (!data || markedReadFor.current === id) return;
+    if (!data || data.conversation.id !== id || markedReadFor.current === id) return;
     markedReadFor.current = id;
     if (data.conversation.is_unread) patch.mutate({ is_unread: false });
   }, [data, id]);
@@ -1422,7 +1422,7 @@ export default function ConversationPage() {
         )}
 
         <div
-          className="transcript"
+          className={`transcript${isPlaceholderData ? ' switching' : ''}`}
           ref={transcriptRef}
           onScroll={() => {
             const el = transcriptRef.current;
@@ -1433,6 +1433,15 @@ export default function ConversationPage() {
             if (nearBottom && win?.hasMoreAfter) void loadNewer();
           }}
         >
+          {/* Switch fetch: the previous thread stays mounted (placeholder)
+              while the next conversation loads — the pill floats over it. */}
+          {isPlaceholderData && (
+            <div className="conv-fetch" role="status">
+              <span className="conv-fetch-pill">
+                <span className="spin" /> Loading…
+              </span>
+            </div>
+          )}
           {fetchingOlder && <div className="muted" style={{ textAlign: 'center', fontSize: 12, padding: '8px 0' }}>Loading earlier messages…</div>}
           {items.map((item, i) => {
             const showWho = i === 0 || senderKey(items[i - 1]) !== senderKey(item);

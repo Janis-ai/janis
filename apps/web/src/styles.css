@@ -1717,6 +1717,20 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-open .conv-layout { flex: 1 1 auto; min-height: 0; }
 .conv-open .conv-main { min-height: 0; }
 .conv-open .transcript { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+/* Conversation-switch loader: the prior thread stays mounted as placeholder
+   while the next one fetches. Zero-height sticky box — the pill pins to the
+   transcript's top edge without taking flow space, so nothing shifts when it
+   appears or lands. The stale thread fades underneath. */
+.conv-fetch { position: sticky; top: 8px; z-index: 30; height: 0; align-self: center; }
+.conv-fetch-pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 6px 12px; border-radius: 999px; white-space: nowrap;
+  background: var(--panel); border: 1px solid var(--border);
+  box-shadow: 0 6px 18px rgba(0,0,0,.4);
+  color: var(--muted); font-size: 12px; pointer-events: none;
+}
+.transcript > * { transition: opacity .15s ease; }
+.transcript.switching > :not(.conv-fetch) { opacity: .45; }
 .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
 .conv-actions .btn { padding: 7px 10px; }
 .conv-foot { flex-shrink: 0; padding: 4px 0 22px; }
