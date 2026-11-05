@@ -177,6 +177,10 @@ export function useConversation(id: string) {
         // Verified Janis visitor's best workspace plan — free/starter/pro/scale
         member_plan?: string;
       }>(`/api/conversations/${id}`),
+    // Keep the previous conversation mounted while the next one fetches —
+    // without this the whole page (list, head, rail) unmounts into a
+    // Loading state on every switch.
+    placeholderData: (prev) => prev,
     retry: (count, err) => !(err instanceof ApiError && err.status === 404) && count < 3,
     // SSE invalidation is the fast path; this poll is the safety net for a
     // dead/dropped stream — the thread must never look frozen mid-chat.
