@@ -1463,3 +1463,12 @@ Three chatfuel-delivery fixes shipped + deployed (janis-api-01405-jzl+):
 - Same webhook-backed parity for OAuth'd ManyChat channels (0fdec9b9):
   human sends push via page token (agent replies still ride card/sendContent),
   access_token marks a channel webhook-backed for the pair dedup either flavor.
+
+- GCP project gotcha (learned 2026-11-05): gcloud's ACTIVE project is
+  `jottogame` — every API call bills quota to the config's consumer
+  project, not the target. deploy-gcp.sh's `gcloud projects describe`
+  bills ReadRequests to jottogame (hit its 2400/min cap and killed a
+  deploy) — run it as `CLOUDSDK_BILLING_QUOTA_PROJECT=janis-prod-mn
+  ./scripts/deploy-gcp.sh` if that quota ever trips again. All manual
+  gcloud commands (logging read, builds describe, run services) need
+  `--project=janis-prod-mn` or they silently query jottogame.
