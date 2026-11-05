@@ -5,7 +5,7 @@ import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Alert, Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
 import { useAgents, useConversation, useConversationBrief, useConversations, useInvalidateConversations, useMe, useSearch, useUsers } from '../api/hooks';
-import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, surfaceLabel } from '../components/bits';
+import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, StateBadge, surfaceLabel } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
@@ -27,7 +27,7 @@ import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { BookmarkPlus, Bot, Brain, ChevronLeft, Headset, Info, ListFilter, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, ScrollText, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
+import { BookmarkPlus, Bot, Brain, ChevronLeft, Headset, Info, ListFilter, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, ScrollText, Sparkles, Star, Tag as TagIcon, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -353,6 +353,7 @@ export default function ConversationPage() {
   const jumpedFor = useRef('');
   const olderFor = useRef('');
   const [briefBusy, setBriefBusy] = useState(false);
+  const [metaTagOpen, setMetaTagOpen] = useState(false);
   if (olderFor.current !== id) {
     olderFor.current = id;
     setOlder([]);
@@ -360,6 +361,7 @@ export default function ConversationPage() {
     setWin(null);
     jumpedFor.current = '';
     setBriefOpen(false);
+    setMetaTagOpen(false);
     // Fresh thread pins to the latest — without this, scrolling up in the
     // previous conversation leaves stickRef off and the new transcript
     // keeps the old scrollTop instead of snapping to the tail. A ?scroll=
@@ -1281,6 +1283,89 @@ export default function ConversationPage() {
               <span className="btn-label">Save as scenario</span>
             </button>
           )}
+        </div>
+
+        {/* Compact meta strip — status/assign/intent/tags as pills for
+            when the details rail can't hold them (mobile + drawer mode,
+            signaled by the convl container query / ≤720 media). Each
+            select rides invisible on top of its pill, native picker on
+            tap — same trick as the snooze moon. */}
+        <div className="conv-meta">
+          <span className="meta-wrap">
+            <StateBadge state={c.state} />
+            <select
+              aria-label="Status"
+              title="Status"
+              value={c.state}
+              disabled={act.isPending || patch.isPending}
+              onChange={(e) => setState(e.target.value as ConversationState)}
+            >
+              <option value="active">Agent</option>
+              <option value="needs_human" disabled={c.state === 'archived'}>Needs human</option>
+              <option value="human" disabled={c.state === 'archived'}>Human</option>
+              <option value="archived">Archived</option>
+            </select>
+          </span>
+          <span className="meta-wrap">
+            <span className="meta-pill">
+              {c.assignee_id
+                ? (users?.users.find((u) => u.id === c.assignee_id)?.name ?? 'Assigned')
+                : 'Unassigned'}
+            </span>
+            <select
+              aria-label="Assign to"
+              title="Assign to"
+              value={c.assignee_id ?? ''}
+              onChange={(e) => patch.mutate({ assignee_id: e.target.value || null })}
+            >
+              <option value="">Unassigned</option>
+              {users?.users.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}{u.id === me?.user.id ? ' (me)' : ''}
+                </option>
+              ))}
+            </select>
+          </span>
+          <span className="meta-wrap">
+            <span className="meta-pill">{c.intent ?? 'Intent'}</span>
+            <select
+              aria-label="Intent"
+              title="Intent"
+              value={c.intent ?? ''}
+              disabled={patch.isPending}
+              onChange={(e) => patch.mutate({ intent: e.target.value || null })}
+            >
+              <option value="">Unclassified</option>
+              {[...new Set([...(agent?.config?.intents ?? []), ...DEFAULT_INTENTS])].map((i) => (
+                <option key={i} value={i}>
+                  {i}
+                </option>
+              ))}
+              {c.intent &&
+                ![...(agent?.config?.intents ?? []), ...DEFAULT_INTENTS].includes(c.intent) && (
+                  <option value={c.intent}>{c.intent}</option>
+                )}
+            </select>
+          </span>
+          <span className="meta-wrap">
+            <button
+              type="button"
+              className="meta-pill meta-tag-btn"
+              title="Tags"
+              aria-label="Tags"
+              onClick={() => setMetaTagOpen((o) => !o)}
+            >
+              <TagIcon size={11} /> {c.tags.length ? c.tags.length : 'tag'}
+            </button>
+            {metaTagOpen && (
+              <>
+                <div className="menu-backdrop" onClick={() => setMetaTagOpen(false)} />
+                <div className="menu-pop meta-tag-pop">
+                  <TagEditor conversation={c} onSave={(tags) => patch.mutate({ tags })} />
+                </div>
+              </>
+            )}
+          </span>
         </div>
 
         {convHits !== null && convQ.trim().length >= 2 && (

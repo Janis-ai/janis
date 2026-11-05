@@ -1720,6 +1720,28 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-open .transcript { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .conv-actions { flex-wrap: nowrap; margin-top: 12px; }
 .conv-actions .btn { padding: 7px 10px; }
+/* Compact meta strip — status/assign/intent/tags as pills, for when the
+   details rail can't hold them: drawer mode (convl container query) and
+   phones. Hidden while the rail shows. */
+.conv-meta { display: none; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+@container convl (max-width: 680px) { .conv-meta { display: flex; } }
+@media (max-width: 720px) { .conv-meta { display: flex; } }
+.meta-wrap { position: relative; display: inline-flex; min-width: 0; }
+.meta-wrap select { position: absolute; inset: 0; width: 100%; opacity: 0; padding: 0; cursor: pointer; }
+.meta-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  max-width: 170px; padding: 4px 10px; border-radius: 999px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.meta-tag-btn { cursor: pointer; font: inherit; }
+.meta-tag-pop {
+  position: absolute; top: calc(100% + 6px); left: auto; right: 0; z-index: 90;
+  min-width: 220px; max-width: calc(100vw - 32px); padding: 10px;
+}
+/* The reused TagEditor renders as a card — strip its chrome inside the
+   popover so it reads as menu content. */
+.meta-tag-pop > .card { border: 0; box-shadow: none; padding: 0; background: none; }
 .conv-foot { flex-shrink: 0; padding: 4px 0 22px; }
 /* Stacked cards (alerts, suggestion) cap instead of squeezing the
    transcript out of the column — they scroll within themselves. */
