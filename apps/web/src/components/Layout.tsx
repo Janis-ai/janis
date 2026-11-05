@@ -517,7 +517,7 @@ export default function Layout() {
     return () => mq.removeEventListener('change', on);
   }, []);
   const navCollapsed =
-    navPref === 'collapsed' || (isConvPage && (navPref === null || navNarrow));
+    navPref === 'collapsed' || (navPref === null && isConvPage && navNarrow);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && !isEditableTarget(e.target)) {
