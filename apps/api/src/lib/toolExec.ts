@@ -320,7 +320,12 @@ export async function callTool(
   tool: ToolDef,
   args: Record<string, unknown>,
   secrets: Record<string, string> = {},
+  // Server-supplied context (e.g. the shopper's resolved market) — merged
+  // OVER model args so a template placeholder can read run context the
+  // model never sees and can't override.
+  ctxArgs?: Record<string, unknown>,
 ): Promise<string> {
+  if (ctxArgs) args = { ...args, ...ctxArgs };
   // A partial def (hand-edited config JSON, a stale pending-action snapshot)
   // must degrade to a tool error, not a throw — callers surface the string.
   if (typeof tool.url !== 'string' || !tool.url) {

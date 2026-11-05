@@ -4049,7 +4049,9 @@ export async function complete(
                     ? ctx!.suggesting
                       ? 'approval_required: this action needs a human teammate to approve it before it runs — describe it in the suggestion rather than claiming it was done'
                       : await requestToolApproval(ctx!.db, ctx!.agent!, ctx!.convId, tool, args)
-                    : await callTool(tool, args, secrets)
+                    : await callTool(tool, args, secrets, {
+                        shopper_market: ctx?.shopperMarket,
+                      })
                   : `error: unknown tool ${call.function.name}`;
           if (result.startsWith('error') || result.startsWith('{"error"')) outcome = 'failed';
           else if (result.startsWith('{')) {
@@ -6582,7 +6584,9 @@ async function replyAsHostedAgent(
         await applyCardSugarArgs(productSearch, selfArgs, secrets);
         try {
           const t2 = Date.now();
-          const r2 = await callTool(productSearch, selfArgs, secrets);
+          const r2 = await callTool(productSearch, selfArgs, secrets, {
+            shopper_market: shopperMarket,
+          });
           const backstop = /^\s*(error|\{"error)/.test(r2)
             ? null
             : widgetFromToolResult(productSearch.widget!, r2, secrets, selfArgs);
@@ -6862,7 +6866,9 @@ async function replyAsHostedAgent(
           try {
             const fetchArgs: Record<string, unknown> = { [searchQueryArg]: name };
             if (Object.keys(productSearch.params ?? {}).includes('limit')) fetchArgs.limit = '3';
-            let r = await callTool(productSearch, fetchArgs, secrets);
+            let r = await callTool(productSearch, fetchArgs, secrets, {
+              shopper_market: shopperMarket,
+            });
             if (!r.startsWith('{')) continue;
             r = filterRowsByQuery(productSearch.widget, { [searchQueryArg]: name }, r);
             const w3 = widgetFromToolResult(productSearch.widget, r, secrets, { [searchQueryArg]: name });
