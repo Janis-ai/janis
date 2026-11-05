@@ -52,5 +52,5 @@ export function usePanelWidth(
     },
     onDoubleClick: () => set(def),
   };
-  return { width: w, gripProps };
+  return { width: w, setWidth: set, gripProps };
 }

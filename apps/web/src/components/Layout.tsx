@@ -24,7 +24,7 @@ import { railBus, type RailRequest } from '../lib/railBus';
 import { DockContext, type DockTab, type TestWiring } from '../lib/dockContext';
 import { t } from '../lib/i18n';
 import { isEditableTarget } from '../lib/keys';
-import { usePanelWidth, useStoredFlag } from '../lib/panelLayout';
+import { usePanelWidth } from '../lib/panelLayout';
 import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronLeft, ChevronRight, ChevronsUpDown,
@@ -335,20 +335,10 @@ export default function Layout() {
   // Mobile (≤720px): the sidebar leaves the flow and becomes an off-canvas
   // drawer — the top bar's ☰ opens it, scrim/Esc/nav-click/route change close.
   const [navOpen, setNavOpen] = useState(false);
-  // Desktop sidebar: manual collapse to the icon rail (⌘B, Slack-style)
-  // plus a drag handle on its right edge — both persist across sessions.
-  const [navCollapsed, setNavCollapsed] = useStoredFlag('nav.collapsed');
-  const { width: navW, gripProps: navGrip } = usePanelWidth('nav.width', 210, 170, 340);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && !isEditableTarget(e.target)) {
-        e.preventDefault();
-        setNavCollapsed(!navCollapsed);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [navCollapsed]);
+  // Desktop sidebar: drag handle on its right edge (persisted) — the
+  // collapse pref itself is declared below isConvPage since 'auto' means
+  // collapsed on conversation pages, expanded everywhere else.
+  const { width: navW, setWidth: setNavW } = usePanelWidth('nav.width', 210, 170, 340);
   const [railTab, setRailTab] = useState<'ask' | 'test'>('ask');
   const [testRail, setTestRail] = useState<RailRequest | null>(null);
   const [askSeed, setAskSeed] = useState<{ text: string; nonce: number } | null>(null);
@@ -497,6 +487,58 @@ export default function Layout() {
   const isConvPage =
     /^\/conversations\/[^/]+$/.test(location.pathname) ||
     /^\/agents\/[^/]+\/inbox\/[^/]+$/.test(location.pathname);
+  // Sidebar collapse — tri-state pref: 'collapsed' | 'expanded' | null
+  // (auto = collapsed on conversation pages, expanded elsewhere, so conv
+  // view defaults to the icon rail without stealing the user's choice).
+  // ⌘B flips the effective state into an explicit pref.
+  const [navPref, setNavPrefState] = useState<'collapsed' | 'expanded' | null>(() => {
+    const v = localStorage.getItem('nav.collapse');
+    return v === 'collapsed' || v === 'expanded'
+      ? v
+      : localStorage.getItem('nav.collapsed') === '1'
+        ? 'collapsed'
+        : null;
+  });
+  const setNavPref = (v: 'collapsed' | 'expanded' | null) => {
+    setNavPrefState(v);
+    if (v) localStorage.setItem('nav.collapse', v);
+    else localStorage.removeItem('nav.collapse');
+  };
+  const navCollapsed = navPref === 'collapsed' || (navPref === null && isConvPage);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && !isEditableTarget(e.target)) {
+        e.preventDefault();
+        setNavPref(navCollapsed ? 'expanded' : 'collapsed');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navCollapsed]);
+  // The edge drag doubles as the collapse gesture: below the threshold it
+  // snaps to the icon rail; dragging out from the rail widens it back.
+  const NAV_COLLAPSE_AT = 140;
+  const onNavGrip = (e: React.PointerEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = navCollapsed ? 60 : navW;
+    document.body.classList.add('panel-resize');
+    const mv = (ev: PointerEvent | globalThis.PointerEvent) => {
+      const next = startW + (ev.clientX - startX);
+      if (next <= NAV_COLLAPSE_AT) setNavPref('collapsed');
+      else {
+        setNavPref('expanded');
+        setNavW(Math.min(340, Math.max(170, next)));
+      }
+    };
+    const up = () => {
+      document.body.classList.remove('panel-resize');
+      window.removeEventListener('pointermove', mv);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', mv);
+    window.addEventListener('pointerup', up);
+  };
   // A shared page's scoped URL is still that page — /agents/:id/inbox lights
   // Inbox, not Agents (Agents itself is `end`-matched, list page only).
   const scopedActive =
@@ -1202,9 +1244,11 @@ export default function Layout() {
       }${railOpen && dockExpanded && !isAskPage ? ' dock-wide' : ''}${isAskPage ? ' ask-page' : ''}${
         isConvPage ? ' conv-open' : ''
       }${navOpen ? ' nav-open' : ''}`}
-      style={{ '--nav-w': `${navW}px` } as CSSProperties}
+      style={{ '--nav-w': `${navCollapsed ? 60 : navW}px` } as CSSProperties}
     >
-      {!navCollapsed && <div className="nav-grip" {...navGrip} />}
+      {/* Right-edge grip — drag resizes; below ~140px it snaps to the
+          icon rail and dragging back out uncollapses. */}
+      <div className="nav-grip" onPointerDown={onNavGrip} onDoubleClick={() => { setNavPref('expanded'); setNavW(210); }} />
       {promptEl}
       <CommandPalette />
       <a className="skip-link" href="#main-content">Skip to content</a>
@@ -1241,7 +1285,7 @@ export default function Layout() {
             className="nav-collapse"
             aria-label={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             title={navCollapsed ? 'Expand sidebar ⌘B' : 'Collapse sidebar ⌘B'}
-            onClick={() => setNavCollapsed(!navCollapsed)}
+            onClick={() => setNavPref(navCollapsed ? 'expanded' : 'collapsed')}
           >
             {navCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
