@@ -4787,7 +4787,17 @@ function widgetAnnotation(payload: unknown): string {
         `[options shown: ${items.map((i) => `"${(i.label ?? '').slice(0, 40)}"`).join(', ')}]`,
       );
     } else if (w.type === 'form') {
-      parts.push(`[form shown${w.title ? `: "${String(w.title).slice(0, 60)}"` : ''}]`);
+      // Field labels let the model extend the form ("add address") by
+      // re-emitting an updated WIDGET spec instead of guessing at its shape.
+      const fields = (
+        w.fields as { label?: string; name?: string; required?: boolean }[] | undefined
+      )
+        ?.slice(0, 12)
+        .map((f) => `${f.label ?? f.name ?? '?'}${f.required ? '*' : ''}`)
+        .join(', ');
+      parts.push(
+        `[form shown${w.title ? `: "${String(w.title).slice(0, 60)}"` : ''}${fields ? ` — fields: ${fields}` : ''}]`,
+      );
     }
   }
   return parts.length ? ` ${parts.join(' ')}` : '';
@@ -5409,11 +5419,15 @@ export async function runHostedEvent(
           // sometimes writes "(human operator) I prepared…" verbatim.
           .replace(/\s*\(\s*(human operator|operator|agent|assistant)\s*\)\s*/gi, ' '),
       );
-      if (!clean) return { text: undefined as string | undefined, buttons: [] as QuickReply[] };
+      if (!clean)
+        return { text: undefined as string | undefined, buttons: [] as QuickReply[], widgets: [] as WidgetComponent[] };
       const { text: noButtons, buttons } = extractButtons(extractLearns(clean).text);
-      return { text: unwrapInlineLists(noButtons) || undefined, buttons };
+      // WIDGET: markup in the draft parses into payload.widgets — without
+      // this it renders to the operator as raw spec text.
+      const { text: noWidgets, widgets } = extractWidgets(noButtons);
+      return { text: unwrapInlineLists(noWidgets) || undefined, buttons, widgets };
     };
-    let { text: draft, buttons } = stripLabel(result?.text);
+    let { text: draft, buttons, widgets } = stripLabel(result?.text);
     if (draft && CONTROL_TAG.test(draft)) draft = undefined;
 
     if (!draft) {
@@ -5452,6 +5466,7 @@ export async function runHostedEvent(
       const retryStrip = stripLabel(retry?.text);
       draft = retryStrip.text;
       if (retryStrip.buttons.length) buttons = retryStrip.buttons;
+      if (retryStrip.widgets.length) widgets = retryStrip.widgets;
       if (draft && CONTROL_TAG.test(draft)) draft = undefined;
     }
 
@@ -5470,7 +5485,11 @@ export async function runHostedEvent(
       'agent',
       undefined,
       {
-        ...(result?.widgets?.length ? { widgets: result.widgets } : {}),
+        // Tool-produced widgets plus inline WIDGET: specs parsed from the
+        // draft text — either rides the card and the eventual reply send.
+        ...(result?.widgets?.length || widgets.length
+          ? { widgets: [...(result?.widgets ?? []), ...widgets] }
+          : {}),
         ...(buttons.length ? { buttons } : {}),
         ...(result?.proposedActions?.length
           ? { proposed_actions: result.proposedActions }
@@ -5646,7 +5665,7 @@ const CONTROL_TAGS = new RegExp(CONTROL_TAG.source, 'gi');
 // the model, never for the reader. The legacy "(an action was submitted for
 // teammate approval)" wording is covered too.
 const TRANSCRIPT_NOTE =
-  /\s*\((?:an action was submitted for (?:teammate\s+|your\s+)?approval|a proposal card was shown[^)]*)\)\s*/gi;
+  /\s*(?:\((?:an action was submitted for (?:teammate\s+|your\s+)?approval|a proposal card was shown[^)]*)\)|\[(?:cards|options|form) shown[^\]]*\])\s*/gi;
 
 export function stripTranscriptNotes(text: string): string {
   // A matched annotation takes its surrounding whitespace with it — replace

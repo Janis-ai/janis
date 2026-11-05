@@ -706,6 +706,20 @@ describe('stripTranscriptNotes', () => {
   it('leaves normal parentheticals alone', () => {
     expect(stripTranscriptNotes('Sure (no problem) — done.')).toBe('Sure (no problem) — done.');
   });
+
+  it('removes echoed widget annotations — "[form shown]" is context markup', () => {
+    // prod incident: a draft echoed the transcript's [form shown]
+    // annotation instead of re-emitting the widget spec.
+    expect(
+      stripTranscriptNotes(
+        'Please go ahead and fill it out: [form shown: "Leave your details" — fields: Name*, Phone*]',
+      ),
+    ).toBe('Please go ahead and fill it out:');
+    expect(stripTranscriptNotes('Here they are [cards shown — 1) "A" $5; 2) "B" $6] as promised.')).toBe(
+      'Here they are as promised.',
+    );
+    expect(stripTranscriptNotes('Pick one [options shown: "a", "b"]')).toBe('Pick one');
+  });
 });
 
 describe('stripEscalationClaims', () => {
