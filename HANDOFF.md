@@ -93,6 +93,18 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-05g — Widget-annotation echoes stripped; run-action idempotent
+- '[form shown]'/'[cards shown]'/'[options shown]' are transcript CONTEXT
+  markup — the model echoed them into drafts verbatim. stripTranscriptNotes
+  removes them on both paths; form annotations now list field labels so
+  'add address to the form' can re-emit an updated WIDGET spec, and the
+  suggest path parses WIDGET: markup into payload.widgets (previously
+  leaked as raw spec text). Suggest prompt: components emit as
+  WIDGET/WIDGET_REF, never a bulleted field list.
+- run-action dedupes on (conversation, tool, args): repeat clicks return
+  the existing decision, no double-execution, no 'not-pending' 409; an
+  inline approve after 'For teammate' decides the parked row. abfb572e +
+  0e76aa3a / janis-api-01448-m24 + 01449-gqq.
 ## 2026-11-05f — Narrow composer + concierge spec-leak fix
 - Mobile composer: emoji/replies/components/suggest collapse into a single
   "+" popover (labeled rows) at ≤720px — attach, mode, Resume, Send stay on
