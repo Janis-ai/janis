@@ -124,6 +124,8 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   inbox; it returns only conv-main + conv-side inside the parent's
   .conv-layout. Route shapes: params.cid ?? params.id = conv;
   agentParam = params.agentId ?? (params.cid ? params.id : undefined).
+  ad92b49f — sel-pin must key on list data (cold open has no .sel row
+  until rows land); scrollIntoView block:'start' + scroll-margin-top 52px.
 
 ## 2026-11-04h — Operator brief: on-demand Summarize card
 - GET /api/conversations/:id/summary writes a one-look digest (headline +
