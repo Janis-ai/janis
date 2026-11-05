@@ -1287,15 +1287,7 @@ export default function Layout() {
             title={navCollapsed ? 'Expand sidebar ⌘B' : 'Collapse sidebar ⌘B'}
             onClick={() => setNavPref(navCollapsed ? 'expanded' : 'collapsed')}
           >
-            {navCollapsed ? (
-              <PanelLeftOpen size={16} />
-            ) : isConvPage ? (
-              /* On a conversation page the expanded rail is a menu over
-                 the triage surface — × reads as the escape back to it. */
-              <X size={16} />
-            ) : (
-              <PanelLeftClose size={16} />
-            )}
+            {navCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
         </div>
         {data?.workspace && (
