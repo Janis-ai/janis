@@ -443,7 +443,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   if (openConvId) openListScroll.current = listRef.current?.scrollTop ?? 0;
   else openColScroll.current = colRef.current?.scrollTop ?? 0;
   const wasOpen = useRef<boolean | null>(null);
-  const prevSel = useRef<string | null>(null);
   useLayoutEffect(() => {
     const open = Boolean(openConvId);
     const col = colRef.current;
@@ -453,16 +452,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       else list.scrollTop = openColScroll.current;
     }
     wasOpen.current = open;
-    // The selected row rides as high as the column can scroll it — on the
-    // open flip AND on conv→conv switches where it's outside the column's
-    // view. scroll-margin-top keeps it clear of the sticky head; a last
-    // row just stays at the bottom.
-    if (open && prevSel.current !== openConvId) {
-      col
-        ?.querySelector<HTMLElement>('.conv-row.sel')
-        ?.scrollIntoView({ block: 'start' });
-    }
-    prevSel.current = openConvId;
   }, [openConvId]);
   useEffect(() => {
     const el = sentRef.current;
@@ -561,6 +550,18 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     });
 
   const list = searching ? hits?.conversations : convList;
+  // The selected row rides as high as the column can scroll it — on the
+  // open flip, on conv→conv switches, and on cold load where the real
+  // rows arrive after the effect first ran. scroll-margin-top keeps it
+  // clear of the sticky head; a last row just settles at the bottom.
+  const selPinned = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (!openConvId || selPinned.current === openConvId) return;
+    const row = colRef.current?.querySelector<HTMLElement>('.conv-row.sel');
+    if (!row) return;
+    row.scrollIntoView({ block: 'start' });
+    selPinned.current = openConvId;
+  }, [openConvId, list]);
   // The funnel's badge counts the assignee flag too — it lives in the
   // popover since the header went icon-only.
   const activeFilters = filterCount(filters) + (mine ? 1 : 0);
