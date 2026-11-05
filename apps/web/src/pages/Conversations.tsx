@@ -550,13 +550,15 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     });
 
   const list = searching ? hits?.conversations : convList;
-  // The selected row rides as high as the column can scroll it — on the
-  // open flip, on conv→conv switches, and on cold load where the real
-  // rows arrive after the effect first ran. scroll-margin-top keeps it
-  // clear of the sticky head; a last row just settles at the bottom.
+  // Cold open only (load/refresh straight into a conversation): pin the
+  // selected row as high as it scrolls once real rows land. In-session
+  // selections never jump — the row the user clicked is already in view.
+  // scroll-margin-top keeps it clear of the sticky head; a last row just
+  // settles at the bottom.
+  const mountOpen = useRef(Boolean(openConvId));
   const selPinned = useRef<string | null>(null);
   useLayoutEffect(() => {
-    if (!openConvId || selPinned.current === openConvId) return;
+    if (!mountOpen.current || !openConvId || selPinned.current === openConvId) return;
     const row = colRef.current?.querySelector<HTMLElement>('.conv-row.sel');
     if (!row) return;
     row.scrollIntoView({ block: 'start' });
