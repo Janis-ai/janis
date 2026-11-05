@@ -459,17 +459,31 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       const w = layout.clientWidth;
       const colW = storedPanelWidth('conv.colw', 290, 220, 480);
       const railW = storedPanelWidth('conv.railw', 280, 240, 560);
-      const listNeed = colW + 420 + railW + 32;
       const dragging = document.body.classList.contains('panel-resize');
-      // Not dragging: the rail holds until it alone can't fit beside
-      // the conv floor — the inbox is the earlier victim. Dragging:
-      // the rail yields first so the panel being resized never
-      // disappears mid-drag; the inbox only goes when it can't fit
-      // beside the conv floor at all.
-      const railNeed = dragging ? listNeed : 420 + railW + 32;
-      const listFit = dragging ? colW + 420 + 32 : listNeed;
-      const nextTight = tight ? w < railNeed + 48 : w < railNeed;
-      const nextList = listTight ? w < listFit + 16 : w < listFit;
+      // avail = what's left for the two side panels once the conv holds
+      // its 420 floor and the inter-pane gaps. Squeeze before hide, in
+      // priority order: inbox gives width to its 220 floor, rail to its
+      // 240 floor, then the inbox leaves, then the rail drawers. While
+      // the user drags a panel their asserted widths rule — the rail
+      // yields straight to the drawer and the dragged panel can never
+      // disappear mid-gesture.
+      const avail = w - 420 - 32;
+      let colFit = colW;
+      let railFit = railW;
+      if (!dragging && avail < colW + railW) {
+        if (avail >= 220 + railW) {
+          colFit = avail - railW;
+        } else if (avail >= 220 + 240) {
+          colFit = 220;
+          railFit = avail - 220;
+        } else {
+          railFit = Math.max(240, Math.min(railW, avail));
+        }
+      }
+      const listNeed = dragging ? colW : 460; // 220 col floor + 240 rail floor
+      const railNeed = dragging ? colW + railW : 240;
+      const nextList = listTight ? avail < listNeed + 16 : avail < listNeed;
+      const nextTight = tight ? avail < railNeed + 48 : avail < railNeed;
       if (nextTight !== tight) {
         tight = nextTight;
         layout.classList.toggle('rail-tight', tight);
@@ -478,6 +492,15 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         listTight = nextList;
         layout.classList.toggle('list-tight', listTight);
       }
+      // Effective widths live on the DOM (not state): React re-renders
+      // restore the stored width on drags, which is what we want anyway.
+      const colEl = layout.querySelector<HTMLElement>('.conv-inbox');
+      const colGripEl = layout.querySelector<HTMLElement>('.conv-col-grip');
+      const railGripEl = layout.querySelector<HTMLElement>('.conv-rail-grip');
+      if (colEl) colEl.style.width = `${colFit}px`;
+      if (colGripEl) colGripEl.style.left = `${colFit - 4}px`;
+      if (railGripEl) railGripEl.style.right = `${railFit - 4}px`;
+      layout.style.setProperty('--railfit', `${railFit}px`);
     };
     measure();
     const ro = new ResizeObserver(measure);
