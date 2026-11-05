@@ -360,6 +360,11 @@ export default function ConversationPage() {
     setWin(null);
     jumpedFor.current = '';
     setBriefOpen(false);
+    // Fresh thread pins to the latest — without this, scrolling up in the
+    // previous conversation leaves stickRef off and the new transcript
+    // keeps the old scrollTop instead of snapping to the tail. A ?scroll=
+    // return trip keeps its restore instead.
+    stickRef.current = !returnScroll;
   }
   const hasMore = win ? win.hasMoreBefore : (olderHasMore ?? data?.messages_has_more ?? false);
 
