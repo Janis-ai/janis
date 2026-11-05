@@ -1007,7 +1007,7 @@ export function systemPrompt(
         : '') +
         (handoffOff
           ? '\nThere is no human escalation here — no team exists to hand the conversation to. Never emit [HANDOFF], [OFFER_HUMAN] or [CANCEL_HANDOFF], and never offer, promise or mention a human teammate — not to rescue a hard question, not to appease frustration. Resolve what you can; for what you genuinely cannot do, say plainly that you cannot and point the customer to whatever contact path your context actually provides (a support email, booking link or help page — never invent one).'
-          : '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. A bare "human", "agent", "real person" or "customer support" IS an explicit ask — go straight to [HANDOFF], never [OFFER_HUMAN], and never answer an ask by asking whether they want one. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, mild pushback, or a tool that failed while the customer\'s goal still has a working path (route them to that path instead — e.g. a failed draft-order attempt still leaves checkout in their cart), and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.'),
+          : '\nEscalation, two levels. If the customer explicitly asks for a human — or just confirmed wanting one after you offered — give the best short answer you can first (a partial answer, a workaround, or what to search for), then end with [HANDOFF] on its own line. Whatever you write before the tag is what the customer sees — acknowledge the handoff briefly, in the customer\'s own language. A bare "human", "agent", "real person" or "customer support" IS an explicit ask — go straight to [HANDOFF], never [OFFER_HUMAN], and never answer an ask by asking whether they want one. Offering a human is a last resort: end with [OFFER_HUMAN] on its own line ONLY when the customer is stuck or clearly frustrated, or needs something you genuinely cannot do — never as a fallback for an imperfect answer, a clarifying exchange, mild pushback, or a tool that failed while the customer\'s goal still has a working path (route them to that path instead — e.g. a failed draft-order attempt still leaves checkout in their cart), and at most once per conversation. When unsure, ask a clarifying question instead. Never emit [HANDOFF] unless the customer clearly asked for or agreed to a human. If the customer declines an offered human or makes clear they no longer want one, reply briefly and end with [CANCEL_HANDOFF] on its own line. The tags are the ONLY thing that alerts the team — never say a human is joining, being fetched, or will take over unless the reply ends with [HANDOFF] or [OFFER_HUMAN]. An untagged promise of a human reaches the customer as a lie.'),
     );
     parts.push(
       // Real incident: the model read a plan-card tap ("Choose Free") as a
@@ -5700,6 +5700,37 @@ const HANDOFF_FALLBACKS = [
   'Got it — bringing in a human teammate now.',
 ];
 
+/** Bare-tag fallback, localized: the model wrote nothing before its tag,
+ *  so compose the "a human is connecting" line in the customer's language
+ *  with a cheap one-shot call — same mechanism every other reply uses.
+ *  A failed or empty compose keeps the canned English lines. */
+async function localizedHandoffLine(
+  db: Db,
+  agent: AgentRow,
+  history: { role: string; content: string | ContentPart[] }[],
+): Promise<string> {
+  const canned = pick(HANDOFF_FALLBACKS);
+  const sample = [...history]
+    .reverse()
+    .filter((m) => m.role === 'user')
+    .slice(0, 3)
+    .reverse()
+    .map((m) => contentText(m.content))
+    .filter(Boolean)
+    .join('\n');
+  if (!sample) return canned;
+  try {
+    const res = await complete(
+      await llmFor(db, agent),
+      'You write the single line a chat assistant says as it hands the customer to a human teammate — short, warm, and in the SAME language the customer has been writing in. Output only the line.',
+      [{ role: 'user', content: sample }],
+    );
+    const line = res.text?.trim();
+    if (line && line.length < 240) return line;
+  } catch {}
+  return canned;
+}
+
 /** Inbound text that plainly asks for a human — a bare "human", "real
  *  person", "speak to an agent", etc. Used to salvage the handoff when the
  *  model promises one but forgets the tag. */
@@ -7214,7 +7245,7 @@ async function replyAsHostedAgent(
       // customer gets more than the bare "human is on the way" notice, then
       // still flag the handoff. A bare [HANDOFF] still tells the customer
       // a human is coming — silence reads as a dead chat.
-      const partial = tag.partial || pick(HANDOFF_FALLBACKS);
+      const partial = tag.partial || (await localizedHandoffLine(db, agent, history));
       const events: Parameters<typeof processEvents>[2] = [];
       events.push({
         type: 'message_out',
@@ -7265,7 +7296,7 @@ async function replyAsHostedAgent(
           {
             type: 'message_out',
             conversation_id: externalId,
-            text: kept || pick(HANDOFF_FALLBACKS),
+            text: kept || (await localizedHandoffLine(db, agent, history)),
             payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
           },
           {
@@ -7362,7 +7393,7 @@ async function replyAsHostedAgent(
         {
           type: 'message_out',
           conversation_id: externalId,
-          text: cleanReply || pick(HANDOFF_FALLBACKS),
+          text: cleanReply || (await localizedHandoffLine(db, agent, history)),
           payload: { via: 'hosted', ...linkFlag, ...buttonFlag, ...widgetFlag, ...inspectorFlag, ...(openUrl ? { open_url: openUrl } : {}) },
         },
         {
