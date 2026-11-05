@@ -123,6 +123,87 @@ describe('bot ingest', () => {
     expect(other).toBeUndefined();
   }, 20_000);
 
+  it('webhook-backed conv: card call poll-replies without ingesting a copy', async () => {
+    const agent = await agentFor(KEY);
+    const [ch] = await db
+      .insert(channels)
+      .values({
+        workspaceId: wsId,
+        agentId: agent.id,
+        kind: 'chatfuel',
+        name: 'Chatfuel OAuth',
+        credentials: { access_token: 'page-tok' },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'chatfuel:psid-pair', userProfile: {} })
+      .returning();
+    const { channelBindings } = await import('../db/schema.js');
+    await db
+      .insert(channelBindings)
+      .values({ channelId: ch.id, conversationId: conv.id, platformUserId: 'psid-pair' });
+    const now = new Date();
+    await db.insert(messages).values([
+      // the webhook half already committed — mid-stamped, no via
+      { conversationId: conv.id, direction: 'in', text: 'paired text',
+        payload: { mid: 'm_pair1' }, createdAt: now },
+      { conversationId: conv.id, direction: 'out', text: 'the reply',
+        createdAt: new Date(+now + 1000) },
+    ]);
+    const r = await app.request(`/bot/${KEY}/chatfuel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ 'messenger user id': 'psid-pair', 'user input': 'paired text' }),
+    });
+    const body = JSON.stringify(await r.json());
+    expect(body).toContain('the reply');
+    // the card's copy was NOT stored — the delivery stays one inbound
+    const ins = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.conversationId, conv.id), eq(messages.direction, 'in')));
+    expect(ins).toHaveLength(1);
+  }, 20_000);
+
+  it('webhook copy of a card-ingested message stands down', async () => {
+    const agent = await agentFor(KEY);
+    const [ch] = await db
+      .insert(channels)
+      .values({
+        workspaceId: wsId,
+        agentId: agent.id,
+        kind: 'chatfuel',
+        name: 'CF ingress',
+        credentials: {},
+      })
+      .returning();
+    const { handleChannelMessage } = await import('../services/channelIngress.js');
+    await handleChannelMessage(db, ch, {
+      objectId: '',
+      senderId: 'psid-pair2',
+      text: 'hello again',
+      payload: { via: 'chatfuel' },
+    });
+    // the webhook half arrives second — same text, mid-stamped: stands down
+    await handleChannelMessage(db, ch, {
+      objectId: '',
+      senderId: 'psid-pair2',
+      text: 'hello again',
+      messageId: 'm_x1',
+    });
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'chatfuel:psid-pair2'))
+      .limit(1);
+    const ins = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.conversationId, conv.id), eq(messages.direction, 'in')));
+    expect(ins).toHaveLength(1);
+  });
+
   it('card response skips internal/system-marker rows', async () => {
     const agent = await agentFor(KEY);
     const [conv] = await db

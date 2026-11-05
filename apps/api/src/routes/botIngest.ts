@@ -192,35 +192,61 @@ export function botIngestRoutes(db: Db) {
     if (!channel) return c.json(emptyFor(flavor));
 
     const since = new Date();
-    // The same message can arrive twice when the page is ALSO subscribed to
-    // our Meta webhook (secondary receiver) and the bot card forwards it —
-    // Meta's mid doesn't reach the card, so dedup on sender+text+window.
+    // The same customer message can arrive twice — once via the page's Meta
+    // webhook (mid-stamped), once via the bot card (via-stamped). Each
+    // delivery has one of each, so counting halves separates a second COPY
+    // (completes a pair) from a genuine REPEAT (tips the balance) — paired
+    // deliveries sit at v == m.
     if (norm.text) {
-      const [dup] = await db
-        .select({ id: messages.id })
-        .from(messages)
-        .innerJoin(conversations, eq(messages.conversationId, conversations.id))
-        .where(
-          and(
-            eq(conversations.agentId, agent.id),
-            inArray(
-              conversations.externalId,
-              ['messenger', 'instagram', 'chatfuel', 'manychat'].map(
-                (k) => `${k}:${norm.userId}`,
+      const matching = () =>
+        db
+          .select({
+            id: messages.id,
+            convId: messages.conversationId,
+            via: sql<string | null>`${messages.payload}->>'via'`,
+            mid: sql<string | null>`${messages.payload}->>'mid'`,
+          })
+          .from(messages)
+          .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+          .where(
+            and(
+              eq(conversations.agentId, agent.id),
+              inArray(
+                conversations.externalId,
+                ['messenger', 'instagram', 'chatfuel', 'manychat'].map(
+                  (k) => `${k}:${norm.userId}`,
+                ),
               ),
+              eq(messages.direction, 'in'),
+              eq(messages.text, norm.text),
+              gt(messages.createdAt, new Date(Date.now() - 90_000)),
             ),
-            eq(messages.direction, 'in'),
-            eq(messages.text, norm.text),
-            gt(messages.createdAt, new Date(Date.now() - 90_000)),
-          ),
-        )
-        .limit(1);
-      if (dup) {
+          );
+      // An OAuth'd (webhook-backed) channel is fed by Meta — an unpaired
+      // webhook copy means THIS call is the pair's other half, a reply
+      // poller only. A credless channel has no webhook; any prior copy is
+      // a duplicate card call.
+      const webhookBacked =
+        flavor === 'chatfuel' &&
+        Boolean((channel.credentials as ChannelCredentials).access_token);
+      const isDup = (rows: Awaited<ReturnType<typeof matching>>) => {
+        const v = rows.filter((r) => r.via === flavor).length;
+        const m = rows.filter((r) => r.via !== flavor && r.mid).length;
+        return webhookBacked ? v < m : rows.length > 0;
+      };
+      let rows = await matching();
+      // Meta's copy may still be in flight when the card lands — give it a
+      // few seconds before treating the card's copy as the real one.
+      for (let i = 0; webhookBacked && !isDup(rows) && i < 16; i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        rows = await matching();
+      }
+      if (isDup(rows)) {
+        const convId = (rows.find((r) => r.mid) ?? rows[0]).convId;
         const [conv] = await db
           .select({ id: conversations.id, state: conversations.state })
           .from(conversations)
-          .innerJoin(messages, eq(messages.conversationId, conversations.id))
-          .where(eq(messages.id, dup.id))
+          .where(eq(conversations.id, convId))
           .limit(1);
         if (!conv || conv.state === 'human' || (await pushOwnsDelivery(db, conv.id)))
           return c.json(emptyFor(flavor));

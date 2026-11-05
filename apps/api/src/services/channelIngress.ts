@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import type { UserProfile } from '@janis/shared';
 import { contactForBinding, linkConversationContact } from '../lib/contacts.js';
 import type { Db } from '../db/client.js';
@@ -780,6 +780,31 @@ export async function handleChannelMessage(
       )
       .limit(1);
     if (dup) return;
+  }
+
+  // Bot-platform double-feed: a card-ingested copy (via-stamped) and this
+  // Meta copy are halves of one delivery. An unpaired card copy already
+  // committed → stand down; its pipeline run owns the reply. Genuine
+  // repeats keep the counts balanced (each delivery pairs both halves) so
+  // they still ingest — same rule serves card retries from botIngest.
+  if ((channel.kind === 'chatfuel' || channel.kind === 'manychat') && msg.text) {
+    const halves = await db
+      .select({
+        via: sql<string | null>`${messages.payload}->>'via'`,
+        mid: sql<string | null>`${messages.payload}->>'mid'`,
+      })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conv.id),
+          eq(messages.direction, 'in'),
+          eq(messages.text, msg.text),
+          gt(messages.createdAt, new Date(Date.now() - 90_000)),
+        ),
+      );
+    const cardCopies = halves.filter((r) => r.via === channel.kind).length;
+    const metaCopies = halves.filter((r) => r.via !== channel.kind && r.mid).length;
+    if (cardCopies > metaCopies) return;
   }
 
   const user = defined(conv.userProfile as UserProfile);
