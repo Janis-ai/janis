@@ -1444,7 +1444,9 @@ export function extractLearns(text: string): { text: string; learns: string[] } 
  * (Messenger/IG quick replies, WhatsApp buttons, webchat chips) — and
  * "ASK: email|phone" lines that request a contact field through the
  * channel's native share affordance where one exists. Stripped from the
- * text and returned for payload.quick_replies. WhatsApp shows max 3 and
+ * text and returned for payload.quick_replies. An invented kind (ASK:
+ * name, ASK: order number) matches no control — still stripped so the
+ * directive never leaks into the customer-visible text. WhatsApp shows max 3 and
  * truncates titles past ~20 chars, so cap tight. */
 export function extractButtons(text: string): {
   text: string;
@@ -1454,9 +1456,10 @@ export function extractButtons(text: string): {
   const out = text
     .split('\n')
     .filter((line) => {
-      const ask = line.trim().match(/^ASK:\s*(email|phone)\s*$/i);
-      if (ask && buttons.length < 4) {
-        buttons.push({ type: ask[1].toLowerCase() as 'email' | 'phone' });
+      const ask = line.trim().match(/^ASK:\s*([a-z_]+(?:\s+[a-z_]+)*)\s*$/i);
+      const kind = ask?.[1].toLowerCase();
+      if (kind === 'email' || kind === 'phone') {
+        if (buttons.length < 4) buttons.push({ type: kind });
       }
       const m = line.trim().match(/^BUTTONS?:\s*(.+)$/i);
       if (m && buttons.length < 4) {

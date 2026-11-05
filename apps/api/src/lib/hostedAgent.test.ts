@@ -1805,6 +1805,14 @@ describe('extractButtons', () => {
     expect(r.text).toBe('Could I get your email?');
     expect(r.buttons).toEqual([{ type: 'email' }, 'skip for now', { type: 'phone' }]);
   });
+
+  it('strips invented ASK kinds — no control exists, the line is markup', () => {
+    const r = extractButtons(
+      'May I have your name?\nASK: name\nAnd your order?\nASK: order number\nASK: email',
+    );
+    expect(r.text).toBe('May I have your name?\nAnd your order?');
+    expect(r.buttons).toEqual([{ type: 'email' }]);
+  });
 });
 
 describe('extractWidgets', () => {
