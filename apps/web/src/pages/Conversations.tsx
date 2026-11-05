@@ -470,19 +470,16 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       const avail = w - 420 - 32;
       let colFit = colW;
       const railFit = railW;
-      if (!dragging && avail < colW + railW) {
-        if (avail >= 220 + railW) {
-          // Inbox absorbs the squeeze — details keeps full width.
-          colFit = avail - railW;
-        } else {
-          // Details can't fit at full width → it drawers (not a squeeze)
-          // and the inbox reclaims the freed space, back toward its own
-          // set width until it alone can't fit beside the conv floor.
-          colFit = Math.min(colW, Math.max(220, avail));
-        }
+      // Inbox absorbs the squeeze down to its 220 floor, then it's gone
+      // entirely — details outranks it and never narrows; once the rail
+      // can't fit at its set width it drawers instead (obscured = drawer,
+      // ⓘ button stays). Below list-floor + rail the list hides while
+      // the rail keeps its width beside the conv.
+      if (!dragging && avail < colW + railW && avail >= 220 + railW) {
+        colFit = avail - railW;
       }
-      const listNeed = dragging ? colW : 220;
-      const railNeed = dragging ? colW + railW : 220 + railW;
+      const listNeed = dragging ? colW : 220 + railW;
+      const railNeed = dragging ? colW + railW : railW;
       // Deadband only matters while a drag can oscillate the measure —
       // resize readings are stable, so release almost immediately.
       const db = dragging ? 48 : 8;
