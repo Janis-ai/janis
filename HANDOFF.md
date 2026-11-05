@@ -1419,3 +1419,8 @@ Three chatfuel-delivery fixes shipped + deployed (janis-api-01405-jzl+):
 - Pair-count dedup (v=card-stamped vs m=mid-stamped halves in 90s window)
   replaces the raced one-sided text dedup — webhook+card double-feed now
   collapses whichever copy lands second; genuine repeats still ingest.
+- Handoff line is localized: the model is told its pre-tag text is the
+  customer-facing line (acknowledge in the customer's language), and
+  bare-tag fallbacks compose a one-shot localized line via complete()
+  with canned English as the failure fallback. Escalation tests stub the
+  extra compose call.
