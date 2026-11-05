@@ -900,9 +900,9 @@ export async function provisionShopWorkspace(db: Db, row: ShopRow): Promise<Shop
  *  click-tracked flag. Cached briefly; this is a remote fetch on every
  *  embedded load otherwise. */
 const embedCache = new Map<string, { v: boolean | null; exp: number }>();
-export async function embedEnabled(db: Db, row: ShopRow): Promise<boolean | null> {
+export async function embedEnabled(db: Db, row: ShopRow, force = false): Promise<boolean | null> {
   const hit = embedCache.get(row.shop);
-  if (hit && hit.exp > Date.now()) return hit.v;
+  if (!force && hit && hit.exp > Date.now()) return hit.v;
   let out: boolean | null = null;
   try {
     const token = row.accessTokenEnc ? await adminToken(db, row).catch(() => null) : null;

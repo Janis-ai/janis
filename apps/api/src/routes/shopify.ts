@@ -168,9 +168,12 @@ export function shopifyPublicRoutes(db: Db) {
       out.quick_replies = cfg.quick_replies ?? [];
       // Billing + usage state for the plan card: current plan, this period's
       // message count, cap status, and any pending/active AppSubscription.
+      const reqBody = (await c.req.json().catch(() => null)) as {
+        refresh_embed?: boolean;
+      } | null;
       const [cap, enabled] = await Promise.all([
         row.workspaceId ? messageCap(db, row.workspaceId) : Promise.resolve(null),
-        embedEnabled(db, row),
+        embedEnabled(db, row, reqBody?.refresh_embed === true),
       ]);
       const [wsPlan] = await db
         .select({ plan: workspaces.plan, billingProvider: workspaces.billingProvider })

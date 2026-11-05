@@ -267,6 +267,7 @@ export default function ShopifyApp() {
     }
   };
   const [subscribing, setSubscribing] = useState('');
+  const [embedChecking, setEmbedChecking] = useState(false);
   const [planError, setPlanError] = useState('');
   const [cancelArmed, setCancelArmed] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -579,6 +580,25 @@ export default function ShopifyApp() {
       setPlanError(err instanceof Error ? err.message : 'could not cancel subscription');
     } finally {
       setCancelling(false);
+    }
+  };
+
+  // The theme probe caches server-side for 2 min — a merchant who just
+  // toggled the embed shouldn't wait out the TTL to see it flip.
+  const refreshEmbed = async () => {
+    setEmbedChecking(true);
+    try {
+      const res = await shopifyApi<{ embed_enabled?: boolean | null }>('/api/shopify/session', {
+        refresh_embed: true,
+      });
+      if (res.embed_enabled !== undefined)
+        setState((s) =>
+          s.kind === 'linked' ? { ...s, embedEnabled: res.embed_enabled ?? null } : s,
+        );
+    } catch {
+      /* keep the prior state — the strip still shows what we last knew */
+    } finally {
+      setEmbedChecking(false);
     }
   };
 
@@ -1596,6 +1616,25 @@ export default function ShopifyApp() {
               ) : (
                 '… checking storefront chat'
               )}
+              {state.embedEnabled === false ? (
+                <>
+                  {' · '}
+                  <button
+                    onClick={() => void refreshEmbed()}
+                    disabled={embedChecking}
+                    style={{
+                      background: 'none',
+                      border: 'none',
+                      padding: 0,
+                      color: '#2563eb',
+                      cursor: 'pointer',
+                      fontSize: 'inherit',
+                    }}
+                  >
+                    {embedChecking ? 'checking…' : 'check again'}
+                  </button>
+                </>
+              ) : null}
               {inbox && inbox.length > 0
                 ? ` · ${inbox.length} conversation${inbox.length === 1 ? '' : 's'}`
                 : ''}
