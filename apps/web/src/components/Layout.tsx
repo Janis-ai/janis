@@ -24,7 +24,7 @@ import { railBus, type RailRequest } from '../lib/railBus';
 import { DockContext, type DockTab, type TestWiring } from '../lib/dockContext';
 import { t } from '../lib/i18n';
 import { isEditableTarget } from '../lib/keys';
-import { usePanelWidth } from '../lib/panelLayout';
+import { usePanelWidth, storedPanelWidth } from '../lib/panelLayout';
 import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronLeft, ChevronRight, ChevronsUpDown,
@@ -491,23 +491,60 @@ export default function Layout() {
   // (auto = collapsed on conversation pages, expanded elsewhere, so conv
   // view defaults to the icon rail without stealing the user's choice).
   // ⌘B flips the effective state into an explicit pref.
-  const [navPref, setNavPrefState] = useState<'collapsed' | 'expanded' | null>(() => {
-    const v = localStorage.getItem('nav.collapse');
-    return v === 'collapsed' || v === 'expanded'
-      ? v
-      : localStorage.getItem('nav.collapsed') === '1'
-        ? 'collapsed'
-        : null;
-  });
+  // The pref (like panel widths) only holds at the window size it was
+  // set — a resize reverts to auto so the fit cascade can reclaim space
+  // instead of a stale expand pinning the layout wide forever.
+  const readNavPref = (): 'collapsed' | 'expanded' | null => {
+    try {
+      const s = JSON.parse(localStorage.getItem('nav.collapse') ?? 'null') as
+        | { v?: string; vw?: number } | string | null;
+      const v = typeof s === 'string' ? s : s?.v;
+      const vw = typeof s === 'object' && s ? s.vw : undefined;
+      if ((v === 'collapsed' || v === 'expanded') && (vw === undefined || vw === window.innerWidth))
+        return v;
+    } catch { /* junk */ }
+    return localStorage.getItem('nav.collapsed') === '1' ? 'collapsed' : null;
+  };
+  const [navPref, setNavPrefState] = useState<'collapsed' | 'expanded' | null>(readNavPref);
   const setNavPref = (v: 'collapsed' | 'expanded' | null) => {
     setNavPrefState(v);
-    if (v) localStorage.setItem('nav.collapse', v);
+    if (v) localStorage.setItem('nav.collapse', JSON.stringify({ v, vw: window.innerWidth }));
     else localStorage.removeItem('nav.collapse');
   };
-  // The nav yields first on conversation pages: icon rail whenever the
-  // pref is unset — never locked, an explicit expand always wins (the
-  // conv split then compresses its own panels, details drawer last).
-  const navCollapsed = navPref === 'collapsed' || (navPref === null && isConvPage);
+  // The nav yields first on conversation pages, but only when all four
+  // panes genuinely can't fit at their live widths — the inbox column
+  // and details rail are the later victims. An explicit expand always
+  // wins (the conv split then compresses its own panels). Measured in
+  // convl units so it agrees exactly with the split's own cascade.
+  const [navTight, setNavTight] = useState(false);
+  useEffect(() => {
+    if (!isConvPage) return;
+    const measure = () => {
+      const layout = document.querySelector('.conv-layout');
+      const sb = document.querySelector('.sidebar');
+      if (!layout || !sb) return;
+      // convl if the nav were expanded — compare against the full need.
+      const convlIfExpanded =
+        layout.clientWidth + sb.clientWidth - navW;
+      const need =
+        storedPanelWidth('conv.colw', 290, 220, 480) +
+        420 +
+        storedPanelWidth('conv.railw', 280, 240, 560) +
+        32;
+      setNavTight(convlIfExpanded < need);
+      const p = readNavPref();
+      setNavPrefState((cur) => (cur === p ? cur : p));
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    window.addEventListener('panel-resize', measure);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('panel-resize', measure);
+    };
+  }, [isConvPage, navW]);
+  const navCollapsed =
+    navPref === 'collapsed' || (navPref === null && isConvPage && navTight);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && !isEditableTarget(e.target)) {

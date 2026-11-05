@@ -114,13 +114,10 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 body.panel-resize { cursor: col-resize; user-select: none; }
 body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .inbox-col { transition: none !important; }
 @media (max-width: 720px) { .nav-grip { display: none; } }
-@media (max-width: 999px) { .conv-col-grip { display: none; } }
-/* Below the list-hide point the sidebar goes entirely too — the conv
-   surface claims the whole width until the ≤720 drawer takes over. */
-@media (max-width: 999px) {
-  .layout.conv-open .sidebar { display: none; }
-  .layout.conv-open .nav-grip { display: none; }
-}
+/* The column grip goes with the column — whether the JS fit cascade hid
+   it (list-tight) or the mobile drawer took over (≤720). */
+@media (max-width: 720px) { .conv-col-grip { display: none; } }
+.conv-layout.list-tight .conv-col-grip { display: none; }
 @container convl (max-width: 680px) { .conv-rail-grip { display: none; } }
 @media (max-width: 1400px) { .layout.dock-open .conv-rail-grip { display: none; } }
 /* Mobile: the sidebar is an overlay drawer, so collapse is meaningless —
@@ -1678,7 +1675,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .inbox-col, .conv-inbox { transition: width .22s ease; }
 /* The detail pane eases in while the column shrinks beside it. */
 @keyframes conv-pane-in { from { opacity: 0; transform: translateX(28px); } }
-@media (min-width: 1000px) {
+@media (min-width: 721px) {
   .conv-layout > .conv-main { animation: conv-pane-in .22s ease; }
 }
 /* The split column reuses the full inbox's .filters row — icon-only
@@ -1721,7 +1718,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-inbox .tail-dots { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .conv-inbox .tail-dots:empty { display: none; }
 .conv-inbox .tail-dots .alert-dot, .conv-inbox .tail-dots .unread-dot { width: 7px; height: 7px; }
-@media (min-width: 1000px) {
+@media (min-width: 721px) {
   /* The column kisses the rail — .main's left padding drops so the inbox
      is the left edge, carrying its own content inset. */
   .layout.conv-open .main { padding-left: 0; }
@@ -1777,6 +1774,10 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    The column itself shrinks before the transcript's floor does. */
 .conv-layout.rail-tight .conv-rail-grip { display: none; }
 .conv-layout.rail-tight .conv-inbox { max-width: calc(100% - 436px); }
+/* list-tight — the inbox is the second-to-last victim of the fit
+   cascade: it hides before the details rail does, leaving
+   nav-rail + conv + details as the narrow desktop arrangement. */
+.conv-layout.list-tight .conv-inbox { display: none; }
 .conv-layout.rail-tight .conv-side {
   position: absolute; top: 0; right: 0; bottom: 0; z-index: 75;
   width: min(88vw, 340px);

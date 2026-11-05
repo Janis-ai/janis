@@ -1,4 +1,4 @@
-import { useState, type PointerEvent } from 'react';
+import { useEffect, useState, type PointerEvent } from 'react';
 
 /** localStorage-backed boolean (same pattern as useSticky, but lives in
  *  lib so non-page components like Layout don't import a page file). */
@@ -16,8 +16,12 @@ export function useStoredFlag(key: string): [boolean, (v: boolean) => void] {
 /** Read a stored panel width the way usePanelWidth clamps it — for
  *  sibling code that needs the live value without owning the state. */
 export function storedPanelWidth(key: string, def: number, lo: number, hi: number): number {
-  const n = Number(localStorage.getItem(key));
-  return Number.isFinite(n) && n >= lo ? Math.min(hi, n) : def;
+  try {
+    const s = JSON.parse(localStorage.getItem(key) ?? 'null') as { w?: number; vw?: number } | null;
+    if (s && s.vw === window.innerWidth && Number.isFinite(s.w))
+      return Math.min(hi, Math.max(lo, s.w!));
+  } catch { /* plain-number legacy or junk */ }
+  return def;
 }
 
 /** Draggable panel edge — the stored width plus props to spread on a
@@ -35,13 +39,25 @@ export function usePanelWidth(
   sign = 1,
 ) {
   const [w, setW] = useState(() => {
-    const n = Number(localStorage.getItem(key));
-    const cap = typeof max === 'function' ? Number.MAX_SAFE_INTEGER : max;
-    return Number.isFinite(n) && n >= min ? Math.min(cap, n) : def;
+    // A user-set width is only honored at the window size it was dragged
+    // at — a resize re-optimizes the panes, so stored values carry the
+    // viewport they were set against and miss when it changes.
+    try {
+      const s = JSON.parse(localStorage.getItem(key) ?? 'null') as { w?: number; vw?: number } | null;
+      const cap = typeof max === 'function' ? Number.MAX_SAFE_INTEGER : max;
+      if (s && s.vw === window.innerWidth && Number.isFinite(s.w) && (s.w ?? 0) >= min)
+        return Math.min(cap, s.w!);
+    } catch { /* plain-number legacy or junk */ }
+    return def;
   });
+  useEffect(() => {
+    const onR = () => setW(def);
+    window.addEventListener('resize', onR);
+    return () => window.removeEventListener('resize', onR);
+  }, [def]);
   const set = (n: number) => {
     setW(n);
-    localStorage.setItem(key, String(n));
+    localStorage.setItem(key, JSON.stringify({ w: n, vw: window.innerWidth }));
     window.dispatchEvent(new Event('panel-resize'));
   };
   const gripProps = {

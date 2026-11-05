@@ -445,34 +445,53 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       : storedPanelWidth('conv.railw', 280, 240, 560);
     return Math.min(480, Math.max(220, (layout?.clientWidth ?? 480) - 420 - rail - 32));
   });
-  // "Rail in view" is a real space cost — the drawer flip can't be the
-  // flat 680px it used to be: it fires only when col + 420 conv floor +
-  // rail genuinely don't fit (hysteresis stops a boundary drag from
-  // oscillating the mode).
+  // Fit cascade — priority: conv (420 floor) > details rail > inbox
+  // column > nav. As width shrinks the INBOX yields before the rail
+  // does; while the user drags a panel wider the order inverts so the
+  // rail yields to their asserted width instead. Hysteresis (48px)
+  // stops a boundary drag oscillating a mode.
   useEffect(() => {
     const layout = layoutEl();
     if (!layout || !openConvId) return;
     let tight = false;
+    let listTight = false;
     const measure = () => {
-      // Minimized-first: the rail only yields to the drawer when it
-      // can't fit against the OTHER panels' minimums — the column
-      // compresses to its 220 floor before the rail is asked to move.
-      const need =
-        220 + 420 + storedPanelWidth('conv.railw', 280, 240, 560) + 32;
-      const next = tight ? layout.clientWidth < need + 64 : layout.clientWidth < need;
-      if (next !== tight) {
-        tight = next;
+      const w = layout.clientWidth;
+      const colW = storedPanelWidth('conv.colw', 290, 220, 480);
+      const railW = storedPanelWidth('conv.railw', 280, 240, 560);
+      const listNeed = colW + 420 + railW + 32;
+      const dragging = document.body.classList.contains('panel-resize');
+      // Not dragging: the rail holds until it alone can't fit beside
+      // the conv floor — the inbox is the earlier victim. Dragging:
+      // the rail yields first so the panel being resized never
+      // disappears mid-drag; the inbox only goes when it can't fit
+      // beside the conv floor at all.
+      const railNeed = dragging ? listNeed : 420 + railW + 32;
+      const listFit = dragging ? colW + 420 + 32 : listNeed;
+      const nextTight = tight ? w < railNeed + 48 : w < railNeed;
+      const nextList = listTight ? w < listFit + 16 : w < listFit;
+      if (nextTight !== tight) {
+        tight = nextTight;
         layout.classList.toggle('rail-tight', tight);
+      }
+      if (nextList !== listTight) {
+        listTight = nextList;
+        layout.classList.toggle('list-tight', listTight);
       }
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(layout);
     window.addEventListener('panel-resize', measure);
+    // A drag's last set() fires before pointerup drops .panel-resize —
+    // re-measure on release so the not-dragging cascade lands.
+    window.addEventListener('pointerup', measure);
     return () => {
       ro.disconnect();
       window.removeEventListener('panel-resize', measure);
+      window.removeEventListener('pointerup', measure);
       layout.classList.remove('rail-tight');
+      layout.classList.remove('list-tight');
     };
   }, [openConvId]);
   const listRef = useRef<HTMLDivElement>(null);
