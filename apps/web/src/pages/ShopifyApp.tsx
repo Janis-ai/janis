@@ -82,6 +82,7 @@ type InboxConv = {
   state: string;
   is_unread: boolean;
   last_message_preview: string | null;
+  last_message_direction: string | null;
   last_message_at: string | null;
   user_profile: { name?: string; first_name?: string; email?: string } | null;
 };
@@ -96,6 +97,11 @@ type InboxMsg = {
 
 const convName = (cv: InboxConv) =>
   cv.user_profile?.name || cv.user_profile?.first_name || cv.user_profile?.email || 'Visitor';
+
+const convPreview = (cv: InboxConv) =>
+  cv.last_message_direction === 'out' || cv.last_message_direction === 'human'
+    ? `You: ${cv.last_message_preview ?? ''}`
+    : (cv.last_message_preview ?? '');
 
 async function loadAppBridge(apiKey: string): Promise<NonNullable<Window['shopify']> | null> {
   // Re-running this effect must NOT re-inject the script — a second eval can
@@ -1325,7 +1331,7 @@ export default function ShopifyApp() {
                               textOverflow: 'ellipsis',
                             }}
                           >
-                            {cv.last_message_preview ?? ''}
+                            {convPreview(cv)}
                           </div>
                         </button>
                       ))}
@@ -1788,7 +1794,7 @@ export default function ShopifyApp() {
                       className="muted"
                       style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                     >
-                      {cv.last_message_preview ?? ''}
+                      {convPreview(cv)}
                     </span>
                     <span className="muted" style={{ flexShrink: 0 }}>
                       {cv.last_message_at ? fmtTime(cv.last_message_at) : ''}

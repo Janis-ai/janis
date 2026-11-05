@@ -94,6 +94,7 @@ export function toConversation(
     tags: row.tags ?? [],
     last_message_at: iso(row.lastMessageAt),
     last_message_preview: row.lastMessagePreview,
+    last_message_direction: row.lastMessageDirection ?? null,
     open_alert_count: openAlertCount,
     // List/search pass the bound-channel check; other callers fall back to
     // the ':test:'-namespaced externalId (covers every internal-channel

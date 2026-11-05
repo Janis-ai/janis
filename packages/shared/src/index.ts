@@ -783,6 +783,8 @@ export const Conversation = z.object({
   tags: z.array(z.string()),
   last_message_at: z.string().nullable(),
   last_message_preview: z.string().nullable(),
+  /** Direction of the last message — 'in' visitor, 'out' agent, 'human' staff. */
+  last_message_direction: z.enum(['in', 'out', 'human']).nullable().optional(),
   open_alert_count: z.number(),
   /** Internal test-channel thread — runs the real pipeline but is excluded
    *  from the Inbox badge and labeled Test in the list. */
