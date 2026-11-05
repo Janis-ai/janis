@@ -504,7 +504,20 @@ export default function Layout() {
     if (v) localStorage.setItem('nav.collapse', v);
     else localStorage.removeItem('nav.collapse');
   };
-  const navCollapsed = navPref === 'collapsed' || (navPref === null && isConvPage);
+  // Width-driven auto-collapse on conv pages — the icon rail buys the
+  // inbox column ~150px before the list itself has to hide (below
+  // ~1000px CSS drops both: sidebar and .conv-inbox).
+  const [navNarrow, setNavNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 1399px)').matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 1399px)');
+    const on = () => setNavNarrow(mq.matches);
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, []);
+  const navCollapsed =
+    navPref === 'collapsed' || (isConvPage && (navPref === null || navNarrow));
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && !isEditableTarget(e.target)) {
