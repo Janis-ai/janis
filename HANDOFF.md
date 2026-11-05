@@ -102,7 +102,16 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   (Mike shipped it into a real thread).
 - ConversationPage resets all per-thread state on [id] change — a
   pending outbox bubble/draft followed you into every conversation.
-  37c9be1c 206129dc 7ae64185 dc6369b7 / janis-api-01450-kgl+.
+- touchTakeover: suggest/status/run-action/send-component reset
+  humanSince+resumeWarnedAt — the auto-resume clock used to lapse
+  mid-draft so the agent answered around the operator ('pressed refresh
+  and a form went out with no approval' — that was the agent replying
+  after silent resume).
+- Suggest card shows Thinking… during regeneration (stale draft used to
+  sit there looking idle), dismiss is optimistic (cache-first), and
+  component picks show a Resolving state.
+  37c9be1c 206129dc 7ae64185 dc6369b7 3f7b12dc e8b0b7c0 /
+  janis-api-01450-kgl + 01451-jn4 + final.
 ## 2026-11-05g — Widget-annotation echoes stripped; run-action idempotent
 - '[form shown]'/'[cards shown]'/'[options shown]' are transcript CONTEXT
   markup — the model echoed them into drafts verbatim. stripTranscriptNotes
