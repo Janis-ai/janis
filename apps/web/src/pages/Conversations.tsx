@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
-import { Link, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'react';
+import { Link, Navigate, useLocation, useNavigate, useOutlet, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
 import { useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
@@ -423,8 +423,36 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const convList = infQ.data?.pages.flatMap((p) => p.conversations);
   const convsPending = infQ.isPending;
   const total = infQ.data?.pages[0]?.total ?? 0;
+  // The conversation detail mounts inside this page (nested route) — the
+  // same column node resizes into the split view instead of remounting:
+  // filters, scroll, selection and every row's DOM survive the switch.
+  const outlet = useOutlet();
+  const location = useLocation();
+  const openConvId = location.pathname.startsWith(`${inboxBase}/`)
+    ? location.pathname.slice(inboxBase.length + 1).split('/')[0]
+    : null;
   const listRef = useRef<HTMLDivElement>(null);
   const sentRef = useRef<HTMLDivElement>(null);
+  const colRef = useRef<HTMLDivElement>(null);
+  // Full mode scrolls the .conv-list; split mode the .conv-inbox column —
+  // hand the scroll offset across the class flip so the resize doesn't
+  // look like a jump. The capture happens here in render: post-commit the
+  // element that stopped being the scroller reads scrollTop 0 already.
+  const openListScroll = useRef(0);
+  const openColScroll = useRef(0);
+  if (openConvId) openListScroll.current = listRef.current?.scrollTop ?? 0;
+  else openColScroll.current = colRef.current?.scrollTop ?? 0;
+  const wasOpen = useRef<boolean | null>(null);
+  useLayoutEffect(() => {
+    const open = Boolean(openConvId);
+    const col = colRef.current;
+    const list = listRef.current;
+    if (wasOpen.current !== null && wasOpen.current !== open && col && list) {
+      if (open) col.scrollTop = openListScroll.current;
+      else list.scrollTop = openColScroll.current;
+    }
+    wasOpen.current = open;
+  }, [openConvId]);
   useEffect(() => {
     const el = sentRef.current;
     if (!el) return;
@@ -434,11 +462,11 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           void infQ.fetchNextPage();
         }
       },
-      { root: listRef.current, rootMargin: '200px' },
+      { root: openConvId ? colRef.current : listRef.current, rootMargin: '200px' },
     );
     obs.observe(el);
     return () => obs.disconnect();
-  }, [infQ.hasNextPage, infQ.isFetchingNextPage, infQ.fetchNextPage]);
+  }, [infQ.hasNextPage, infQ.isFetchingNextPage, infQ.fetchNextPage, openConvId]);
   const knownTags = [...new Set((convList ?? []).flatMap((c) => c.tags ?? []))].sort();
   const { data: agents, isPending: agentsPending } = useAgents();
   const { data: views } = useViews();
@@ -681,9 +709,14 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           </div>
         </div>
       )}
+      {/* The detail route renders beside this column (nested outlet); the
+          same nodes carry .inbox-col/.conv-inbox so opening a conversation
+          is a resize, not a remount — scroll, filters, selection survive. */}
+      <div className={openConvId ? 'conv-layout' : 'inbox-page'}>
+      <div ref={colRef} className={openConvId ? 'conv-inbox' : 'inbox-col'}>
       {/* Pinned under the mobile-bar on phones — the list scrolls beneath. */}
-      <div className="inbox-head">
-      {drill && (
+      <div className={openConvId ? 'conv-inbox-head' : 'inbox-head'}>
+      {drill && !openConvId && (
         <div className="row" style={{ marginBottom: 8 }}>
           <span className="chip">
             Topic: {drill.intent}
@@ -840,7 +873,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       </div>
       </div>
 
-      {selected.size > 0 && (
+      {selected.size > 0 && !openConvId && (
         <div className="filters bulk-bar">
           <label className="check">
             <input
@@ -925,7 +958,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
 
       {/* The list is the scroll region — .main locks when .inbox-head is
           present, so only rows move. */}
-      <div className={`conv-list${selected.size ? ' sel' : ''}`} ref={listRef}>
+      <div className={`conv-list${selected.size && !openConvId ? ' sel' : ''}`} ref={listRef}>
       {searching ? (
         searchPending ? (
           <div className="row" style={{ justifyContent: 'center', marginTop: 24 }}>
@@ -936,9 +969,9 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         <>
           {hits && hits.conversations.length === 0 && <Empty>No matches.</Empty>}
           {hits?.conversations.map((c, i) => (
-            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} selMode={selected.size > 0} base={inboxBase} onAction={rowAction} />
+            <ConvRow key={c.id} c={c} agentName={openConvId ? undefined : agentName(c)} selected={openConvId ? c.id === openConvId : selected.has(c.id)} onToggle={openConvId ? undefined : toggle} focused={focusIdx === i} selMode={!openConvId && selected.size > 0} base={inboxBase} onAction={openConvId ? undefined : rowAction} />
           ))}
-          {hits && hits.messages.length > 0 && (
+          {hits && hits.messages.length > 0 && !openConvId && (
             <div className="card" style={{ marginTop: 16 }}>
               <strong>Message hits</strong>
               {hits.messages.slice(0, 20).map((m) => (
@@ -977,7 +1010,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           {/* Select-all only exists to enter bulk mode — once something is
               checked the bulk bar carries its own select-all, so this row
               yields its space. */}
-          {selected.size === 0 && (convList?.length ?? 0) > 0 && (
+          {selected.size === 0 && !openConvId && (convList?.length ?? 0) > 0 && (
             <div className="conv-select-all">
               <label className="check">
                 <input
@@ -995,7 +1028,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             </div>
           )}
           {convList?.map((c, i) => (
-            <ConvRow key={c.id} c={c} agentName={agentName(c)} selected={selected.has(c.id)} onToggle={toggle} focused={focusIdx === i} selMode={selected.size > 0} base={inboxBase} onAction={rowAction} />
+            <ConvRow key={c.id} c={c} agentName={openConvId ? undefined : agentName(c)} selected={openConvId ? c.id === openConvId : selected.has(c.id)} onToggle={openConvId ? undefined : toggle} focused={focusIdx === i} selMode={!openConvId && selected.size > 0} base={inboxBase} onAction={openConvId ? undefined : rowAction} />
           ))}
           {/* The pager is the scroll itself — the sentinel fires
               fetchNextPage when the bottom enters view. */}
@@ -1005,11 +1038,16 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
               <span className="spin" />
             </div>
           )}
-          <div className="muted kb-hints" style={{ fontSize: 11, marginTop: 14, textAlign: 'center' }}>
-            j/k move · Enter open · e archive · s star · u read/unread · x select · ⌘K palette
-          </div>
+          {!openConvId && (
+            <div className="muted kb-hints" style={{ fontSize: 11, marginTop: 14, textAlign: 'center' }}>
+              j/k move · Enter open · e archive · s star · u read/unread · x select · ⌘K palette
+            </div>
+          )}
         </>
       )}
+      </div>
+      </div>
+      {outlet}
       </div>
     </>
   );

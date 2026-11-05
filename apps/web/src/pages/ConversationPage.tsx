@@ -4,31 +4,21 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Alert, Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
-import { useAgents, useConversation, useConversationBrief, useConversations, useInvalidateConversations, useMe, useSearch, useUsers } from '../api/hooks';
+import { useAgents, useConversation, useConversationBrief, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
 import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, surfaceLabel } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
 import { CorrectThisCard } from '../components/CorrectThis';
 import { type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 import { useScenarioMatch } from '../lib/scenarioMatch';
-import {
-  ConvRow,
-  ConvRowSkeleton,
-  EMPTY_FILTERS,
-  FILTER_GROUPS,
-  filterCount,
-  SNOOZE_OPTIONS,
-  snoozeMinutes,
-  useSticky,
-  type ConvFilters,
-} from './Conversations';
+import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
 import { ALERT_LABELS } from '../components/Layout';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { BookmarkPlus, Bot, Brain, ChevronLeft, Headset, Info, ListFilter, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, ScrollText, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
+import { BookmarkPlus, Bot, Brain, ChevronLeft, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, ScrollText, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -118,18 +108,11 @@ const SKEL_BUBBLES: [dir: 'in' | 'out', width: string, height: number][] = [
 ];
 
 function ConversationSkeleton() {
+  // The split inbox column is real content (the parent Conversations
+  // owns it) — the skeleton only stands in for the conversation side.
   return (
-    <div className="conv-layout" role="status" aria-label="Loading conversation">
-      <div className="conv-inbox" aria-hidden>
-        <div className="conv-inbox-head">
-          <span className="skel skel-btn" />
-          <span className="skel skel-field" />
-        </div>
-        <div className="conv-list">
-          {Array.from({ length: 16 }, (_, i) => <ConvRowSkeleton key={i} i={i} />)}
-        </div>
-      </div>
-      <div className="conv-main" aria-hidden>
+    <>
+      <div className="conv-main" role="status" aria-label="Loading conversation" aria-busy="true">
         <div className="conv-mobile-head">
           <span className="skel skel-ic" />
           <span className="skel skel-field" />
@@ -165,42 +148,18 @@ function ConversationSkeleton() {
           </div>
         ))}
       </aside>
-    </div>
+    </>
   );
 }
 
 export default function ConversationPage() {
   const params = useParams();
-  // Split-pane inbox (wide screens only — .conv-inbox is display:none
-  // below the breakpoint): the same browse list the row came from,
-  // scoped to the route's agent when there is one. It mirrors the
-  // inbox's own sticky filters so the column shows the same view.
-  const [inboxFilters, setInboxFilters] = useSticky<ConvFilters>('conv.filters', EMPTY_FILTERS);
-  const [inboxTab, setInboxTab] = useSticky<'attention' | 'all'>('conv.tab', 'all');
-  const [inboxMine, setInboxMine] = useSticky('conv.mine', false);
-  const [inboxQuery, setInboxQuery] = useSticky('conv.query', '');
-  const [inboxFilterOpen, setInboxFilterOpen] = useState(false);
-  const inboxFilterParams = {
-    states: inboxFilters.states.join(',') || undefined,
-    flags: inboxFilters.flags.join(',') || undefined,
-    signals: inboxFilters.signals.join(',') || undefined,
-    agent_id: params.agentId || undefined,
-    mine: inboxMine,
-  };
-  const inboxQ = useConversations({
-    attention: inboxTab === 'attention' || undefined,
-    ...inboxFilterParams,
-  });
-  const inboxSearch = useSearch(inboxQuery, {
-    attention: inboxTab === 'attention' || undefined,
-    ...inboxFilterParams,
-  });
-  const inboxSearching = inboxQuery.trim().length > 0;
-  const inboxList = inboxSearching
-    ? inboxSearch.data?.conversations
-    : inboxQ.data?.pages.flatMap((p) => p.conversations);
-  const inboxFilterCount = filterCount(inboxFilters) + (inboxMine ? 1 : 0) + (inboxTab === 'attention' ? 1 : 0);
-  const inboxBase = params.agentId ? `/agents/${params.agentId}/inbox` : '/conversations';
+  // The split inbox column is owned by the parent Conversations route —
+  // this page renders only .conv-main + .conv-side inside its .conv-layout.
+  // Route shapes: /conversations/:id (params.id = conv) and
+  // /agents/:agentId/inbox/:cid or /agents/:id/inbox/:cid nested
+  // (params.cid = conv, params.agentId/params.id = agent).
+  const agentParam = params.agentId ?? (params.cid ? params.id : undefined);
   const id = params.cid ?? params.id ?? '';
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
@@ -1054,7 +1013,7 @@ export default function ConversationPage() {
   const goBack = () => {
     const idx = (window.history.state as { idx?: number } | null)?.idx ?? 0;
     if (idx > 0) navigate(-1);
-    else navigate(params.agentId ? `/agents/${params.agentId}/inbox` : '/conversations');
+    else navigate(agentParam ? `/agents/${agentParam}/inbox` : '/conversations');
   };
 
   const hitWho = (m: Message): string =>
@@ -1092,104 +1051,8 @@ export default function ConversationPage() {
   };
 
   return (
-    <div className="conv-layout">
+    <>
       {confirmEl}
-      <div className="conv-inbox">
-        <div className="conv-inbox-head">
-          <span className="src-menu-wrap">
-            <button
-              className={`btn${inboxFilterCount ? ' primary' : ''}`}
-              onClick={() => setInboxFilterOpen((o) => !o)}
-              title="Filter conversations"
-              aria-label="Filter conversations"
-            >
-              <ListFilter size={14} style={{ verticalAlign: '-2px' }} />
-              {inboxFilterCount > 0 && <span className="filter-badge">{inboxFilterCount}</span>}
-            </button>
-            {inboxFilterOpen && (
-              <>
-                <div className="menu-backdrop" onClick={() => setInboxFilterOpen(false)} />
-                <div className="menu-pop filter-pop">
-                  <div className="filter-group">
-                    <label className="check filter-group-head">
-                      <input
-                        type="checkbox"
-                        checked={inboxTab === 'attention'}
-                        onChange={() => setInboxTab(inboxTab === 'attention' ? 'all' : 'attention')}
-                      />
-                      Needs attention
-                    </label>
-                  </div>
-                  {FILTER_GROUPS.map((g) => {
-                    const sel = inboxFilters[g.key];
-                    const values = g.options.map(([v]) => v);
-                    const all = values.every((v) => sel.includes(v));
-                    const some = values.some((v) => sel.includes(v));
-                    return (
-                      <div key={g.key} className="filter-group">
-                        <label className="check filter-group-head">
-                          <input
-                            type="checkbox"
-                            checked={all}
-                            ref={(el) => { if (el) el.indeterminate = some && !all; }}
-                            onChange={() => setInboxFilters({ ...inboxFilters, [g.key]: all ? [] : values })}
-                          />
-                          {g.label}
-                        </label>
-                        {g.options.map(([v, l]) => (
-                          <label key={v} className="check filter-opt">
-                            <input
-                              type="checkbox"
-                              checked={sel.includes(v)}
-                              onChange={() =>
-                                setInboxFilters({
-                                  ...inboxFilters,
-                                  [g.key]: sel.includes(v) ? sel.filter((x) => x !== v) : [...sel, v],
-                                })
-                              }
-                            />
-                            {l}
-                          </label>
-                        ))}
-                      </div>
-                    );
-                  })}
-                  <div className="filter-group">
-                    <label className="check filter-opt">
-                      <input
-                        type="checkbox"
-                        checked={inboxMine}
-                        onChange={(e) => setInboxMine(e.target.checked)}
-                      />
-                      Assigned to me
-                    </label>
-                  </div>
-                  <div className="filter-foot">
-                    <button
-                      className="link small"
-                      onClick={() => { setInboxFilters(EMPTY_FILTERS); setInboxMine(false); }}
-                    >
-                      Clear all
-                    </button>
-                  </div>
-                </div>
-              </>
-            )}
-          </span>
-          <SearchInput
-            className="search-box"
-            placeholder="Search…"
-            value={inboxQuery}
-            onChange={(e) => setInboxQuery(e.target.value)}
-            onClear={() => setInboxQuery('')}
-          />
-        </div>
-        <div className="conv-list">
-          {inboxList?.map((c2) => (
-            <ConvRow key={c2.id} c={c2} base={inboxBase} selected={c2.id === c.id} />
-          ))}
-        </div>
-      </div>
       <div className="conv-main">
         {/* Phone-only header (hidden ≥721px): back + who this is, pinned —
             the Slack-style frame the desktop sidebar provides for free. */}
@@ -2318,7 +2181,7 @@ export default function ConversationPage() {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 

@@ -216,11 +216,15 @@ export default function App() {
             </RequireAuth>
           }
         >
-          <Route path="/conversations" element={<Conversations />} />
+          {/* The inbox is the shell: its list stays mounted under the
+              detail route and resizes into the split column instead of
+              remounting (no refetch, scroll/selection preserved). */}
+          <Route path="/conversations" element={<Conversations />}>
+            <Route path=":id" element={<ConversationPage />} />
+          </Route>
           <Route path="/welcome" element={<Welcome />} />
           <Route path="/inbox" element={<Navigate to="/conversations" replace />} />
           <Route path="/channels" element={<Navigate to="/conversations" replace />} />
-          <Route path="/conversations/:id" element={<ConversationPage />} />
           <Route path="/contacts" element={<Contacts />} />
           <Route path="/contacts/:id" element={<ContactDetail />} />
           <Route path="/campaigns" element={<Campaigns />} />
@@ -230,8 +234,9 @@ export default function App() {
           <Route path="/agents/:id" element={<AgentOverview />} />
           {/* Agent context — every section is its own path so the sidebar
               can flip the whole nav between workspace and agent. */}
-          <Route path="/agents/:id/inbox" element={<AgentInbox />} />
-          <Route path="/agents/:agentId/inbox/:id" element={<ConversationPage />} />
+          <Route path="/agents/:id/inbox" element={<AgentInbox />}>
+            <Route path=":cid" element={<ConversationPage />} />
+          </Route>
           <Route path="/agents/:id/contacts" element={<AgentContacts />} />
           <Route path="/agents/:id/contacts/:cid" element={<ContactDetail />} />
           <Route path="/agents/:id/campaigns" element={<AgentCampaigns />} />

@@ -1600,6 +1600,22 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 /* Rows bleed edge-to-edge — the tint + hairlines span .main; the content
    inset lives in row padding so text still lines up under the head. */
 .conv-list { flex: 1; min-height: 0; overflow-y: auto; margin: 0 -24px; padding: 0; }
+/* The inbox is the detail view's shell — the same column node carries
+   .inbox-col (full width) or .conv-inbox (290px split column), so opening
+   a conversation is a width transition, not a remount. */
+.inbox-page { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.inbox-col { flex: 1 1 100%; width: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.inbox-col, .conv-inbox { transition: width .22s ease; }
+/* The detail pane eases in while the column shrinks beside it. */
+@keyframes conv-pane-in { from { opacity: 0; transform: translateX(28px); } }
+@media (min-width: 1200px) {
+  .conv-layout > .conv-main { animation: conv-pane-in .22s ease; }
+}
+/* The split column reuses the full inbox's .filters row — icon-only
+   funnel at the shared height. */
+.conv-inbox-head .filters { margin-bottom: 0; flex-wrap: nowrap; gap: 6px; }
+.conv-inbox-head .filters .btn, .conv-inbox-head .filters .search-box { height: 32px; }
+.conv-inbox-head .btn-label { display: none; }
 
 .conv-layout { display: flex; gap: 16px; height: 100%; min-height: 100%; container-type: inline-size; container-name: convl; position: relative; overflow-x: hidden; overflow-x: clip; }
 /* Split-pane inbox column — only on wide screens (≥1200 block below):
