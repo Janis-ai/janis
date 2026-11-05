@@ -435,21 +435,40 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const sentRef = useRef<HTMLDivElement>(null);
   const colRef = useRef<HTMLDivElement>(null);
   // Full mode scrolls the .conv-list; split mode the .conv-inbox column —
-  // hand the scroll offset across the class flip so the resize doesn't
-  // look like a jump. The capture happens here in render: post-commit the
-  // element that stopped being the scroller reads scrollTop 0 already.
+  // on the class flip keep the clicked row at the SAME screen position:
+  // mini rows are a different height, so copying scrollTop verbatim shows
+  // a different slice — a visible jump. The capture happens here in
+  // render: post-commit the old layout's scrollTop/rects read 0 already.
   const openListScroll = useRef(0);
   const openColScroll = useRef(0);
-  if (openConvId) openListScroll.current = listRef.current?.scrollTop ?? 0;
-  else openColScroll.current = colRef.current?.scrollTop ?? 0;
+  const selDelta = useRef<number | null>(null);
+  if (openConvId) {
+    openListScroll.current = listRef.current?.scrollTop ?? 0;
+    const row = colRef.current?.querySelector<HTMLElement>(`a[href$="/${openConvId}"]`);
+    selDelta.current = row ? row.getBoundingClientRect().top : null;
+  } else {
+    openColScroll.current = colRef.current?.scrollTop ?? 0;
+  }
   const wasOpen = useRef<boolean | null>(null);
   useLayoutEffect(() => {
     const open = Boolean(openConvId);
     const col = colRef.current;
     const list = listRef.current;
     if (wasOpen.current !== null && wasOpen.current !== open && col && list) {
-      if (open) col.scrollTop = openListScroll.current;
-      else list.scrollTop = openColScroll.current;
+      if (open) {
+        const row = col.querySelector<HTMLElement>(`a[href$="/${openConvId}"]`);
+        if (row && selDelta.current != null) {
+          // Restore the row's absolute screen y — the column's own top
+          // moved too (.main drops its top padding in conv mode).
+          const colTop = col.getBoundingClientRect().top;
+          const rowTop = row.getBoundingClientRect().top - colTop + col.scrollTop;
+          col.scrollTop = rowTop - (selDelta.current - colTop);
+        } else {
+          col.scrollTop = openListScroll.current;
+        }
+      } else {
+        list.scrollTop = openColScroll.current;
+      }
     }
     wasOpen.current = open;
   }, [openConvId]);
