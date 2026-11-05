@@ -800,7 +800,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'change_plan',
     description:
-      "Change the signed-in visitor's Janis subscription plan for a workspace they administer. Paid→paid switches apply immediately with proration; free→paid returns a secure Stripe Checkout link they must open to add a card and confirm; 'free' cancels at period end. Ask which plan first, and which workspace if they administer more than one.",
+      "Change the signed-in visitor's Janis subscription plan for a workspace they administer. Paid→paid switches apply immediately with proration; free→paid returns a secure Stripe Checkout link they must open to add a card and confirm; 'free' cancels at period end. Workspaces billed through Shopify get a Shopify charge-approval link instead of Stripe, and 'free' cancels their Shopify subscription immediately. Ask which plan first, and which workspace if they administer more than one.",
     params: {
       plan: 'free | starter | pro | scale',
       workspace: 'workspace name — required only when the visitor administers more than one',
@@ -859,7 +859,34 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         );
       }
       const plan = PLANS[target];
-      const current = ws.stripeSubscriptionId ? (ws.plan ?? 'free') : 'free';
+      // Shopify rail — an App Store acquired workspace bills through the
+      // Billing API; a Stripe link here is exactly the off-platform billing
+      // the app review flags. Paid → Shopify approval URL; free → cancel
+      // the AppSubscription outright. (Lazy import: shopifyApp's graph is
+      // large and pulls hostedAgent, which loads this file.)
+      const { shopifyRailLocked, startBillingSubscription, cancelBillingSubscription } =
+        await import('./shopifyApp.js');
+      const railShop = await shopifyRailLocked(ctx.db, ws, ws.id);
+      if (railShop) {
+        if (target === 'free') {
+          await cancelBillingSubscription(ctx.db, railShop);
+          return JSON.stringify({
+            changed: true,
+            plan: 'Free',
+            note: `${ws.name}'s Shopify subscription was cancelled — it drops to Free now`,
+          });
+        }
+        const { confirmationUrl } = await startBillingSubscription(ctx.db, railShop, target);
+        return JSON.stringify({
+          changed: false,
+          checkout_url: confirmationUrl,
+          note: `send the visitor this link — it opens ${plan.name} charge approval in their Shopify admin (billed by Shopify, not Stripe)`,
+        });
+      }
+      const current =
+        ws.billingProvider === 'shopify' || ws.stripeSubscriptionId
+          ? (ws.plan ?? 'free')
+          : 'free';
       if (current === target) {
         return JSON.stringify({ changed: false, note: `${ws.name} is already on ${plan.name}` });
       }

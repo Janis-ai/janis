@@ -74,7 +74,9 @@ export default function Billing() {
   });
   // Shopify billing rail — present when a store is linked; the merchant
   // approves the AppSubscription in Shopify admin instead of Stripe checkout.
-  const { data: shopifyBilling } = useQuery({
+  // Plan buttons stay disabled until this settles: the Stripe fallback must
+  // never fire for a Shopify-billed workspace (App Store requirement).
+  const { data: shopifyBilling, isFetched: railFetched } = useQuery({
     queryKey: ['shopify-billing'],
     queryFn: () =>
       api<{
@@ -84,6 +86,8 @@ export default function Billing() {
       }>('/api/shopify/billing'),
     retry: false,
   });
+  const onShopifyRail =
+    shopifyBilling?.provider === 'shopify' || Boolean(shopifyBilling?.shop);
 
   useEffect(() => {
     if (data && upgraded && data.plan.key !== 'free') setUpgraded(false);
@@ -102,8 +106,9 @@ export default function Billing() {
 
   const checkout = async (plan: string) => {
     setError('');
+    if (!railFetched) return; // never guess the rail — a wrong guess opens Stripe
     try {
-      if (shopifyBilling?.shop) {
+      if (onShopifyRail) {
         const r = await api<{ confirmation_url: string }>('/api/shopify/billing/start', {
           method: 'POST',
           body: JSON.stringify({ plan }),
@@ -135,7 +140,12 @@ export default function Billing() {
   const downgrade = async () => {
     setError('');
     setNotice('');
-    if (!(await confirm('Move to the Free plan? Paid features stop at the end of the current period.', [{ key: 'ok', label: 'Move to Free', danger: true }]))) return;
+    if (!(await confirm(
+      onShopifyRail
+        ? 'Move to the Free plan? This cancels your Shopify subscription right away.'
+        : 'Move to the Free plan? Paid features stop at the end of the current period.',
+      [{ key: 'ok', label: 'Move to Free', danger: true }],
+    ))) return;
     try {
       const r = await api<{ at_period_end: boolean }>('/api/billing/downgrade', { method: 'POST' });
       setNotice(
@@ -165,7 +175,7 @@ export default function Billing() {
       </div>
 
       {upgraded && data?.plan.key === 'free' && (
-        <div className="card muted">Checkout complete — waiting for Stripe to confirm…</div>
+        <div className="card muted">Charge approved — waiting for confirmation…</div>
       )}
       {data?.plan.covered_by && (
         <div className="card muted">
@@ -180,11 +190,12 @@ export default function Billing() {
       )}
       {error && <div className="error">{error}</div>}
       {notice && <div className="card muted">{notice}</div>}
-      {shopifyBilling?.shop && (
+      {onShopifyRail && (
         <div className="card muted" style={{ fontSize: 13 }}>
-          Plan billing runs through Shopify{shopifyBilling.shop.shop ? ` (${shopifyBilling.shop.shop})` : ''}
-          {shopifyBilling.test_mode && ' — test charges while the store is in development'}
-          . Approving a plan opens Shopify admin; cancel from the app's admin page there.
+          Plan billing runs through Shopify
+          {shopifyBilling?.shop?.shop ? ` (${shopifyBilling.shop.shop})` : ''}
+          {shopifyBilling?.test_mode && ' — test charges while the store is in development'}
+          . Approving a plan opens Shopify admin; charges appear in your store's billing history.
         </div>
       )}
 
@@ -193,7 +204,7 @@ export default function Billing() {
           <div className="card">
             <div className="row" style={{ alignItems: 'baseline' }}>
               <h3 className="grow" style={{ marginTop: 0 }}>Plan</h3>
-              {data.plans.some((p) => p.yearly_cents) && (
+              {!onShopifyRail && data.plans.some((p) => p.yearly_cents) && (
                 <div className="row" style={{ gap: 4 }}>
                   {(['month', 'year'] as const).map((i) => (
                     <button
@@ -255,6 +266,7 @@ export default function Billing() {
                       <button
                         className="btn primary"
                         style={{ marginTop: 10 }}
+                        disabled={!railFetched}
                         onClick={() => void checkout(p.key)}
                       >
                         {data.plan.base_cents < p.base_cents ? 'Upgrade' : 'Switch'}
@@ -267,7 +279,7 @@ export default function Billing() {
                 );
               })}
             </div>
-            {data.stripe_enabled && data.has_billing_account && isAdmin && (
+            {!onShopifyRail && data.stripe_enabled && data.has_billing_account && isAdmin && (
               <div style={{ marginTop: 12 }}>
                 <button className="btn" onClick={() => void portal()}>
                   Manage payment method &amp; invoices
@@ -376,7 +388,7 @@ export default function Billing() {
             Janis never marks up your token spend.
           </div>
 
-          {isAdmin && !data.plan.covered_by && <AgencyBilling />}
+          {isAdmin && !data.plan.covered_by && !onShopifyRail && <AgencyBilling />}
         </>
       )}
     </>

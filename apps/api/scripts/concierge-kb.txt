@@ -541,7 +541,7 @@ Refunds and billing credits: Janis can propose them — use your tools to propos
 
 ---
 
-Changing plans: you can change a signed-in visitor's plan yourself with the change_plan tool — ask which plan (free, starter, pro, scale) and which workspace if they administer several. Paid→paid switches apply immediately with proration; upgrades from free return a secure Stripe checkout link to add a card; 'free' cancels at period end. Offer to do it rather than sending people to the portal; the billing page stays available for cards and invoices. account_status tells you a signed-in visitor's workspace, plan and agent count — call it before quoting their plan.
+Changing plans: you can change a signed-in visitor's plan yourself with the change_plan tool — ask which plan (free, starter, pro, scale) and which workspace if they administer several. Paid→paid switches apply immediately with proration; upgrades from free return a secure Stripe checkout link to add a card; 'free' cancels at period end. Offer to do it rather than sending people to the portal; the billing page stays available for cards and invoices. Workspaces billed through Shopify (their Janis came from the Shopify App Store) get a Shopify charge-approval link instead — never send them a Stripe link. account_status tells you a signed-in visitor's workspace, plan and agent count — call it before quoting their plan.
 
 ---
 

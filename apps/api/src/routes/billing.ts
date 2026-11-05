@@ -7,6 +7,7 @@ import { allRates, billingConfig, currentPeriod, rateFor } from '../lib/billing.
 import { effectivePlanKey, invalidateCapCache, messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
 import { ensureStripeCustomer, planForPrice, stripe } from '../lib/stripe.js';
 import { purchaseDomainAddon } from '../lib/domainBilling.js';
+import { cancelBillingSubscription, shopifyRailLocked } from '../lib/shopifyApp.js';
 import { disableSsoIfUngated } from '../lib/workos.js';
 import { env, requestWebOrigin } from '../env.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -40,6 +41,13 @@ export async function yearlyCents(plan: string): Promise<number | null> {
   yearlyCentsCache.set(plan, cents);
   return cents;
 }
+
+// Workspaces on the Shopify billing rail (App Store installs) must not
+// touch Stripe — Shopify review requires every app charge to run through
+// the Billing API. `shopifyRailLocked` returns the bound shop when a
+// workspace is locked (null = Stripe is legal here).
+const SHOPIFY_RAIL_MSG =
+  'this workspace bills through Shopify — manage the plan from the Janis app page in your Shopify admin';
 
 export function billingRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
@@ -241,6 +249,16 @@ export function billingRoutes(db: Db) {
     if (!plan || !PLANS[plan]) {
       return c.json({ error: `unknown plan — one of ${Object.keys(PLANS).join(', ')}` }, 400);
     }
+    // Never hand a Shopify-billed workspace a free plan write — every plan
+    // on the rail must carry a merchant-approved AppSubscription.
+    const [railWs] = await db
+      .select({ plan: workspaces.plan, billingProvider: workspaces.billingProvider })
+      .from(workspaces)
+      .where(eq(workspaces.id, c.get('workspaceId')))
+      .limit(1);
+    if (railWs && (await shopifyRailLocked(db, railWs, c.get('workspaceId')))) {
+      return c.json({ error: SHOPIFY_RAIL_MSG }, 409);
+    }
     await db
       .update(workspaces)
       .set({ plan })
@@ -255,6 +273,17 @@ export function billingRoutes(db: Db) {
   // add-on alone (metadata marks it — it never carries a plan price).
   app.post('/domain-addon', adminOnly, async (c) => {
     if (!stripe()) return c.json({ error: 'billing not configured' }, 400);
+    const [railWs] = await db
+      .select({ plan: workspaces.plan, billingProvider: workspaces.billingProvider })
+      .from(workspaces)
+      .where(eq(workspaces.id, c.get('workspaceId')))
+      .limit(1);
+    if (railWs && (await shopifyRailLocked(db, railWs, c.get('workspaceId')))) {
+      return c.json(
+        { error: 'domain add-ons bill through Stripe — not available while this workspace bills through Shopify' },
+        409,
+      );
+    }
     try {
       const res = await purchaseDomainAddon(
         db,
@@ -280,6 +309,11 @@ export function billingRoutes(db: Db) {
     }
     const workspaceId = c.get('workspaceId');
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
+    // App Store distribution requires every app charge on the Shopify rail —
+    // a bound shop's workspace never sees a Stripe Checkout Session.
+    if (ws && (await shopifyRailLocked(db, ws, workspaceId))) {
+      return c.json({ error: SHOPIFY_RAIL_MSG }, 409);
+    }
 
     // Agency rebilling: a client workspace whose parent has a live Connect
     // account and a retail price for this tier checks out ON THE AGENCY'S
@@ -404,12 +438,31 @@ export function billingRoutes(db: Db) {
 
   // POST /api/billing/downgrade — back to free. Cancels the Stripe
   // subscription at period end when one exists (the deleted webhook flips
-  // the plan then); workspaces with no subscription flip immediately.
+  // the plan then); workspaces with no subscription flip immediately. On
+  // the Shopify rail the money event is appSubscriptionCancel — a local
+  // flip alone would leave the merchant paying for a plan we stopped serving.
   app.post('/downgrade', adminOnly, async (c) => {
     const workspaceId = c.get('workspaceId');
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
     if (!ws) return c.json({ error: 'not found' }, 404);
     if (ws.plan === 'free') return c.json({ plan: 'free', at_period_end: false });
+
+    const railShop = await shopifyRailLocked(db, ws, workspaceId);
+    if (railShop) {
+      try {
+        await cancelBillingSubscription(db, railShop);
+      } catch (e) {
+        return c.json({ error: e instanceof Error ? e.message : 'cancel failed' }, 502);
+      }
+      await audit(db, {
+        workspaceId, userId: c.get('user').id, userName: c.get('user').name,
+        action: 'billing.downgrade', targetType: 'workspace', targetId: workspaceId,
+        meta: { from_plan: ws.plan, via: 'shopify' },
+      });
+      return c.json({ plan: 'free', at_period_end: false });
+    }
+    // Shopify-railed but the shop row is gone (unlinked pre-heal) — nothing
+    // to cancel; fall through to the local flip below.
 
     if (ws.stripeSubscriptionId) {
       const s = stripe();
@@ -464,6 +517,9 @@ export function billingRoutes(db: Db) {
     if (!s) return c.json({ error: 'billing not configured' }, 400);
     const workspaceId = c.get('workspaceId');
     const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId)).limit(1);
+    if (ws && (await shopifyRailLocked(db, ws, workspaceId))) {
+      return c.json({ error: SHOPIFY_RAIL_MSG }, 409);
+    }
     const customerId = await ensureStripeCustomer(s, db, workspaceId, ws, c.get('user').email);
     const session = await s.billingPortal.sessions.create({
       customer: customerId,
@@ -524,6 +580,14 @@ export function billingRoutes(db: Db) {
       .where(eq(workspaces.id, workspaceId))
       .limit(1);
     if (!ws) return c.json({ error: 'not found' }, 404);
+    // Agency rebilling is a Stripe Connect feature — a Shopify-billed
+    // agency can't run client checkouts on a second (off-platform) rail.
+    if (await shopifyRailLocked(db, ws, workspaceId)) {
+      return c.json(
+        { error: 'agency rebilling runs on Stripe — not available while this workspace bills through Shopify' },
+        409,
+      );
+    }
 
     let acctId = ws.stripeConnectId;
     if (!acctId) {
@@ -576,6 +640,9 @@ export function billingRoutes(db: Db) {
       .where(eq(workspaces.id, workspaceId))
       .limit(1);
     if (!ws) return c.json({ error: 'not found' }, 404);
+    if (await shopifyRailLocked(db, ws, workspaceId)) {
+      return c.json({ error: SHOPIFY_RAIL_MSG }, 409);
+    }
     if (!ws.stripeConnectId) {
       return c.json({ error: 'connect a Stripe account first' }, 400);
     }

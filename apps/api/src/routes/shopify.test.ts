@@ -187,6 +187,21 @@ const stubShopifyApi = (
             }),
           );
         }
+        if (q.includes('appSubscriptionCancel')) {
+          return Promise.resolve(
+            Response.json({
+              data: {
+                appSubscriptionCancel:
+                  opts.billing === 'fail'
+                    ? { userErrors: [{ message: 'cannot cancel' }] }
+                    : {
+                        appSubscription: { id: 'sub_1', status: 'CANCELLED' },
+                        userErrors: [],
+                      },
+              },
+            }),
+          );
+        }
         if (q.includes('appUsageRecordCreate')) {
           return Promise.resolve(
             Response.json({
@@ -1009,6 +1024,90 @@ describe('shopify embedded billing + theme detection', () => {
       .update(shopifyShops)
       .set({ workspaceId: null, agentId: null, state: 'unlinked', provisionedAt: new Date() })
       .where(eq(shopifyShops.id, row.id));
+  });
+
+  it('/plan/cancel cancels an active subscription and frees the workspace', async () => {
+    const queries: string[] = [];
+    stubShopifyApi({ onGraphql: (q) => queries.push(q) });
+    await postSession(sessionJwt('cancel-me.myshopify.com'));
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'cancel-me.myshopify.com'));
+    // Merchant on an approved Pro sub.
+    await db
+      .update(shopifyShops)
+      .set({ billing: { subscriptionId: 'sub_1', plan: 'pro', status: 'ACTIVE' } })
+      .where(eq(shopifyShops.id, row.id));
+    await db
+      .update(workspaces)
+      .set({ plan: 'pro', billingProvider: 'shopify' })
+      .where(eq(workspaces.id, row.workspaceId!));
+
+    const res = await app.request('/api/shopify/plan/cancel', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token: sessionJwt('cancel-me.myshopify.com') }),
+    });
+    expect(res.status).toBe(200);
+    expect(queries.find((q) => q.includes('appSubscriptionCancel'))).toContain('sub_1');
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId!));
+    expect(ws.plan).toBe('free');
+    const [after] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.id, row.id));
+    expect((after.billing as { status?: string }).status).toBe('CANCELLED');
+  });
+
+  it('app/uninstalled cancels the sub and drops the workspace to free — reinstall must re-approve', async () => {
+    stubShopifyApi();
+    await postSession(sessionJwt('gone.myshopify.com'));
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'gone.myshopify.com'));
+    await db
+      .update(shopifyShops)
+      .set({ billing: { subscriptionId: 'sub_1', plan: 'starter', status: 'ACTIVE' } })
+      .where(eq(shopifyShops.id, row.id));
+    await db
+      .update(workspaces)
+      .set({ plan: 'starter', billingProvider: 'shopify' })
+      .where(eq(workspaces.id, row.workspaceId!));
+
+    const res = await webhook('app/uninstalled', {}, SECRET, 'gone.myshopify.com');
+    expect(res.status).toBe(200);
+    const [after] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.id, row.id));
+    expect(after.state).toBe('uninstalled');
+    expect((after.billing as { status?: string }).status).toBe('CANCELLED');
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, row.workspaceId!));
+    expect(ws.plan).toBe('free');
+    expect(ws.billingProvider).toBe('stripe');
+  });
+
+  it('/api/shopify/billing/start refuses a Stripe-paid workspace', async () => {
+    // A paid Stripe workspace that links a shop must not stack a second
+    // subscription onto the Shopify rail.
+    await db
+      .update(workspaces)
+      .set({ plan: 'pro', billingProvider: 'stripe' })
+      .where(eq(workspaces.id, workspaceId));
+    const [row] = await db
+      .insert(shopifyShops)
+      .values({ shop: 'paid-shop.myshopify.com', state: 'linked', workspaceId, agentId })
+      .returning();
+    const res = await app.request('/api/shopify/billing/start', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ plan: 'starter' }),
+    });
+    expect(res.status).toBe(409);
+    await db.delete(shopifyShops).where(eq(shopifyShops.id, row.id));
+    await db.update(workspaces).set({ plan: 'free' }).where(eq(workspaces.id, workspaceId));
   });
 });
 

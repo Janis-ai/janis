@@ -39,6 +39,7 @@ import {
 import { adminToken } from '../lib/shopifyToken.js';
 import {
   bindShop,
+  cancelBillingSubscription,
   embedEnabled,
   ensureShopForSession,
   SHOPIFY_API_VERSION,
@@ -343,6 +344,32 @@ export function shopifyPublicRoutes(db: Db) {
         return c.json({ confirmation_url: confirmationUrl, test_mode: test });
       } catch (e) {
         return c.json({ error: e instanceof Error ? e.message : 'billing start failed' }, 502);
+      }
+    },
+  );
+
+  // Downgrade — cancel the AppSubscription entirely (paid → Free). App Store
+  // review requires plan changes, incl. cancellation, to be self-serve.
+  app.post(
+    '/plan/cancel',
+    zValidator('json', z.object({ token: z.string() })),
+    async (c) => {
+      if (!shopifyAppConfigured()) return c.json({ error: 'not configured' }, 404);
+      const sess = await sessionShop(c);
+      if (!sess) return c.json({ error: 'invalid session token' }, 401);
+      const [row] = await db
+        .select()
+        .from(shopifyShops)
+        .where(eq(shopifyShops.shop, sess.shop))
+        .limit(1);
+      if (!row || row.state !== 'linked' || !row.workspaceId) {
+        return c.json({ error: 'no bound workspace' }, 409);
+      }
+      try {
+        await cancelBillingSubscription(db, row);
+        return c.json({ ok: true });
+      } catch (e) {
+        return c.json({ error: e instanceof Error ? e.message : 'cancel failed' }, 502);
       }
     },
   );
@@ -1285,6 +1312,20 @@ export function shopifyApiRoutes(db: Db) {
         .where(and(eq(shopifyShops.workspaceId, c.get('workspaceId')), eq(shopifyShops.state, 'linked')))
         .limit(1);
       if (!row) return c.json({ error: 'no linked Shopify shop — connect a store first' }, 409);
+      // Same guard the embedded /plan route enforces: a Stripe-paid
+      // workspace must not stack a second subscription on Shopify — only
+      // free or already-shopify-billed workspaces ride this rail.
+      const [ws] = await db
+        .select({ plan: workspaces.plan, billingProvider: workspaces.billingProvider })
+        .from(workspaces)
+        .where(eq(workspaces.id, c.get('workspaceId')))
+        .limit(1);
+      if (ws && ws.plan !== 'free' && ws.billingProvider !== 'shopify') {
+        return c.json(
+          { error: 'this workspace already has a plan — it is not billed through Shopify' },
+          409,
+        );
+      }
       try {
         const { confirmationUrl, test } = await startBillingSubscription(db, row, plan);
         return c.json({ confirmation_url: confirmationUrl, test_mode: test });

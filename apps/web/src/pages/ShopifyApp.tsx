@@ -262,6 +262,8 @@ export default function ShopifyApp() {
   };
   const [subscribing, setSubscribing] = useState('');
   const [planError, setPlanError] = useState('');
+  const [cancelArmed, setCancelArmed] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
   // Console access — the session token proves shop staff; we mail a magic
   // link that signs them into the console and claims the workspace.
   const [consoleEmail, setConsoleEmail] = useState('');
@@ -546,6 +548,23 @@ export default function ShopifyApp() {
     } catch (err) {
       setPlanError(err instanceof Error ? err.message : 'could not start subscription');
       setSubscribing('');
+    }
+  };
+
+  // Downgrade to Free — appSubscriptionCancel on the bound shop's sub; the
+  // workspace flips to free when Shopify confirms.
+  const cancelPlan = async () => {
+    if (cancelling) return;
+    setCancelling(true);
+    setPlanError('');
+    try {
+      await shopifyApi('/api/shopify/plan/cancel', {});
+      setCancelArmed(false);
+      setTick((t) => t + 1); // reload session → free plan state
+    } catch (err) {
+      setPlanError(err instanceof Error ? err.message : 'could not cancel subscription');
+    } finally {
+      setCancelling(false);
     }
   };
 
@@ -1610,7 +1629,7 @@ export default function ShopifyApp() {
               </>
             )}
 
-            {state.plan === 'free' ? (
+            {state.plan === 'free' || state.billing ? (
               <div
                 style={{
                   marginTop: 16,
@@ -1621,34 +1640,69 @@ export default function ShopifyApp() {
                 }}
               >
                 <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 4px' }}>
-                  Plan: Free
+                  Plan: {PLAN_NAMES[state.plan] ?? state.plan}
                   {state.usage
                     ? ` — ${state.usage.used.toLocaleString()} / ${state.usage.included.toLocaleString()} messages this month`
                     : ''}
+                  {state.billing?.status === 'PENDING' ? ' · awaiting charge approval' : ''}
                 </p>
-                {state.plans.map((p) => (
-                  <button
-                    key={p.key}
-                    className="btn"
-                    style={{ width: '100%', marginTop: 6 }}
-                    disabled={Boolean(subscribing)}
-                    onClick={() => subscribe(p.key)}
-                  >
-                    {subscribing === p.key
-                      ? 'Opening Shopify…'
-                      : `${p.name} — $${(p.price_cents / 100).toFixed(0)}/mo · ${p.included_messages.toLocaleString()} messages`}
-                  </button>
-                ))}
+                {state.plans
+                  .filter((p) => p.key !== state.plan)
+                  .map((p) => (
+                    <button
+                      key={p.key}
+                      className="btn"
+                      style={{ width: '100%', marginTop: 6 }}
+                      disabled={Boolean(subscribing) || cancelling}
+                      onClick={() => subscribe(p.key)}
+                    >
+                      {subscribing === p.key
+                        ? 'Opening Shopify…'
+                        : `${p.name} — $${(p.price_cents / 100).toFixed(0)}/mo · ${p.included_messages.toLocaleString()} messages`}
+                    </button>
+                  ))}
                 {planError && <div className="error">{planError}</div>}
-                <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-                  Billed by Shopify — approve the charge on the next screen.
-                </p>
+                {state.plan === 'free' ? (
+                  <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+                    Billed by Shopify — approve the charge on the next screen.
+                  </p>
+                ) : (
+                  <>
+                    {cancelArmed ? (
+                      <div className="row" style={{ marginTop: 10, justifyContent: 'center' }}>
+                        <button
+                          className="btn"
+                          style={{ color: 'var(--danger, #e5484d)' }}
+                          disabled={cancelling}
+                          onClick={() => void cancelPlan()}
+                        >
+                          {cancelling ? 'Cancelling…' : 'Confirm cancellation'}
+                        </button>
+                        <button className="btn" onClick={() => setCancelArmed(false)}>
+                          Keep plan
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="muted" style={{ fontSize: 12, marginTop: 8, textAlign: 'center' }}>
+                        Billed by Shopify
+                        {' · '}
+                        <button
+                          className="link muted"
+                          style={{ fontSize: 12 }}
+                          onClick={() => setCancelArmed(true)}
+                        >
+                          Cancel subscription
+                        </button>
+                      </p>
+                    )}
+                  </>
+                )}
               </div>
             ) : (
               <p className="muted" style={{ fontSize: 12.5, marginTop: 14 }}>
                 {PLAN_NAMES[state.plan] ?? state.plan} plan
                 {state.usage ? ` · ${state.usage.used.toLocaleString()} messages this month` : ''}
-                {state.billing?.status === 'PENDING' ? ' · subscription awaiting approval' : ''}
+                {' — billing is managed in the Janis console'}
               </p>
             )}
 

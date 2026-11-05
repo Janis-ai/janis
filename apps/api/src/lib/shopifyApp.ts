@@ -16,7 +16,7 @@ import {
   users,
   workspaces,
 } from '../db/schema.js';
-import { PLANS, messagesInRange, type Plan } from './plans.js';
+import { PLANS, invalidateCapCache, messagesInRange, type Plan } from './plans.js';
 import { billingConfig } from './billing.js';
 import { encryptSecret } from './secrets.js';
 import { adminToken, clearMirroredSecrets, mirrorSecrets } from './shopifyToken.js';
@@ -569,6 +569,37 @@ export async function bindShop(
       updatedAt: new Date(),
     })
     .where(eq(shopifyShops.id, row.id));
+  // The shop's AppSubscription travels with the binding — the merchant
+  // approved it for this store, so its plan moves to the workspace the shop
+  // now serves. The departed workspace drops to free on the Stripe rail
+  // (its plan was only ever funded by this store's charge).
+  if (row.workspaceId && row.workspaceId !== binding.workspaceId) {
+    const [oldWs] = await db
+      .select({ billingProvider: workspaces.billingProvider })
+      .from(workspaces)
+      .where(eq(workspaces.id, row.workspaceId))
+      .limit(1);
+    if (oldWs?.billingProvider === 'shopify') {
+      await setWorkspacePlan(db, row.workspaceId, {
+        plan: 'free',
+        billingProvider: 'stripe',
+      });
+    }
+    const prior = shopBilling(row);
+    if (prior.subscriptionId && prior.status === 'ACTIVE' && PLANS[prior.plan ?? '']) {
+      const [newWs] = await db
+        .select({ plan: workspaces.plan, billingProvider: workspaces.billingProvider })
+        .from(workspaces)
+        .where(eq(workspaces.id, binding.workspaceId))
+        .limit(1);
+      if (newWs && (newWs.plan === 'free' || newWs.billingProvider === 'shopify')) {
+        await setWorkspacePlan(db, binding.workspaceId, {
+          plan: prior.plan!,
+          billingProvider: 'shopify',
+        });
+      }
+    }
+  }
   if (token) await mirrorSecrets(db, binding.agentId, binding.workspaceId, row.shop, token);
   // Land the catalog's shopify tools so a bound agent works with no
   // console install step — merge by name, same semantics as the
@@ -900,9 +931,19 @@ export async function embedEnabled(db: Db, row: ShopRow): Promise<boolean | null
 }
 
 /** Console unlink — the shop stays installed, the binding + mirrored
- *  secrets go away. */
+ *  secrets go away. A live AppSubscription is cancelled first: the charge
+ *  belongs to the binding, and a detached shop must not keep billing the
+ *  merchant (nor fund the workspace it just left). */
 export async function unbindShop(db: Db, row: ShopRow): Promise<void> {
   if (row.agentId) await clearMirroredSecrets(db, row.agentId);
+  const departingWorkspace = row.workspaceId;
+  try {
+    await cancelBillingSubscription(db, row);
+  } catch (err) {
+    // Best-effort — a revoked/expired token shouldn't strand the unlink;
+    // Shopify also cancels the sub outright if the app is later uninstalled.
+    console.error(`shopify cancel-on-unlink ${row.shop}:`, err);
+  }
   await db
     .update(shopifyShops)
     .set({
@@ -916,9 +957,22 @@ export async function unbindShop(db: Db, row: ShopRow): Promise<void> {
       updatedAt: new Date(),
     })
     .where(eq(shopifyShops.id, row.id));
-  if (row.workspaceId) {
+  if (departingWorkspace) {
+    // The workspace the shop just left drops off the Shopify rail entirely —
+    // with no bound store there is nothing for Shopify to charge it through.
+    const [ws] = await db
+      .select({ billingProvider: workspaces.billingProvider })
+      .from(workspaces)
+      .where(eq(workspaces.id, departingWorkspace))
+      .limit(1);
+    if (ws?.billingProvider === 'shopify') {
+      await setWorkspacePlan(db, departingWorkspace, {
+        plan: 'free',
+        billingProvider: 'stripe',
+      });
+    }
     await audit(db, {
-      workspaceId: row.workspaceId,
+      workspaceId: departingWorkspace,
       action: 'shopify.unlink',
       targetType: 'shopify_shop',
       targetId: row.id,
@@ -927,12 +981,15 @@ export async function unbindShop(db: Db, row: ShopRow): Promise<void> {
   }
 }
 
-/** app/uninstalled — Shopify revokes the token itself; drop our copy and
- *  the mirrored secrets. The binding stays so a reinstall relinks cleanly. */
+/** app/uninstalled — Shopify revokes the token itself AND cancels the shop's
+ *  AppSubscription; mirror both: drop our token copy + mirrored secrets, mark
+ *  the sub CANCELLED, and return the bound workspace to free on the Stripe
+ *  rail. A reinstall must therefore re-approve a charge — nothing carries. */
 export async function uninstallShop(db: Db, shop: string): Promise<void> {
   const [row] = await db.select().from(shopifyShops).where(eq(shopifyShops.shop, shop)).limit(1);
   if (!row) return;
   if (row.agentId) await clearMirroredSecrets(db, row.agentId);
+  const b = shopBilling(row);
   await db
     .update(shopifyShops)
     .set({
@@ -941,10 +998,22 @@ export async function uninstallShop(db: Db, shop: string): Promise<void> {
       tokenExpiresAt: null,
       scopes: '',
       state: 'uninstalled',
+      billing: b.subscriptionId ? { ...b, status: 'CANCELLED' } : b,
       updatedAt: new Date(),
     })
     .where(eq(shopifyShops.id, row.id));
   if (row.workspaceId) {
+    const [ws] = await db
+      .select({ billingProvider: workspaces.billingProvider })
+      .from(workspaces)
+      .where(eq(workspaces.id, row.workspaceId))
+      .limit(1);
+    if (ws?.billingProvider === 'shopify') {
+      await setWorkspacePlan(db, row.workspaceId, {
+        plan: 'free',
+        billingProvider: 'stripe',
+      });
+    }
     await audit(db, {
       workspaceId: row.workspaceId,
       action: 'shopify.uninstalled',
@@ -1261,6 +1330,111 @@ export async function startBillingSubscription(
     })
     .where(eq(shopifyShops.id, row.id));
   return { confirmationUrl: out.confirmationUrl, test };
+}
+
+/** Plan writes from the Shopify rail — drop the cap memo + notify open
+ *  consoles, same as the Stripe routes' planChanged. */
+async function setWorkspacePlan(
+  db: Db,
+  workspaceId: string,
+  patch: { plan: string; billingProvider?: string },
+): Promise<void> {
+  await db.update(workspaces).set(patch).where(eq(workspaces.id, workspaceId));
+  invalidateCapCache(workspaceId);
+  bus.publish(workspaceId, { type: 'workspace', data: { id: workspaceId } });
+}
+
+/** Cancel the merchant's AppSubscription (downgrade → Free, unlink,
+ *  support-side cancel). Shopify's own confirmation is the money gate —
+ *  on success we mirror CANCELLED locally and drop the bound workspace to
+ *  free instead of waiting on the webhook. A PENDING sub cancels the same
+ *  way; a merchant who never approved owes nothing. */
+export async function cancelBillingSubscription(db: Db, row: ShopRow): Promise<void> {
+  const b = shopBilling(row);
+  if (b.subscriptionId && (b.status === 'ACTIVE' || b.status === 'PENDING')) {
+    if (!row.accessTokenEnc) throw new Error('shop has no offline token');
+    const token = await adminToken(db, row);
+    const res = await shopifyGraphql(
+      row.shop,
+      token,
+      `mutation { appSubscriptionCancel(id: ${JSON.stringify(b.subscriptionId)}) { appSubscription { id status } userErrors { field message } } }`,
+    );
+    const out = (res.data as {
+      appSubscriptionCancel?: {
+        appSubscription?: { id: string; status: string };
+        userErrors?: { message: string }[];
+      };
+    })?.appSubscriptionCancel;
+    if (out?.userErrors?.length) {
+      // A PENDING sub that can't be cancelled never billed — clear it
+      // locally rather than block the merchant on a ghost approval.
+      if (b.status === 'ACTIVE') {
+        throw new Error(
+          `appSubscriptionCancel: ${out.userErrors.map((e) => e.message).join(', ')}`,
+        );
+      }
+    }
+  }
+  const [fresh] = await db.select().from(shopifyShops).where(eq(shopifyShops.id, row.id)).limit(1);
+  await db
+    .update(shopifyShops)
+    .set({
+      billing: { ...shopBilling(fresh ?? row), status: 'CANCELLED' },
+      updatedAt: new Date(),
+    })
+    .where(eq(shopifyShops.id, row.id));
+  if (row.workspaceId) {
+    const [ws] = await db
+      .select({ billingProvider: workspaces.billingProvider })
+      .from(workspaces)
+      .where(eq(workspaces.id, row.workspaceId))
+      .limit(1);
+    // Only the Shopify rail's own workspace drops — a Stripe-paid workspace
+    // keeps its plan (its money never ran through this subscription).
+    if (ws?.billingProvider === 'shopify') {
+      await setWorkspacePlan(db, row.workspaceId, { plan: 'free' });
+    }
+  }
+}
+
+/** The shop currently bound to a workspace (the row the AppSubscription and
+ *  billing state live on). */
+export async function shopifyRailShop(db: Db, workspaceId: string): Promise<ShopRow | null> {
+  const [row] = await db
+    .select()
+    .from(shopifyShops)
+    .where(and(eq(shopifyShops.workspaceId, workspaceId), eq(shopifyShops.state, 'linked')))
+    .limit(1);
+  return row ?? null;
+}
+
+/** Whether this workspace's charges must run through Shopify, never Stripe.
+ *  Returns the bound shop when locked, null when Stripe is legal:
+ *  - billingProvider='shopify' + linked shop → the App Store acquired it;
+ *    every charge is an appSubscription on that shop.
+ *  - billingProvider='shopify' + NO bound shop → straggler from before
+ *    uninstall/unbind reset the rail — self-heal to 'stripe' (no Shopify
+ *    store exists to charge, so Shopify billing can't apply).
+ *  - linked shop + free plan → an app-installed merchant who must not be
+ *    offered Stripe checkout (their only paid path is appSubscriptionCreate).
+ *  A Stripe-PAID workspace that links a shop keeps Stripe — that customer
+ *  relationship predates the app install and can't be force-migrated. */
+export async function shopifyRailLocked(
+  db: Db,
+  workspace: { plan: string; billingProvider: string },
+  workspaceId: string,
+): Promise<ShopRow | null> {
+  const shop = await shopifyRailShop(db, workspaceId);
+  if (workspace.billingProvider === 'shopify') {
+    if (shop) return shop;
+    await db
+      .update(workspaces)
+      .set({ billingProvider: 'stripe' })
+      .where(eq(workspaces.id, workspaceId));
+    return null;
+  }
+  if (shop && workspace.plan === 'free') return shop;
+  return null;
 }
 
 /* ── Shopify usage billing sweep ──────────────────────────────────────
@@ -2157,12 +2331,9 @@ async function syncBillingSubscription(
   // workspaces take the plan flip.
   const shopifyRail = ws.billingProvider === 'shopify' || ws.plan === 'free';
   if (status === 'ACTIVE' && shopifyRail) {
-    await db
-      .update(workspaces)
-      .set({ plan: plan!, billingProvider: 'shopify' })
-      .where(eq(workspaces.id, ws.id));
+    await setWorkspacePlan(db, ws.id, { plan: plan!, billingProvider: 'shopify' });
   } else if (['CANCELLED', 'DECLINED', 'EXPIRED', 'FROZEN'].includes(status) && ws.billingProvider === 'shopify') {
-    await db.update(workspaces).set({ plan: 'free' }).where(eq(workspaces.id, ws.id));
+    await setWorkspacePlan(db, ws.id, { plan: 'free' });
   }
 }
 

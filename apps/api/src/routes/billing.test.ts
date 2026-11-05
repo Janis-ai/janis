@@ -7,7 +7,7 @@ import { eq } from 'drizzle-orm';
 import Stripe from 'stripe';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, memberships, sessions, users, workspaces } from '../db/schema.js';
+import { agents, memberships, sessions, shopifyShops, users, workspaces } from '../db/schema.js';
 import { generateSessionToken, hashPassword } from '../lib/crypto.js';
 import { billingRoutes, stripeWebhookRoutes } from './billing.js';
 import { setStripeClient } from '../lib/stripe.js';
@@ -289,5 +289,94 @@ describe('agency connect', () => {
     // parent coverage resumes once the client sub is gone
     const { effectivePlanKey } = await import('../lib/plans.js');
     expect(await effectivePlanKey(db, childId)).toBe('pro');
+  });
+});
+
+describe('shopify rail gating', () => {
+  // App Store installs must never touch Stripe — every money surface
+  // refuses while the workspace's charges run through an AppSubscription.
+  let railWsId: string;
+  let railCookie: string;
+
+  beforeAll(async () => {
+    const [ws] = await db
+      .insert(workspaces)
+      .values({ name: 'Shop Co', plan: 'pro', billingProvider: 'shopify' })
+      .returning();
+    railWsId = ws.id;
+    await db.insert(shopifyShops).values({
+      shop: 'rail-shop.myshopify.com',
+      state: 'linked',
+      workspaceId: railWsId,
+      billing: { subscriptionId: 'sub_1', plan: 'pro', status: 'CANCELLED' },
+    });
+    const [u] = await db
+      .insert(users)
+      .values({ email: 's@s.s', name: 'Shop Admin', passwordHash: 'x' })
+      .returning();
+    await db
+      .insert(memberships)
+      .values({ userId: u.id, workspaceId: railWsId, role: 'admin', acceptedAt: new Date() });
+    const t = generateSessionToken();
+    await db.insert(sessions).values({
+      id: t.id,
+      userId: u.id,
+      workspaceId: railWsId,
+      expiresAt: new Date(Date.now() + 86_400_000),
+    });
+    railCookie = `janis_session=${t.token}`;
+  });
+
+  it('refuses a Stripe Checkout session', async () => {
+    const res = await api.request('/api/billing/checkout', {
+      method: 'POST',
+      headers: { cookie: railCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ plan: 'scale' }),
+    });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { error: string }).error).toContain('Shopify');
+    expect(
+      stripeCalls.find(
+        (x) =>
+          x.method === 'checkout.sessions.create' &&
+          (x.params as { metadata?: { workspace_id?: string } }).metadata?.workspace_id ===
+            railWsId,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('refuses the no-billing plan override', async () => {
+    const res = await api.request('/api/billing/plan', {
+      method: 'PATCH',
+      headers: { cookie: railCookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ plan: 'scale' }),
+    });
+    expect(res.status).toBe(409);
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, railWsId));
+    expect(ws.plan).toBe('pro');
+  });
+
+  it('refuses a Stripe portal session + domain add-on', async () => {
+    const portal = await api.request('/api/billing/portal', {
+      method: 'POST',
+      headers: { cookie: railCookie },
+    });
+    expect(portal.status).toBe(409);
+    const addon = await api.request('/api/billing/domain-addon', {
+      method: 'POST',
+      headers: { cookie: railCookie },
+    });
+    expect(addon.status).toBe(409);
+  });
+
+  it('downgrade frees the workspace when no live subscription remains', async () => {
+    // billing status CANCELLED → nothing to cancel upstream; local flip.
+    const res = await api.request('/api/billing/downgrade', {
+      method: 'POST',
+      headers: { cookie: railCookie },
+    });
+    expect(res.status).toBe(200);
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, railWsId));
+    expect(ws.plan).toBe('free');
   });
 });
