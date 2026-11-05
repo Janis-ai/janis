@@ -93,6 +93,16 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-05h — Suggest-flow UX hardening round
+- storeSuggestion supersedes pending rows atomically — a refresh could
+  race dismiss-all against the fresh insert and the draft vanished.
+- Composer popovers are mutually exclusive (stacked menus on narrow).
+- Empty suggest runs flag payload.empty_draft — card shows 'couldn't
+  draft', no Send; previously the fabricated fallback text WAS sendable
+  (Mike shipped it into a real thread).
+- ConversationPage resets all per-thread state on [id] change — a
+  pending outbox bubble/draft followed you into every conversation.
+  37c9be1c 206129dc 7ae64185 dc6369b7 / janis-api-01450-kgl+.
 ## 2026-11-05g — Widget-annotation echoes stripped; run-action idempotent
 - '[form shown]'/'[cards shown]'/'[options shown]' are transcript CONTEXT
   markup — the model echoed them into drafts verbatim. stripTranscriptNotes
