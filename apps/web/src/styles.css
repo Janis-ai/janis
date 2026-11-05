@@ -137,9 +137,9 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
   .sidebar.mini .user .user-ic:hover { color: var(--text); }
   .sidebar.mini a .icon, .sidebar.mini .ask-toggle .icon { display: inline-flex; }
   .sidebar.mini a.nav-indent { padding-left: 0; }
-  .sidebar.mini .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
-  .sidebar.mini .nav-sec span { display: none; }
-  .sidebar.mini .nav-sec:not(:has(svg)) { display: none; }
+  /* Section headers add noise without labels — the .agent-nav divider
+     alone marks the agent/workspace boundary. */
+  .sidebar.mini .nav-sec { display: none; }
   .sidebar.mini a { position: relative; }
   .sidebar.mini a .nav-badge {
     position: absolute; top: 1px; left: 50%; margin: 0 0 0 7px;
