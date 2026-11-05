@@ -1297,6 +1297,11 @@ export async function startBillingSubscription(
   if (!row.accessTokenEnc) throw new Error('shop has no offline token');
   if (!row.workspaceId) throw new Error('shop is not linked to a workspace');
   const token = await adminToken(db, row);
+  // Shopify allows only one ACTIVE app subscription per shop — a second
+  // create userErrors. Reconcile against the API, not just the stored id:
+  // double-submits stack PENDING+ACTIVE pairs and leave the row pointing
+  // at whichever create ran last.
+  await cancelActiveSubscriptions(row.shop, token);
   const test = await shopIsDevelopment(db, row);
   const amount = (plan.baseCents / 100).toFixed(2);
   // The usage line item is how Shopify-billed plans actually charge the
@@ -1393,6 +1398,17 @@ export async function cancelBillingSubscription(db: Db, row: ShopRow): Promise<v
       }
     }
   }
+  // Drift safety: an ACTIVE sub our row doesn't know about would keep
+  // billing after "cancel". Sweep Shopify's own list too — non-fatal if
+  // the sweep itself fails (the stored id is what we knew to charge).
+  if (row.accessTokenEnc) {
+    try {
+      const token = await adminToken(db, row);
+      await cancelActiveSubscriptions(row.shop, token);
+    } catch (err) {
+      console.error(`shopify active-sub sweep ${row.shop}:`, err);
+    }
+  }
   const [fresh] = await db.select().from(shopifyShops).where(eq(shopifyShops.id, row.id)).limit(1);
   await db
     .update(shopifyShops)
@@ -1412,6 +1428,35 @@ export async function cancelBillingSubscription(db: Db, row: ShopRow): Promise<v
     if (ws?.billingProvider === 'shopify') {
       await setWorkspacePlan(db, row.workspaceId, { plan: 'free' });
     }
+  }
+}
+
+/** Shopify is the ground truth for live subs — our stored id can drift
+ *  (double-submits stack PENDING+ACTIVE, a stale row points at the
+ *  unapproved create while a real one keeps billing). Cancel every sub
+ *  the installation reports as active, not just the one we recorded. */
+async function cancelActiveSubscriptions(shop: string, token: string): Promise<void> {
+  const res = await shopifyGraphql(
+    shop,
+    token,
+    '{ currentAppInstallation { activeSubscriptions { id status } } }',
+  );
+  const active =
+    (res.data as {
+      currentAppInstallation?: { activeSubscriptions?: { id: string; status: string }[] };
+    })?.currentAppInstallation?.activeSubscriptions ?? [];
+  for (const sub of active) {
+    if (sub.status !== 'ACTIVE') continue;
+    const out = (
+      await shopifyGraphql(
+        shop,
+        token,
+        `mutation { appSubscriptionCancel(id: ${JSON.stringify(sub.id)}) { appSubscription { id status } userErrors { field message } } }`,
+      )
+    ).data as { appSubscriptionCancel?: { userErrors?: { message: string }[] } };
+    const errs = out?.appSubscriptionCancel?.userErrors;
+    if (errs?.length)
+      throw new Error(`appSubscriptionCancel: ${errs.map((e) => e.message).join(', ')}`);
   }
 }
 
