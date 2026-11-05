@@ -1405,3 +1405,17 @@ Whole-site sources are now ONE row, not N flat page rows.
   creates stubs (import + rediscovery) — runKnowledgeFill drains all
   unfetched children JOB_CONCURRENCY-wide on the next tick. Sweeper's
   per-stub claims remain the fallback if the job never lands.
+
+## 2026-11-05 — Chatfuel relay fixes (Loan Khánh live thread)
+
+Three chatfuel-delivery fixes shipped + deployed (janis-api-01405-jzl+):
+- Human sends push on OAuth'd chatfuel channels (HUMAN_AGENT tag); agent
+  replies stay ingest-response-only — Chatfuel owns delivery. This is what
+  let Loan take over her own bot thread live (verified on Messenger).
+- `delivered` now stamps only when a reply actually leaves (card response
+  or real push) — pull-only rows no longer fake Delivered.
+- Internal/system markers (handoff, sentiment, status) filtered from
+  `waitForOutbound` — they were leaking into Messenger via the card.
+- Pair-count dedup (v=card-stamped vs m=mid-stamped halves in 90s window)
+  replaces the raced one-sided text dedup — webhook+card double-feed now
+  collapses whichever copy lands second; genuine repeats still ingest.
