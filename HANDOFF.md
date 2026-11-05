@@ -126,6 +126,8 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   agentParam = params.agentId ?? (params.cid ? params.id : undefined).
   ad92b49f — sel-pin must key on list data (cold open has no .sel row
   until rows land); scrollIntoView block:'start' + scroll-margin-top 52px.
+  93b685b0 — pin gated to cold open (mountOpen): in-session selects keep
+  the inherited offset, never jump.
 
 ## 2026-11-04h — Operator brief: on-demand Summarize card
 - GET /api/conversations/:id/summary writes a one-look digest (headline +
