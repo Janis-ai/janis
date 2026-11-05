@@ -123,6 +123,39 @@ describe('bot ingest', () => {
     expect(other).toBeUndefined();
   }, 20_000);
 
+  it('card response skips internal/system-marker rows', async () => {
+    const agent = await agentFor(KEY);
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'chatfuel:psid-marker', userProfile: {} })
+      .returning();
+    const now = new Date();
+    await db.insert(messages).values([
+      { conversationId: conv.id, direction: 'in', text: 'same words', createdAt: now },
+      {
+        conversationId: conv.id,
+        direction: 'out',
+        text: 'customer-facing line',
+        createdAt: new Date(+now + 1000),
+      },
+      {
+        conversationId: conv.id,
+        direction: 'out',
+        text: 'Handoff requested: agent signalled handoff',
+        createdAt: new Date(+now + 2000),
+        flags: { help_requested: true },
+      },
+    ]);
+    const r = await app.request(`/bot/${KEY}/chatfuel`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ 'messenger user id': 'psid-marker', 'user input': 'same words' }),
+    });
+    const body = JSON.stringify(await r.json());
+    expect(body).toContain('customer-facing line');
+    expect(body).not.toContain('Handoff requested');
+  });
+
   it('dedups the same message arriving via webhook + card', async () => {
     const agent = await agentFor(KEY);
     const [conv] = await db

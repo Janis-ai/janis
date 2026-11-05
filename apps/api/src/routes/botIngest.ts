@@ -59,6 +59,10 @@ async function waitForOutbound(db: Db, conversationId: string, since: Date) {
           eq(messages.conversationId, conversationId),
           eq(messages.direction, 'out'),
           gt(messages.createdAt, since),
+          // Internal notes and system-flagged markers (handoff, status,
+          // alerts) aren't replies — the card must never show them.
+          sql`(${messages.payload}->>'internal') is distinct from 'true'`,
+          sql`not exists (select 1 from jsonb_each_text(${messages.flags}) f where f.value = 'true')`,
         ),
       )
       .orderBy(desc(messages.createdAt))
