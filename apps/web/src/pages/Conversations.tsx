@@ -510,12 +510,15 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     ro.observe(layout);
     window.addEventListener('panel-resize', measure);
     // A drag's last set() fires before pointerup drops .panel-resize —
-    // re-measure on release so the not-dragging cascade lands.
-    window.addEventListener('pointerup', measure);
+    // re-measure on release so the not-dragging cascade lands. Next
+    // frame: our listener was registered before the grip's own
+    // pointerup, so body still carries the class during the event.
+    const onUp = () => requestAnimationFrame(measure);
+    window.addEventListener('pointerup', onUp);
     return () => {
       ro.disconnect();
       window.removeEventListener('panel-resize', measure);
-      window.removeEventListener('pointerup', measure);
+      window.removeEventListener('pointerup', onUp);
       layout.classList.remove('rail-tight');
       layout.classList.remove('list-tight');
     };
