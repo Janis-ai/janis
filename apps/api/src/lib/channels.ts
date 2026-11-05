@@ -1668,7 +1668,7 @@ export interface ChannelDelivery {
 
 /** Stamp the delivery outcome onto the stored message row and republish it
  *  so open console views update without waiting for a refetch. */
-async function stampDelivery(
+export async function stampDelivery(
   db: Db,
   workspaceId: string | undefined,
   messageId: string,
@@ -1800,7 +1800,15 @@ export async function deliverToChannel(
   // channel — the console's "Delivered" receipt follows it regardless of
   // where the reply was sent from.
   if (!result) {
-    if (opts?.messageId) {
+    // Pull surfaces: our own webchat widget polls the API, so reaching
+    // this point IS delivery. Bot-platform replies only truly deliver if
+    // a platform card later serializes them into an ingest response —
+    // confirming that is the ingest route's job, so no stamp here.
+    if (
+      opts?.messageId &&
+      row.channel.kind !== 'chatfuel' &&
+      row.channel.kind !== 'manychat'
+    ) {
       await stampDelivery(db, agent?.workspaceId, opts.messageId, { delivered: true });
     }
     return { delivered: true };

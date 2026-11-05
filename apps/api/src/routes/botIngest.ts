@@ -7,7 +7,7 @@ import { handleChannelMessage } from '../services/channelIngress.js';
 import { normalizeChatfuel, normalizeManychat } from './legacy.js';
 import { dbRateLimit } from '../lib/rateLimit.js';
 import { buildBotResponse, type BotEffect } from '../lib/botPlatform.js';
-import { formatForChannel, type ChannelCredentials } from '../lib/channels.js';
+import { formatForChannel, stampDelivery, type ChannelCredentials } from '../lib/channels.js';
 import type { AttachmentRef } from '../lib/channels.js';
 import type { WidgetComponent } from '../lib/widgets.js';
 
@@ -52,7 +52,7 @@ async function waitForOutbound(db: Db, conversationId: string, since: Date) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
     const [hit] = await db
-      .select({ text: messages.text, payload: messages.payload })
+      .select({ id: messages.id, text: messages.text, payload: messages.payload })
       .from(messages)
       .where(
         and(
@@ -76,6 +76,7 @@ async function waitForOutbound(db: Db, conversationId: string, since: Date) {
     // counts as an answer (a bare {{goto}} IS the whole reply).
     if (hit && (hit.text || p?.widgets?.length || p?.attachments?.length || p?.effects?.length)) {
       return {
+        id: hit.id,
         text: hit.text ?? '',
         quickReplies: p?.quick_replies ?? [],
         widgets: p?.widgets,
@@ -220,7 +221,12 @@ export function botIngestRoutes(db: Db) {
         if (!conv || conv.state === 'human' || (await pushOwnsDelivery(db, conv.id)))
           return c.json(emptyFor(flavor));
         const reply = await waitForOutbound(db, conv.id, new Date(Date.now() - 90_000));
-        return c.json(reply ? botResponse(flavor, reply) : emptyFor(flavor));
+        if (reply) {
+          // Riding the card response IS the delivery — stamp it confirmed.
+          void stampDelivery(db, agent.workspaceId, reply.id, { delivered: true }).catch(() => {});
+          return c.json(botResponse(flavor, reply));
+        }
+        return c.json(emptyFor(flavor));
       }
     }
 
@@ -245,7 +251,12 @@ export function botIngestRoutes(db: Db) {
       return c.json(emptyFor(flavor));
 
     const reply = await waitForOutbound(db, conv.id, since);
-    return c.json(reply ? botResponse(flavor, reply) : emptyFor(flavor));
+    if (reply) {
+      // Riding the card response IS the delivery — stamp it confirmed.
+      void stampDelivery(db, agent.workspaceId, reply.id, { delivered: true }).catch(() => {});
+      return c.json(botResponse(flavor, reply));
+    }
+    return c.json(emptyFor(flavor));
   });
 
   return app;
