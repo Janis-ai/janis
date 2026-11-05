@@ -443,23 +443,26 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   if (openConvId) openListScroll.current = listRef.current?.scrollTop ?? 0;
   else openColScroll.current = colRef.current?.scrollTop ?? 0;
   const wasOpen = useRef<boolean | null>(null);
+  const prevSel = useRef<string | null>(null);
   useLayoutEffect(() => {
     const open = Boolean(openConvId);
     const col = colRef.current;
     const list = listRef.current;
     if (wasOpen.current !== null && wasOpen.current !== open && col && list) {
-      if (open) {
-        col.scrollTop = openListScroll.current;
-        // The selected row must stay visible — mini rows are taller, so
-        // the inherited offset can push a bottom-edge row off screen.
-        col
-          .querySelector<HTMLElement>('.conv-row.sel')
-          ?.scrollIntoView({ block: 'nearest' });
-      } else {
-        list.scrollTop = openColScroll.current;
-      }
+      if (open) col.scrollTop = openListScroll.current;
+      else list.scrollTop = openColScroll.current;
     }
     wasOpen.current = open;
+    // The selected row rides as high as the column can scroll it — on the
+    // open flip AND on conv→conv switches where it's outside the column's
+    // view. scroll-margin-top keeps it clear of the sticky head; a last
+    // row just stays at the bottom.
+    if (open && prevSel.current !== openConvId) {
+      col
+        ?.querySelector<HTMLElement>('.conv-row.sel')
+        ?.scrollIntoView({ block: 'start' });
+    }
+    prevSel.current = openConvId;
   }, [openConvId]);
   useEffect(() => {
     const el = sentRef.current;

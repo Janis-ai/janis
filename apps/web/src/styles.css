@@ -1645,6 +1645,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-inbox .conv-dots { display: none; }
 .conv-inbox .tail { align-items: center; gap: 5px; margin-top: 3px; }
 .conv-inbox .tail .meta { font-size: 11px; }
+/* Selected row pins just under the sticky head when the column scrolls
+   it into view on split (scrollIntoView block:'start'). */
+.conv-inbox .conv-row { scroll-margin-top: 52px; }
 .conv-inbox .tail-dots { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .conv-inbox .tail-dots:empty { display: none; }
 .conv-inbox .tail-dots .alert-dot, .conv-inbox .tail-dots .unread-dot { width: 7px; height: 7px; }
