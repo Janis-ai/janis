@@ -623,6 +623,9 @@ export default function ConversationPage() {
   const [actionResults, setActionResults] = useState<Record<number, string>>({});
   const [editAction, setEditAction] = useState<number | null>(null);
   const [actionArgsDraft, setActionArgsDraft] = useState('');
+  // A picked saved component staged as an inline draft — resolves via the
+  // send-component preview and waits for the operator's Send/Dismiss.
+  const [componentDraft, setComponentDraft] = useState<{ name: string; widget: unknown } | null>(null);
   // Mobile details slide-over — the right column is a drawer on phones,
   // opened from the header's ⓘ. The page never scrolls; transcript only.
   const [sideOpen, setSideOpen] = useState(false);
@@ -785,30 +788,33 @@ export default function ConversationPage() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['conversation', id] }),
   });
 
-  const sendComponent = useMutation({
+  // Resolve a saved component into a staged draft — nothing sends until the
+  // operator hits Send on the inline draft bubble.
+  const previewComponent = useMutation({
     mutationFn: ({ name, data }: { name: string; data?: Record<string, unknown> }) =>
-      api(`/api/conversations/${id}/send-component`, {
+      api<{ widget: unknown }>(`/api/conversations/${id}/send-component`, {
         method: 'POST',
-        body: JSON.stringify({ name, data }),
+        body: JSON.stringify({ name, data, preview: true }),
       }),
-    onSuccess: () => {
-      setError('');
-      void qc.invalidateQueries({ queryKey: ['conversation', id] });
-    },
+    onSuccess: (r, v) => setComponentDraft({ name: v.name, widget: r.widget }),
     onError: (e) => setError(e.message),
   });
 
-  const send = (attachments: Attachment[], retryOf?: OutEntry) => {
+  const send = (
+    attachments: Attachment[],
+    retryOf?: OutEntry,
+    override?: { text?: string; widgets?: unknown[]; quick_replies?: unknown[] },
+  ) => {
     stickRef.current = true; // your own send always lands at the tail
     const mode = retryOf?.mode ?? sendAs;
     const entry: OutEntry =
       retryOf ??
       {
         localId: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        text: draft,
+        text: override?.text ?? draft,
         attachments,
-        widgets: pendingComponents?.widgets,
-        quick_replies: pendingComponents?.quick_replies,
+        widgets: override?.widgets ?? pendingComponents?.widgets,
+        quick_replies: override?.quick_replies ?? pendingComponents?.quick_replies,
         mode,
         status: 'pending',
         ts: Date.now(),
@@ -856,6 +862,7 @@ export default function ConversationPage() {
         if (!retryOf) {
           setDraft('');
           setPendingComponents(null);
+          setComponentDraft(null);
         }
         setError('');
         void qc.invalidateQueries({ queryKey: ['conversation', id] });
@@ -1902,11 +1909,12 @@ export default function ConversationPage() {
         {error && <div className="error">{error}</div>}
 
         {canSuggest && (suggestOpen || suggestions?.length > 0) && (
-          <div className="card suggestion">
+          <div className="card suggestion draft">
             {suggestions?.length > 0 ? (
               <>
                 <div className="muted" style={{ marginBottom: 6 }}>
-                  Suggested ({suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
+                  <span className="draft-tag">draft</span> Suggested (
+                  {suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
                 </div>
                 {suggestions[0].notes && (
                   <div className="muted" style={{ fontStyle: 'italic', marginBottom: 6 }}>
@@ -2043,7 +2051,24 @@ export default function ConversationPage() {
             <div className="row" style={{ marginTop: 10 }}>
               <button
                 className="btn primary"
+                disabled={!(suggestions?.length > 0) || outbox.some((o) => o.status === 'pending')}
+                onClick={() => {
+                  const s = suggestions[0];
+                  send([], undefined, {
+                    text: s.text,
+                    ...(s.payload?.widgets?.length ? { widgets: s.payload.widgets } : {}),
+                    ...(s.payload?.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
+                  });
+                  suggestionStatus.mutate({ sid: s.id, status: 'used' });
+                  setSuggestOpen(false);
+                }}
+              >
+                Send
+              </button>
+              <button
+                className="btn"
                 disabled={!(suggestions?.length > 0)}
+                title="Edit the text in the composer before sending — components stay attached"
                 onClick={() => {
                   const s = suggestions[0];
                   setDraft(s.text);
@@ -2057,7 +2082,7 @@ export default function ConversationPage() {
                   setSuggestOpen(false);
                 }}
               >
-                Use
+                Edit
               </button>
               <button
                 className="btn icon"
@@ -2084,6 +2109,28 @@ export default function ConversationPage() {
         {/* Composer is always up for non-archived threads — the reply-as
             dropdown inside it covers agent/note/teach modes, and the Take
             over ⇄ Resume toggle lives next to Send. Ops row is gone. */}
+        {componentDraft && (
+          <div className="card suggestion draft">
+            <div className="muted" style={{ marginBottom: 6 }}>
+              <span className="draft-tag">draft</span> Component · {componentDraft.name}
+            </div>
+            <Widgets widgets={[componentDraft.widget] as ChatWidget[]} onSend={() => {}} />
+            <div className="row" style={{ marginTop: 10 }}>
+              <button
+                className="btn primary"
+                disabled={outbox.some((o) => o.status === 'pending')}
+                onClick={() =>
+                  send([], undefined, { text: '', widgets: [componentDraft.widget] })
+                }
+              >
+                Send
+              </button>
+              <button className="btn" onClick={() => setComponentDraft(null)}>
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
         {pendingComponents && (
           <div className="pending-comp muted">
             {[
@@ -2142,7 +2189,7 @@ export default function ConversationPage() {
             }}
             showModeSelect={true}
             canTeach={canTeach}
-            onSendComponent={(name, data) => sendComponent.mutate({ name, data })}
+            onSendComponent={(name, data) => previewComponent.mutate({ name, data })}
             sending={outbox.some((o) => o.status === 'pending')}
           />
         ) : (

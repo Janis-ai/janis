@@ -804,6 +804,9 @@ export function conversationRoutes(db: Db) {
   const sendComponentBody = z.object({
     name: z.string(),
     data: z.record(z.unknown()).optional(),
+    // Resolve-only — the console stages the spec as an inline draft and the
+    // operator sends it as a normal widget reply.
+    preview: z.boolean().optional(),
   });
   app.post('/:id/send-component', zValidator('json', sendComponentBody), async (c) => {
     const workspaceId = c.get('workspaceId');
@@ -844,6 +847,7 @@ export function conversationRoutes(db: Db) {
       cap,
     );
     if (!spec) return c.json({ error: cap.error ?? 'component produced nothing' }, 400);
+    if (body.preview) return c.json({ widget: spec });
     const { message, delivery } = await humanReply(
       db,
       workspaceId,
