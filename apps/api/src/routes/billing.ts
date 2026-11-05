@@ -7,7 +7,7 @@ import { allRates, billingConfig, currentPeriod, rateFor } from '../lib/billing.
 import { effectivePlanKey, invalidateCapCache, messagesInPeriod, planFor, PLANS } from '../lib/plans.js';
 import { ensureStripeCustomer, planForPrice, stripe } from '../lib/stripe.js';
 import { purchaseDomainAddon } from '../lib/domainBilling.js';
-import { cancelBillingSubscription, shopifyRailLocked } from '../lib/shopifyApp.js';
+import { cancelBillingSubscription, shopIsDevelopment, shopifyRailLocked, shopifyRailShop } from '../lib/shopifyApp.js';
 import { disableSsoIfUngated } from '../lib/workos.js';
 import { env, requestWebOrigin } from '../env.js';
 import { adminOnly, sessionAuth, type SessionEnv } from '../middleware/sessionAuth.js';
@@ -175,6 +175,10 @@ export function billingRoutes(db: Db) {
       .where(eq(channels.workspaceId, workspaceId));
 
     const messagesUsed = await messagesInPeriod(db, workspaceId, period);
+    // Rail state travels with the summary so the billing page renders the
+    // Shopify variant on first paint — a second probe would leave a flash
+    // of the Stripe layout for a reviewer or a fast clicker to catch.
+    const railShop = await shopifyRailShop(db, workspaceId);
     const overage = Math.max(0, messagesUsed - plan.includedMessages);
     const overageCents =
       plan.overagePer1kCents === null ? 0 : Math.ceil(overage / 1000) * plan.overagePer1kCents;
@@ -188,6 +192,11 @@ export function billingRoutes(db: Db) {
       period,
       stripe_enabled: Boolean(env.stripeSecret),
       has_billing_account: Boolean(ws?.stripeCustomerId),
+      shopify: {
+        provider: ws?.billingProvider ?? 'stripe',
+        shop: railShop ? { shop: railShop.shop } : null,
+        test_mode: railShop ? await shopIsDevelopment(db, railShop) : false,
+      },
       plans: await Promise.all(Object.entries(PLANS)
         .filter(([, p]) => !p.hidden)
         .map(async ([key, p]) => ({

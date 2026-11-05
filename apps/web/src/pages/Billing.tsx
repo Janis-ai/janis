@@ -47,6 +47,11 @@ interface BillingSummary {
     cost_cents: number;
     byok: boolean;
   }[];
+  shopify: {
+    provider: string;
+    shop: { shop: string } | null;
+    test_mode: boolean;
+  };
 }
 
 const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
@@ -72,22 +77,12 @@ export default function Billing() {
     queryFn: () => api<BillingSummary>(`/api/billing/summary?period=${period}`),
     refetchInterval: upgraded ? 3000 : false, // poll until the webhook lands
   });
-  // Shopify billing rail — present when a store is linked; the merchant
-  // approves the AppSubscription in Shopify admin instead of Stripe checkout.
-  // Plan buttons stay disabled until this settles: the Stripe fallback must
-  // never fire for a Shopify-billed workspace (App Store requirement).
-  const { data: shopifyBilling, isFetched: railFetched } = useQuery({
-    queryKey: ['shopify-billing'],
-    queryFn: () =>
-      api<{
-        provider: string;
-        shop: { shop: string; subscription?: { plan?: string; status?: string } } | null;
-        test_mode: boolean;
-      }>('/api/shopify/billing'),
-    retry: false,
-  });
+  // Shopify billing rail — the summary itself carries it, so the page is
+  // correct on first paint: no second probe, no Stripe-layout flash for a
+  // reviewer or a fast clicker. The merchant approves the AppSubscription
+  // in Shopify admin instead of Stripe checkout.
   const onShopifyRail =
-    shopifyBilling?.provider === 'shopify' || Boolean(shopifyBilling?.shop);
+    data?.shopify.provider === 'shopify' || Boolean(data?.shopify.shop);
 
   useEffect(() => {
     if (data && upgraded && data.plan.key !== 'free') setUpgraded(false);
@@ -106,7 +101,7 @@ export default function Billing() {
 
   const checkout = async (plan: string) => {
     setError('');
-    if (!railFetched) return; // never guess the rail — a wrong guess opens Stripe
+    if (!data) return; // never guess the rail — a wrong guess opens Stripe
     try {
       if (onShopifyRail) {
         const r = await api<{ confirmation_url: string }>('/api/shopify/billing/start', {
@@ -193,8 +188,8 @@ export default function Billing() {
       {onShopifyRail && (
         <div className="card muted" style={{ fontSize: 13 }}>
           Plan billing runs through Shopify
-          {shopifyBilling?.shop?.shop ? ` (${shopifyBilling.shop.shop})` : ''}
-          {shopifyBilling?.test_mode && ' — test charges while the store is in development'}
+          {data?.shopify.shop?.shop ? ` (${data.shopify.shop.shop})` : ''}
+          {data?.shopify.test_mode && ' — test charges while the store is in development'}
           . Approving a plan opens Shopify admin; charges appear in your store's billing history.
         </div>
       )}
@@ -266,7 +261,6 @@ export default function Billing() {
                       <button
                         className="btn primary"
                         style={{ marginTop: 10 }}
-                        disabled={!railFetched}
                         onClick={() => void checkout(p.key)}
                       >
                         {data.plan.base_cents < p.base_cents ? 'Upgrade' : 'Switch'}

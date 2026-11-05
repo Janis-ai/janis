@@ -346,6 +346,18 @@ describe('shopify rail gating', () => {
     ).toBeUndefined();
   });
 
+  it('summary carries the rail state so the page never flashes Stripe', async () => {
+    const res = await api.request('/api/billing/summary', {
+      headers: { cookie: railCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      shopify: { provider: string; shop: { shop: string } | null };
+    };
+    expect(body.shopify.provider).toBe('shopify');
+    expect(body.shopify.shop?.shop).toBe('rail-shop.myshopify.com');
+  });
+
   it('refuses the no-billing plan override', async () => {
     const res = await api.request('/api/billing/plan', {
       method: 'PATCH',
