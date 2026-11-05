@@ -1458,9 +1458,27 @@ Phase 6 DONE 2026-10-19 — listing assets complete
 (~/Documents/shopify-listing/: 7 screenshots, app-icon-1200, demo mp4,
 listing-copy.md; PCD questionnaire + security policy submitted; review
 walkthrough video recorded), app-check ticked after a dev-store
-embedded session, SUBMITTED FOR REVIEW. Shopify track is now
-reviewer-bound: expect days–weeks; first submissions usually come back
-with feedback requests — watch the Partner Dashboard + email.
+embedded session, SUBMITTED FOR REVIEW.
+
+Review round 1 (ref 143310, paused until 2026-11-07): flagged 1.2.1
+off-platform billing + 1.2.2 (accept/decline/reinstall re-approval) +
+1.2.3 (self-serve plan changes). The AppSubscription rail existed but
+Stripe stayed reachable for Shopify-railed workspaces. Fixed in e489960c:
+every Stripe money surface (checkout/portal/domain-addon/connect/
+agency-pricing/PATCH plan) now refuses on the rail via
+shopifyRailLocked (provider='shopify', or linked shop + free plan);
+/api/billing/downgrade runs appSubscriptionCancel; uninstallShop mirrors
+Shopify's auto-cancel so reinstalls re-approve; unbindShop cancels the
+sub + frees the departed workspace; bindShop moves an ACTIVE sub's plan
+to the new binding; concierge change_plan returns a Shopify approval
+link on the rail; embedded app gained paid-plan change + cancel UI; the
+console Billing page waits for the rail probe before offering Stripe.
+RESUBMIT after Nov 7 via Partner Dashboard — billing surfaces only.
+
+Known remaining hole (flagged, not fixed — predates this work): PATCH
+/api/billing/plan is a workspace-admin self-serve plan write with no
+payment on the STRIPE rail too — intended as a support tool but any
+workspace admin can call it. Needs an internal-caller gate.
 
 Dashboard gaps hit (Shopify migration in progress): GDPR webhooks =
 toml-only; protected-customer-data request UI lives in Partner Dashboard
