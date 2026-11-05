@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_INTENTS } from '@janis/shared';
@@ -12,6 +12,7 @@ import { CorrectThisCard } from '../components/CorrectThis';
 import { type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 import { useScenarioMatch } from '../lib/scenarioMatch';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
+import { usePanelWidth } from '../lib/panelLayout';
 import { ALERT_LABELS } from '../components/Layout';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
@@ -161,6 +162,10 @@ export default function ConversationPage() {
   // (params.cid = conv, params.agentId/params.id = agent).
   const agentParam = params.agentId ?? (params.cid ? params.id : undefined);
   const id = params.cid ?? params.id ?? '';
+  // Details rail is user-resizable — --rail-w feeds the ≥681px container
+  // rule (drawer widths keep their own). The grip lands in the parent's
+  // .conv-layout beside the aside's left edge.
+  const { width: railW, gripProps: railGrip } = usePanelWidth('conv.railw', 280, 240, 560, -1);
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -1939,6 +1944,7 @@ export default function ConversationPage() {
       {/* Mobile (≤720px): the details column is a right slide-over behind
           the header's ⓘ — scrim/Esc/X close it. On desktop it's the
           static rail, exactly as before. */}
+      <div className="conv-rail-grip" style={{ right: railW - 4 }} {...railGrip} />
       {sideOpen && (
         <button
           className="conv-side-scrim"
@@ -1946,7 +1952,10 @@ export default function ConversationPage() {
           onClick={() => setSideOpen(false)}
         />
       )}
-      <aside className={`conv-side${sideOpen ? ' open' : ''}`}>
+      <aside
+        className={`conv-side${sideOpen ? ' open' : ''}`}
+        style={{ '--rail-w': `${railW}px` } as CSSProperties}
+      >
         <div className="conv-side-head">
           <button
             className="cmh-back"

@@ -11,6 +11,7 @@ import { Archive, ArchiveRestore, Bot, Check, Cog, Headset, ListFilter, Mail, Ma
 import { useConfirm, usePrompt } from '../components/Prompt';
 import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
 import { isEditableTarget } from '../lib/keys';
+import { usePanelWidth } from '../lib/panelLayout';
 import { usePageTitle } from '../lib/title';
 
 /** Multi-select filter model — each group's values ride its own csv list
@@ -431,6 +432,9 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const openConvId = location.pathname.startsWith(`${inboxBase}/`)
     ? location.pathname.slice(inboxBase.length + 1).split('/')[0]
     : null;
+  // Split column is user-resizable (drag grip, persists) — inline width
+  // only while the class is .conv-inbox so .inbox-col keeps its 100%.
+  const { width: colW, gripProps: colGrip } = usePanelWidth('conv.colw', 290, 220, 480);
   const listRef = useRef<HTMLDivElement>(null);
   const sentRef = useRef<HTMLDivElement>(null);
   const colRef = useRef<HTMLDivElement>(null);
@@ -746,7 +750,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           same nodes carry .inbox-col/.conv-inbox so opening a conversation
           is a resize, not a remount — scroll, filters, selection survive. */}
       <div className={openConvId ? 'conv-layout' : 'inbox-page'}>
-      <div ref={colRef} className={openConvId ? 'conv-inbox' : 'inbox-col'}>
+      <div ref={colRef} className={openConvId ? 'conv-inbox' : 'inbox-col'} style={openConvId ? { width: colW } : undefined}>
       {/* Pinned under the mobile-bar on phones — the list scrolls beneath. */}
       <div className={openConvId ? 'conv-inbox-head' : 'inbox-head'}>
       {drill && !openConvId && (
@@ -1080,6 +1084,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       )}
       </div>
       </div>
+      {openConvId && <div className="conv-col-grip" style={{ left: colW - 4 }} {...colGrip} />}
       {outlet}
       </div>
     </>

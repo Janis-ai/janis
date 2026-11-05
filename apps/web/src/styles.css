@@ -85,9 +85,69 @@ button, input, select, textarea { font: inherit; }
    (landing has no .layout and keeps its document scroll). */
 html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: none; }
 .sidebar {
-  width: 210px; flex-shrink: 0; background: var(--panel);
+  width: var(--nav-w, 210px); flex-shrink: 0; background: var(--panel);
   border-right: 1px solid var(--border); padding: 16px 0;
   display: flex; flex-direction: column; overflow-y: auto;
+  transition: width .18s ease;
+}
+/* Brand + collapse toggle share the sidebar's top row. */
+.sidebar-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 4px; padding-right: 10px; }
+.nav-collapse {
+  border: none; background: none; color: var(--muted); cursor: pointer;
+  padding: 4px; border-radius: 6px; margin-top: 2px;
+}
+.nav-collapse:hover { color: var(--text); background: var(--panel-2); }
+/* Drag edges — the sidebar's lives at the layout level (the nav scrolls,
+   which would carry an absolutely-positioned child along); the conv split
+   grips sit inside .conv-layout at each panel's border. Hover shows a
+   3px accent line; double-click resets to the default width. */
+.nav-grip { position: fixed; left: calc(var(--nav-w, 210px) - 4px); top: 0; bottom: 0; width: 9px; cursor: col-resize; z-index: 30; }
+.conv-col-grip, .conv-rail-grip { position: absolute; top: 0; bottom: 0; width: 9px; cursor: col-resize; z-index: 26; }
+.conv-col-grip { margin-left: 0; }
+.conv-rail-grip { margin-right: 0; }
+.nav-grip::after, .conv-col-grip::after, .conv-rail-grip::after {
+  content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 3px;
+  margin-left: -1.5px; border-radius: 2px; background: transparent;
+  transition: background .12s;
+}
+.nav-grip:hover::after, .conv-col-grip:hover::after, .conv-rail-grip:hover::after { background: var(--accent); }
+body.panel-resize { cursor: col-resize; user-select: none; }
+body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .inbox-col { transition: none !important; }
+@media (max-width: 720px) { .nav-grip { display: none; } }
+@media (max-width: 1199px) { .conv-col-grip { display: none; } }
+@container convl (max-width: 680px) { .conv-rail-grip { display: none; } }
+@media (max-width: 1400px) { .layout.dock-open .conv-rail-grip { display: none; } }
+/* Manual collapse — the same 60px icon rail the conv-open/dock-open
+   squeezes use (kept in lockstep), at every desktop width. */
+@media (min-width: 721px) {
+  .sidebar.mini { width: 60px; }
+  .sidebar.mini .brand, .sidebar.mini a, .sidebar.mini .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
+  .sidebar.mini .brand .brand-wide { display: none; }
+  .sidebar.mini .brand .brand-mark { display: block; margin: 0 auto; }
+  .sidebar.mini .sidebar-top { flex-direction: column; align-items: center; padding-right: 0; gap: 8px; }
+  .sidebar.mini a .label, .sidebar.mini .ask-toggle .label { display: none; }
+  .sidebar.mini .user { display: flex; justify-content: center; padding: 12px 0; }
+  .sidebar.mini .user .user-text { display: none; }
+  .sidebar.mini .user .user-ic { display: inline-flex; color: var(--muted); }
+  .sidebar.mini .user .user-ic:hover { color: var(--text); }
+  .sidebar.mini a .icon, .sidebar.mini .ask-toggle .icon { display: inline-flex; }
+  .sidebar.mini a.nav-indent { padding-left: 0; }
+  .sidebar.mini .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
+  .sidebar.mini .nav-sec span { display: none; }
+  .sidebar.mini .nav-sec:not(:has(svg)) { display: none; }
+  .sidebar.mini a { position: relative; }
+  .sidebar.mini a .nav-badge {
+    position: absolute; top: 1px; left: 50%; margin: 0 0 0 7px;
+    font-size: 9px; line-height: 13px; min-width: 13px; padding: 0 3px;
+    border-radius: 8px;
+  }
+  .sidebar.mini a .step-mark {
+    position: absolute; top: 2px; left: 50%; margin: 0 0 0 6px; font-size: 10px;
+  }
+  .sidebar.mini .ctx-btn { padding: 6px; justify-content: center; }
+  .sidebar.mini .ctx-stack, .sidebar.mini .ctx-btn .icon { display: none; }
+  .sidebar.mini .ctx-switch { margin: 0 8px 6px; }
+  .sidebar.mini .nav-grip { display: none; }
 }
 .sidebar .brand { font-size: 20px; font-weight: 700; padding: 0 20px 16px; color: var(--accent); }
 .sidebar .brand .brand-wide { height: 26px; display: block; }
@@ -1821,6 +1881,12 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 }
 .conv-actions .copilot-btn, .cmh-copilot { color: var(--copilot, #7c6cf0); }
 .conv-side { width: 280px; flex-shrink: 0; overflow-y: auto; overflow-x: hidden; overflow-wrap: break-word; padding-top: 14px; }
+/* User-resizable rail — only when it's the static beside-panel; the ≤680
+   and dock-open drawers carry their own widths (fixed/88vw rules win by
+   range or specificity). */
+@container convl (min-width: 681px) {
+  .conv-side { width: var(--rail-w, 280px); }
+}
 .card.suggestion { border-color: var(--accent); }
 /* The Ask Janis rail claims ~340px — on the conversation screen at mid widths
    that squeezes the transcript + details into nested scrollbars, so the sidebar

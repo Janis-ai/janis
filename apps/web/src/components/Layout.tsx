@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { Agent } from '@janis/shared';
 import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -23,11 +23,14 @@ import { freshCopilotThread, readCopilotThread, storeCopilotThread } from '../li
 import { railBus, type RailRequest } from '../lib/railBus';
 import { DockContext, type DockTab, type TestWiring } from '../lib/dockContext';
 import { t } from '../lib/i18n';
+import { isEditableTarget } from '../lib/keys';
+import { usePanelWidth, useStoredFlag } from '../lib/panelLayout';
 import { markStepSeen, stepGlyph, stepSubtitle } from '../lib/seenSteps';
 import {
   BarChart3, BookOpen, Bot, Bug, Building2, Check, ChevronLeft, ChevronRight, ChevronsUpDown,
   Columns2, Compass, CreditCard, FlaskConical, Gauge, Inbox, Maximize2, Megaphone,
-  LogOut, Menu, MessageSquarePlus, Minimize2, PenLine, Rocket, Settings, Sparkles, Users,
+  LogOut, Menu, MessageSquarePlus, Minimize2, PanelLeftClose, PanelLeftOpen,
+  PenLine, Rocket, Settings, Sparkles, Users,
   Wrench, X, Zap,
 } from 'lucide-react';
 import { usePrompt } from './Prompt';
@@ -332,6 +335,20 @@ export default function Layout() {
   // Mobile (≤720px): the sidebar leaves the flow and becomes an off-canvas
   // drawer — the top bar's ☰ opens it, scrim/Esc/nav-click/route change close.
   const [navOpen, setNavOpen] = useState(false);
+  // Desktop sidebar: manual collapse to the icon rail (⌘B, Slack-style)
+  // plus a drag handle on its right edge — both persist across sessions.
+  const [navCollapsed, setNavCollapsed] = useStoredFlag('nav.collapsed');
+  const { width: navW, gripProps: navGrip } = usePanelWidth('nav.width', 210, 170, 340);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && !isEditableTarget(e.target)) {
+        e.preventDefault();
+        setNavCollapsed(!navCollapsed);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [navCollapsed]);
   const [railTab, setRailTab] = useState<'ask' | 'test'>('ask');
   const [testRail, setTestRail] = useState<RailRequest | null>(null);
   const [askSeed, setAskSeed] = useState<{ text: string; nonce: number } | null>(null);
@@ -1185,7 +1202,9 @@ export default function Layout() {
       }${railOpen && dockExpanded && !isAskPage ? ' dock-wide' : ''}${isAskPage ? ' ask-page' : ''}${
         isConvPage ? ' conv-open' : ''
       }${navOpen ? ' nav-open' : ''}`}
+      style={{ '--nav-w': `${navW}px` } as CSSProperties}
     >
+      {!navCollapsed && <div className="nav-grip" {...navGrip} />}
       {promptEl}
       <CommandPalette />
       <a className="skip-link" href="#main-content">Skip to content</a>
@@ -1201,7 +1220,7 @@ export default function Layout() {
       {/* Clicking a nav item while the rail overlays (≤720px) folds it — even
           a click on the section you're already on, which changes no path. */}
       <nav
-        className="sidebar"
+        className={`sidebar${navCollapsed ? ' mini' : ''}`}
         aria-label="Main navigation"
         onClick={(e) => {
           if (
@@ -1213,10 +1232,20 @@ export default function Layout() {
           }
         }}
       >
-        <span className="brand">
-          <BrandImg className="brand-wide" alt="Janis" />
-          <BrandImg className="brand-mark" mark alt="" />
-        </span>
+        <div className="sidebar-top">
+          <span className="brand">
+            <BrandImg className="brand-wide" alt="Janis" />
+            <BrandImg className="brand-mark" mark alt="" />
+          </span>
+          <button
+            className="nav-collapse"
+            aria-label={navCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={navCollapsed ? 'Expand sidebar ⌘B' : 'Collapse sidebar ⌘B'}
+            onClick={() => setNavCollapsed(!navCollapsed)}
+          >
+            {navCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+          </button>
+        </div>
         {data?.workspace && (
           <ContextSwitcher
             data={data}
