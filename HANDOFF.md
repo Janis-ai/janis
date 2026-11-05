@@ -93,6 +93,35 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-05c — Operator sends carry rich components end-to-end
+- The paused-conversation gap closed: suggestions now store a payload
+  ({widgets, buttons, proposed_actions} — migration 0125 adds
+  suggestions.payload) instead of discarding what the suggest run
+  produced. The console card renders widgets + quick-reply chips, and
+  "Use" attaches them to the reply (pending-components chip under the
+  composer dismisses with ✕). Reply + agent-send accept widgets /
+  quick_replies and deliver via the same channel mapping agent replies
+  use; resend re-attaches them.
+- Approvals during takeover are on-demand, not ambient: a gated tool in
+  a suggest run becomes a proposed_actions card with Approve & run /
+  Edit (JSON args) / For teammate. Inline run executes via
+  decidePendingAction — the only transcript artifact is the compact
+  result note; "For teammate" parks the real pending_action card +
+  Slack + alert for second eyes. POST /:id/run-action resolves the
+  ToolDef server-side (never trusts a client snapshot); builtins can
+  only be parked.
+- Composer gains a component picker (Shapes icon) listing the agent's
+  saved components; POST /:id/send-component resolves through
+  resolveWidgetRef with operator identity (bound tools run for real,
+  data JSON input when the component is tool-bound) and sends via
+  humanReply widgets. Widget-only sends are valid.
+- {{set/tag/goto}} directives in operator/suggestion text on bot-
+  platform channels (chatfuel:|manychat: externalIds) parse into
+  effects + channel_effects — flows work from saved replies too.
+- v1 POST /suggestions accepts an optional payload passthrough so BYO
+  agents can attach components to their drafts.
+- Committed 7ad3a22b; tests cover reply widgets/qrs, widget-only send,
+  invalid spec 400, send-component resolve, run-action park + inline.
 ## 2026-11-05b — Tool calls show inline in the transcript
 - `payload.inspector.tools` already held the run trace behind the "✦ why
   this reply" toggle, but a call was invisible until the panel opened.
