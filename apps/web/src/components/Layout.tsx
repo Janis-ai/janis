@@ -1289,6 +1289,16 @@ export default function Layout() {
           >
             {navCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
           </button>
+          {/* Mobile drawer close — the sidebar is an overlay at ≤720px,
+              so the affordance is ×, not a collapse glyph. */}
+          <button
+            className="nav-collapse nav-close"
+            aria-label="Close navigation"
+            title="Close navigation"
+            onClick={() => setNavOpen(false)}
+          >
+            <X size={16} />
+          </button>
         </div>
         {data?.workspace && (
           <ContextSwitcher

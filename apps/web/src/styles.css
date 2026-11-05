@@ -117,9 +117,11 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
 @media (max-width: 1199px) { .conv-col-grip { display: none; } }
 @container convl (max-width: 680px) { .conv-rail-grip { display: none; } }
 @media (max-width: 1400px) { .layout.dock-open .conv-rail-grip { display: none; } }
-/* Not collapsible on mobile (the drawer already handles it) — hide the
-   toggle so the top row doesn't carry a dead button. */
-@media (max-width: 720px) { .nav-collapse { display: none; } }
+/* Mobile: the sidebar is an overlay drawer, so collapse is meaningless —
+   hide the toggle and show a plain × close in its place. Desktop hides
+   the ×. */
+.nav-close { display: none; }
+@media (max-width: 720px) { .nav-collapse { display: none; } .nav-close { display: inline-flex; } }
 /* Manual collapse — the same 60px icon rail the conv-open/dock-open
    squeezes use (kept in lockstep), at every desktop width. */
 @media (min-width: 721px) {
