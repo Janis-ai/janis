@@ -408,8 +408,20 @@ is a day on launch)*
     via scripts/tmp/reset-review-pw.ts, verified live) on "OAuth review
     workspace" / agent "Meridian Realty Intake" — consent re-runs on the
     uninstalled Slides/Drive cards with the reviewer's own account.
+    2026-11-05: second kickback — scope mismatch. Code requests
+    auth/presentations.readonly (deck-paste KB source, googleSource.ts)
+    but the console's Data Access list only had spreadsheets+documents;
+    Google requires strict string match. Fix = add
+    auth/presentations.readonly in console → Data Access (Mike), then
+    reply — likely needs a fresh demo video since the consent screen
+    gains a "view your Slides" line. Gmail's restricted-tier scopes
+    (gmail.readonly/gmail.send/contacts.other.readonly) stay out of the
+    request via GMAIL_CONNECT_DISABLED=1 (#11) until the CASA path is
+    funded — do NOT re-enable mid-review. drive.file is non-sensitive so
+    it isn't on the verification list (still declare it in Data Access).
     Covers the Google files connector
-    (routes/googleConnect.ts): spreadsheets + documents + drive.file —
+    (routes/googleConnect.ts): spreadsheets + documents +
+    presentations.readonly + drive.file —
     deliberately non-restricted scopes (drive.file picker + app-created
     files) so no CASA assessment applies; drive.readonly was dropped for
     exactly that reason (5c1a663). Until verified, the consent screen
