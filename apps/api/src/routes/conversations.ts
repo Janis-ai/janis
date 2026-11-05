@@ -777,6 +777,33 @@ export function conversationRoutes(db: Db) {
       return c.json({ parked: true }, 201);
     }
 
+    // Idempotent — an identical action already recorded decides once. A
+    // repeat click returns the existing decision instead of double-firing
+    // the side effect or 409ing on 'not-pending'.
+    const [existing] = await db
+      .select()
+      .from(pendingActions)
+      .where(
+        and(
+          eq(pendingActions.conversationId, convRow.id),
+          eq(pendingActions.toolName, body.name),
+          sql`${pendingActions.args} = ${JSON.stringify(body.args)}::jsonb`,
+        ),
+      )
+      .limit(1);
+    if (existing) {
+      if (existing.status !== 'pending') {
+        return c.json({
+          action: { id: existing.id, status: existing.status, result: existing.result },
+          deduped: true,
+        });
+      }
+      const decided = await decidePendingAction(db, existing.id, { id: user.id, name: user.name }, true);
+      if (decided === 'not-pending' || !decided) {
+        return c.json({ error: 'action could not be decided' }, 409);
+      }
+      return c.json({ action: { id: decided.action.id, status: decided.action.status, result: decided.action.result } }, 201);
+    }
     // Inline approve — a decided pending_action row is the audit trail;
     // decidePendingAction runs it and posts the compact result note.
     const [action] = await db
