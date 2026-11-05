@@ -6,7 +6,7 @@ import { desc, eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alerts, conversations, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
+import { agents, agentWidgets, alerts, conversations, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
 import { generateApiKey, generateSessionToken, hashPassword } from '../lib/crypto.js';
 import { conversationRoutes } from './conversations.js';
 import { viewRoutes } from './views.js';
@@ -902,5 +902,133 @@ describe('operator brief', () => {
       .where(eq(conversations.id, conv.id));
     await getSummary(conv.id);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('rich operator sends', () => {
+  it('stores widgets + quick replies on an operator reply', async () => {
+    const conv = await makeConversation('rich-reply');
+    const res = await post(`/${conv.id}/reply`, adminCookie, {
+      text: 'here you go',
+      widgets: [{ type: 'options', title: 'Take your pick:', items: [{ label: 'A' }, { label: 'B' }] }],
+      quick_replies: ['yes', 'no'],
+    });
+    expect(res.status).toBe(201);
+    const { message } = await res.json();
+    expect(message.direction).toBe('human');
+    expect(message.payload.widgets).toHaveLength(1);
+    expect(message.payload.quick_replies).toEqual(['yes', 'no']);
+  });
+
+  it('accepts a widget-only send', async () => {
+    const conv = await makeConversation('widget-only');
+    const res = await post(`/${conv.id}/reply`, adminCookie, {
+      text: '',
+      widgets: [{ type: 'options', title: 'Take your pick:', items: [{ label: 'A' }] }],
+    });
+    expect(res.status).toBe(201);
+    const { message } = await res.json();
+    expect(message.payload.widgets).toHaveLength(1);
+  });
+
+  it('rejects an invalid widget spec', async () => {
+    const conv = await makeConversation('bad-widget');
+    const res = await post(`/${conv.id}/reply`, adminCookie, {
+      text: 'x',
+      widgets: [{ type: 'nonsense' }],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('send-component resolves a saved component and sends it as the operator', async () => {
+    const conv = await makeConversation('comp-conv');
+    await db.insert(agentWidgets).values({
+      agentId: agent.id,
+      name: 'pick-one',
+      spec: { type: 'options', title: 'Take your pick:', items: [{ label: 'A' }, { label: 'B' }] },
+    });
+    const res = await post(`/${conv.id}/send-component`, adminCookie, { name: 'pick-one' });
+    expect(res.status).toBe(201);
+    const { message } = await res.json();
+    expect(message.direction).toBe('human');
+    expect(message.payload.widgets).toHaveLength(1);
+    expect((message.payload.widgets as { title?: string }[])[0].title).toBe('Take your pick:');
+    const miss = await post(`/${conv.id}/send-component`, adminCookie, { name: 'nope' });
+    expect(miss.status).toBe(404);
+  });
+});
+
+describe('run-action', () => {
+  it('404s the tool when the agent has none by that name', async () => {
+    const conv = await makeConversation('ra-unknown');
+    const res = await post(`/${conv.id}/run-action`, adminCookie, { name: 'nope', args: {} });
+    expect(res.status).toBe(400);
+  });
+
+  it('park=true creates a real pending approval card', async () => {
+    const conv = await makeConversation('ra-park');
+    await db
+      .update(agents)
+      .set({
+        config: {
+          tools: [
+            { name: 'refund_order', url: 'http://127.0.0.1:9/x', method: 'POST', bodyTemplate: '{}', approval: true },
+          ],
+        },
+      })
+      .where(eq(agents.id, agent.id));
+    try {
+      const res = await post(`/${conv.id}/run-action`, adminCookie, {
+        name: 'refund_order',
+        args: { amount: '5' },
+        park: true,
+      });
+      expect(res.status).toBe(201);
+      expect((await res.json()).parked).toBe(true);
+      const rows = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+      expect(
+        rows.some(
+          (m) =>
+            (m.payload as { action?: { status?: string; tool?: string } } | null)?.action
+              ?.status === 'pending' &&
+            (m.payload as { action?: { tool?: string } } | null)?.action?.tool === 'refund_order',
+        ),
+      ).toBe(true);
+    } finally {
+      await db.update(agents).set({ config: {} }).where(eq(agents.id, agent.id));
+    }
+  });
+
+  it('inline run executes + posts the compact result note', async () => {
+    const conv = await makeConversation('ra-inline');
+    await db
+      .update(agents)
+      .set({
+        config: {
+          tools: [
+            { name: 'ping_tool', url: 'http://127.0.0.1:9/x', method: 'POST', bodyTemplate: '{}' },
+          ],
+        },
+      })
+      .where(eq(agents.id, agent.id));
+    try {
+      const res = await post(`/${conv.id}/run-action`, adminCookie, { name: 'ping_tool', args: {} });
+      expect(res.status).toBe(201);
+      const { action } = await res.json();
+      expect(action.status).toBe('approved');
+      const rows = await db.select().from(messages).where(eq(messages.conversationId, conv.id));
+      expect(
+        rows.some((m) => (m.text ?? '').includes('teammate approved and ran ping_tool')),
+      ).toBe(true);
+      // No real approval card was parked — inline decide skips the transcript card.
+      expect(
+        rows.some(
+          (m) =>
+            (m.payload as { action?: { status?: string } } | null)?.action?.status === 'pending',
+        ),
+      ).toBe(false);
+    } finally {
+      await db.update(agents).set({ config: {} }).where(eq(agents.id, agent.id));
+    }
   });
 });

@@ -59,11 +59,14 @@ export function v1Routes(db: Db) {
         conversation_id: z.string(),
         text: z.string().min(1),
         notes: z.string().max(500).optional(),
+        // Rich draft material ({widgets, buttons, proposed_actions}) — same
+        // shape hosted suggestions carry; rendered in the console card.
+        payload: z.record(z.unknown()).optional(),
       }),
     ),
     async (c) => {
       const agent = c.get('agent');
-      const { conversation_id, text, notes } = c.req.valid('json');
+      const { conversation_id, text, notes, payload } = c.req.valid('json');
       const [conv] = await db
         .select()
         .from(conversations)
@@ -72,7 +75,7 @@ export function v1Routes(db: Db) {
         )
         .limit(1);
       if (!conv) return c.json({ error: 'conversation not found' }, 404);
-      const row = await storeSuggestion(db, conv.id, text, 'agent', notes);
+      const row = await storeSuggestion(db, conv.id, text, 'agent', notes, payload);
       return c.json({ suggestion: { id: row.id } }, 201);
     },
   );

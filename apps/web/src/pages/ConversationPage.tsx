@@ -89,6 +89,8 @@ interface OutEntry {
   localId: string;
   text: string;
   attachments: Attachment[];
+  widgets?: unknown[];
+  quick_replies?: unknown[];
   mode: 'human' | 'agent' | 'note' | 'teach';
   status: 'pending' | 'failed' | 'delivered';
   /** channel rejection reason when the send was stored but not delivered */
@@ -612,6 +614,15 @@ export default function ConversationPage() {
   };
 
   const [suggestOpen, setSuggestOpen] = useState(false);
+  // Components a used suggestion carries — ride along on the next reply
+  // send, dismissed with ✕ or consumed on success.
+  const [pendingComponents, setPendingComponents] = useState<{
+    widgets?: unknown[];
+    quick_replies?: unknown[];
+  } | null>(null);
+  const [actionResults, setActionResults] = useState<Record<number, string>>({});
+  const [editAction, setEditAction] = useState<number | null>(null);
+  const [actionArgsDraft, setActionArgsDraft] = useState('');
   // Mobile details slide-over — the right column is a drawer on phones,
   // opened from the header's ⓘ. The page never scrolls; transcript only.
   const [sideOpen, setSideOpen] = useState(false);
@@ -762,6 +773,31 @@ export default function ConversationPage() {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['conversation', id] }),
   });
 
+  // Inline approve (default) or park-for-teammate (park:true) on a gated
+  // action the suggestion proposed.
+  const runAction = useMutation({
+    mutationFn: ({ name, args, park }: { name: string; args: Record<string, unknown>; park?: boolean }) =>
+      api<{ parked?: boolean; action?: { status: string; result?: string | null } }>(
+        `/api/conversations/${id}/run-action`,
+        { method: 'POST', body: JSON.stringify({ name, args, park }) },
+      ),
+    onError: (e) => setError(e.message),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['conversation', id] }),
+  });
+
+  const sendComponent = useMutation({
+    mutationFn: ({ name, data }: { name: string; data?: Record<string, unknown> }) =>
+      api(`/api/conversations/${id}/send-component`, {
+        method: 'POST',
+        body: JSON.stringify({ name, data }),
+      }),
+    onSuccess: () => {
+      setError('');
+      void qc.invalidateQueries({ queryKey: ['conversation', id] });
+    },
+    onError: (e) => setError(e.message),
+  });
+
   const send = (attachments: Attachment[], retryOf?: OutEntry) => {
     stickRef.current = true; // your own send always lands at the tail
     const mode = retryOf?.mode ?? sendAs;
@@ -771,6 +807,8 @@ export default function ConversationPage() {
         localId: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         text: draft,
         attachments,
+        widgets: pendingComponents?.widgets,
+        quick_replies: pendingComponents?.quick_replies,
         mode,
         status: 'pending',
         ts: Date.now(),
@@ -784,7 +822,12 @@ export default function ConversationPage() {
       `/api/conversations/${id}/${endpoint}`,
       {
         method: 'POST',
-        body: JSON.stringify({ text: entry.text, attachments: entry.attachments }),
+        body: JSON.stringify({
+          text: entry.text,
+          attachments: entry.attachments,
+          widgets: entry.widgets,
+          quick_replies: entry.quick_replies,
+        }),
       },
     )
       .then((res) => {
@@ -810,7 +853,10 @@ export default function ConversationPage() {
         }
         setOb((o) => o.map((x) => (x.localId === entry.localId ? { ...x, status: 'delivered' } : x)));
         receiptFor.current = entry.localId;
-        if (!retryOf) setDraft('');
+        if (!retryOf) {
+          setDraft('');
+          setPendingComponents(null);
+        }
         setError('');
         void qc.invalidateQueries({ queryKey: ['conversation', id] });
       })
@@ -1868,6 +1914,128 @@ export default function ConversationPage() {
                   </div>
                 )}
                 <div>{suggestions[0].text}</div>
+                {(suggestions[0].payload?.widgets?.length ?? 0) > 0 && (
+                  <div style={{ marginTop: 6 }}>
+                    <Widgets
+                      widgets={suggestions[0].payload!.widgets as ChatWidget[]}
+                      onSend={() => {}}
+                    />
+                  </div>
+                )}
+                {(suggestions[0].payload?.buttons?.length ?? 0) > 0 && (
+                  <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                    {suggestions[0].payload!.buttons!.map((b, i) => (
+                      <span key={i} className="sug-chip" title="Sends as a quick reply">
+                        {typeof b === 'string' ? b : `share ${b.type}`}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {suggestions[0].payload?.proposed_actions?.map((a, ai) => (
+                  <div key={ai} className="action-card" style={{ marginTop: 8 }}>
+                    <div className="mono" style={{ fontSize: 12 }}>
+                      {a.name}
+                    </div>
+                    {actionResults[ai] ? (
+                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                        {actionResults[ai]}
+                      </div>
+                    ) : editAction === ai ? (
+                      <>
+                        <textarea
+                          className="args-edit"
+                          rows={5}
+                          value={actionArgsDraft}
+                          onChange={(e) => setActionArgsDraft(e.target.value)}
+                        />
+                        <div className="row" style={{ marginTop: 6 }}>
+                          <button
+                            className="btn sm primary"
+                            disabled={runAction.isPending}
+                            onClick={() => {
+                              let args: Record<string, unknown>;
+                              try {
+                                args = JSON.parse(actionArgsDraft) as Record<string, unknown>;
+                              } catch {
+                                setError('args must be valid JSON');
+                                return;
+                              }
+                              runAction.mutate(
+                                { name: a.name, args },
+                                {
+                                  onSuccess: (r) => {
+                                    setActionResults((p) => ({
+                                      ...p,
+                                      [ai]: `ran — ${(r.action?.result ?? 'done').slice(0, 140)}`,
+                                    }));
+                                    setEditAction(null);
+                                  },
+                                },
+                              );
+                            }}
+                          >
+                            Run edited
+                          </button>
+                          <button className="btn sm" onClick={() => setEditAction(null)}>
+                            Cancel
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <ArgsRows args={a.args} />
+                        <div className="row" style={{ marginTop: 6 }}>
+                          <button
+                            className="btn sm primary"
+                            disabled={runAction.isPending}
+                            onClick={() =>
+                              runAction.mutate(
+                                { name: a.name, args: a.args },
+                                {
+                                  onSuccess: (r) =>
+                                    setActionResults((p) => ({
+                                      ...p,
+                                      [ai]: `ran — ${(r.action?.result ?? 'done').slice(0, 140)}`,
+                                    })),
+                                },
+                              )
+                            }
+                          >
+                            Approve & run
+                          </button>
+                          <button
+                            className="btn sm"
+                            onClick={() => {
+                              setEditAction(ai);
+                              setActionArgsDraft(JSON.stringify(a.args, null, 2));
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            className="btn sm"
+                            title="Park a real approval card so another teammate decides"
+                            disabled={runAction.isPending}
+                            onClick={() =>
+                              runAction.mutate(
+                                { name: a.name, args: a.args, park: true },
+                                {
+                                  onSuccess: () =>
+                                    setActionResults((p) => ({
+                                      ...p,
+                                      [ai]: 'parked for team approval',
+                                    })),
+                                },
+                              )
+                            }
+                          >
+                            For teammate
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
               </>
             ) : (
               <div className="muted">Thinking…</div>
@@ -1877,8 +2045,15 @@ export default function ConversationPage() {
                 className="btn primary"
                 disabled={!(suggestions?.length > 0)}
                 onClick={() => {
-                  setDraft(suggestions[0].text);
-                  suggestionStatus.mutate({ sid: suggestions[0].id, status: 'used' });
+                  const s = suggestions[0];
+                  setDraft(s.text);
+                  if (s.payload?.widgets?.length || s.payload?.buttons?.length) {
+                    setPendingComponents({
+                      ...(s.payload.widgets?.length ? { widgets: s.payload.widgets } : {}),
+                      ...(s.payload.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
+                    });
+                  }
+                  suggestionStatus.mutate({ sid: s.id, status: 'used' });
                   setSuggestOpen(false);
                 }}
               >
@@ -1909,6 +2084,28 @@ export default function ConversationPage() {
         {/* Composer is always up for non-archived threads — the reply-as
             dropdown inside it covers agent/note/teach modes, and the Take
             over ⇄ Resume toggle lives next to Send. Ops row is gone. */}
+        {pendingComponents && (
+          <div className="pending-comp muted">
+            {[
+              pendingComponents.widgets?.length
+                ? `${pendingComponents.widgets.length} component${pendingComponents.widgets.length === 1 ? '' : 's'}`
+                : null,
+              pendingComponents.quick_replies?.length
+                ? `${pendingComponents.quick_replies.length} quick repl${pendingComponents.quick_replies.length === 1 ? 'y' : 'ies'}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join(' + ')}{' '}
+            attached — sends with your reply
+            <button
+              className="btn icon sm"
+              aria-label="Detach components"
+              onClick={() => setPendingComponents(null)}
+            >
+              <X size={11} />
+            </button>
+          </div>
+        )}
         {c.state !== 'archived' ? (
           <Composer
             agentId={c.agent_id}
@@ -1945,6 +2142,7 @@ export default function ConversationPage() {
             }}
             showModeSelect={true}
             canTeach={canTeach}
+            onSendComponent={(name, data) => sendComponent.mutate({ name, data })}
             sending={outbox.some((o) => o.status === 'pending')}
           />
         ) : (

@@ -307,6 +307,25 @@ export function useSavedReplies(agentId?: string) {
   });
 }
 
+export interface AgentWidget {
+  id: string;
+  name: string;
+  description?: string | null;
+  spec: unknown;
+  states?: { name: string; spec: unknown }[] | null;
+  /** Tool binding — a component carrying one needs `data` args to resolve. */
+  tool?: { name: string; args?: Record<string, string> } | null;
+  auto_greet?: boolean;
+}
+
+export function useAgentWidgets(agentId?: string) {
+  return useQuery({
+    queryKey: ['agentWidgets', agentId ?? null],
+    queryFn: () => api<{ widgets: AgentWidget[] }>(`/api/agents/${agentId}/widgets`),
+    enabled: !!agentId,
+  });
+}
+
 export interface AgentMember {
   user_id: string;
   email: string;

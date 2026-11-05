@@ -14,6 +14,13 @@ import { resolveOpenAlerts } from '../lib/alerts.js';
 import { systemNote } from '../lib/systemNote.js';
 import { agentVis, operatorIdentity, type AgentScope } from '../lib/access.js';
 import { queueCrmActivity } from '../lib/crm.js';
+import { effectLabel, parseDirectives, type BotEffect } from '../lib/botPlatform.js';
+import type { WidgetComponent } from '../lib/widgets.js';
+import type { QuickReply } from '@janis/shared';
+
+// Same channel sniff the agent ingest path uses — {{…}} directives only
+// mean something on bot-platform channels.
+const BOT_FLAVOR_EXT = /^(chatfuel|manychat):/;
 
 type UserRow = typeof users.$inferSelect;
 type ConversationRow = typeof conversations.$inferSelect;
@@ -131,6 +138,10 @@ export async function humanReply(
   viaSlack = false,
   slackTs?: string, // originating slack message ts — dedupe key on redelivery
   scope?: AgentScope,
+  /** Rich content the suggestion card/manual send carries — widgets render
+   *  natively or map per-channel, quick replies become chips, effects drive
+   *  bot-platform flows ({{goto}} etc. parsed out of the text). */
+  extras?: { widgets?: WidgetComponent[]; quickReplies?: QuickReply[] },
 ): Promise<{ message: typeof messages.$inferSelect; delivery: ChannelDelivery }> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
@@ -145,6 +156,16 @@ export async function humanReply(
     await takeover(db, workspaceId, conversationId, user, scope);
   }
 
+  // Bot-platform {{set/tag/goto}} directives in an operator reply/saved
+  // component send strip out and execute on the platform — same parse the
+  // agent ingest path runs.
+  const effects =
+    BOT_FLAVOR_EXT.test(conversation.externalId) && text.includes('{{')
+      ? parseDirectives(text)
+      : null;
+  if (effects) text = effects.clean;
+  const effs: BotEffect[] | undefined = effects?.effects.length ? effects.effects : undefined;
+
   const [message] = await db
     .insert(messages)
     .values({
@@ -155,6 +176,11 @@ export async function humanReply(
       payload: {
         ...(attachments?.length ? { attachments } : {}),
         ...(slackTs ? { slack_ts: slackTs } : {}),
+        ...(extras?.widgets?.length ? { widgets: extras.widgets } : {}),
+        ...(extras?.quickReplies?.length ? { quick_replies: extras.quickReplies } : {}),
+        ...(effs
+          ? { effects: effs, channel_effects: effs.map(effectLabel) }
+          : {}),
       },
     })
     .returning();
@@ -226,6 +252,9 @@ export async function humanReply(
       senderId: ident.name ? user.id : undefined,
       senderAvatar: ident.name ? ident.avatar : undefined,
       humanAgent: true,
+      widgets: extras?.widgets,
+      quickReplies: extras?.quickReplies,
+      effects: effs,
     }); // hosted channel: human → end user
   })();
   if (!delivery.delivered) {
@@ -270,6 +299,7 @@ export async function agentSend(
   viaSlack = false,
   slackTs?: string,
   scope?: AgentScope,
+  extras?: { widgets?: WidgetComponent[]; quickReplies?: QuickReply[] },
 ): Promise<{ message: typeof messages.$inferSelect; delivery: ChannelDelivery }> {
   const { conversation, agent } = await getConversationForWorkspace(
     db,
@@ -278,6 +308,13 @@ export async function agentSend(
     scope,
   );
   if (conversation.state === 'archived') throw new TakeoverError('conversation is archived', 409);
+
+  const effects =
+    BOT_FLAVOR_EXT.test(conversation.externalId) && text.includes('{{')
+      ? parseDirectives(text)
+      : null;
+  if (effects) text = effects.clean;
+  const effs: BotEffect[] | undefined = effects?.effects.length ? effects.effects : undefined;
 
   const [message] = await db
     .insert(messages)
@@ -290,6 +327,11 @@ export async function agentSend(
         via: 'operator',
         ...(attachments?.length ? { attachments } : {}),
         ...(slackTs ? { slack_ts: slackTs } : {}),
+        ...(extras?.widgets?.length ? { widgets: extras.widgets } : {}),
+        ...(extras?.quickReplies?.length ? { quick_replies: extras.quickReplies } : {}),
+        ...(effs
+          ? { effects: effs, channel_effects: effs.map(effectLabel) }
+          : {}),
       },
     })
     .returning();
@@ -319,7 +361,12 @@ export async function agentSend(
   const delivery = await (async () => {
     const b = await channelBindingFor(db, conversationId);
     if (b) await takeThreadControl(b.channel, b.platformUserId);
-    return deliverToChannel(db, conversationId, text, attachments, { messageId: message.id }); // hosted channel: send to end user
+    return deliverToChannel(db, conversationId, text, attachments, {
+      messageId: message.id,
+      widgets: extras?.widgets,
+      quickReplies: extras?.quickReplies,
+      effects: effs,
+    }); // hosted channel: send to end user
   })();
   if (!delivery.delivered) {
     void mirrorToSlack(

@@ -75,10 +75,17 @@ export async function storeSuggestion(
   text: string,
   source: 'agent' | 'llm',
   notes?: string,
+  payload?: Record<string, unknown>,
 ) {
   const [row] = await db
     .insert(suggestions)
-    .values({ conversationId, text, notes: notes ?? null, source })
+    .values({
+      conversationId,
+      text,
+      notes: notes ?? null,
+      source,
+      ...(payload && Object.keys(payload).length ? { payload } : {}),
+    })
     .returning();
   const [conv] = await db
     .select({ workspaceId: agents.workspaceId })

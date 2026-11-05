@@ -780,6 +780,11 @@ export const suggestions = pgTable('suggestions', {
   // goal-steering context: what the draft is trying to achieve / what info is
   // missing — shown muted above the reply, never sent to the customer
   notes: text('notes'),
+  // Rich payload the suggest run produced — {widgets, buttons,
+  // proposed_actions:[{name, tool, args}]} — rendered in the console card and
+  // delivered verbatim when the operator sends the suggestion. Older rows and
+  // plain-LLM fallbacks carry {} (text-only suggestion).
+  payload: jsonb('payload').notNull().default({}),
   source: text('source', { enum: ['agent', 'llm'] }).notNull(),
   status: text('status', { enum: ['pending', 'used', 'dismissed'] })
     .notNull()

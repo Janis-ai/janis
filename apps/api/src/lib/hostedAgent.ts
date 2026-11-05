@@ -2685,11 +2685,11 @@ export async function generateReply(
   ctx: AgentRunContext | undefined,
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
-): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[]; producedIds: Set<string>; actionCards: number; toolUrls: string[]; toolTexts: string[]; lastToolResult: Map<string, string> }> {
+): Promise<LinkGuardResult & { promptTokens: number; completionTokens: number; model: string; toolCalls: InspectorToolCall[]; widgets: WidgetComponent[]; producedIds: Set<string>; actionCards: number; toolUrls: string[]; toolTexts: string[]; lastToolResult: Map<string, string>; proposedActions: Completion['proposedActions'] }> {
   const first = await complete(llm, prompt, msgs, tools, secrets, ctx, builtins, onStall);
   const draft = first.text;
   if (!draft) {
-    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, toolTexts: first.toolTexts, lastToolResult: first.lastToolResult, fixed: [], stripped: [], verified: [], unverified: [] };
+    return { text: '', promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, toolTexts: first.toolTexts, lastToolResult: first.lastToolResult, proposedActions: first.proposedActions, fixed: [], stripped: [], verified: [], unverified: [] };
   }
   // The linkable corpus grows inside the tool loop — results carry URLs and
   // ids the model may cite (conversation links, channel pages). Blessed =
@@ -2711,7 +2711,7 @@ export async function generateReply(
       : undefined;
   const guard = await guardReplyLinks(draft, allBlessed, { ids, exists });
   if (!guard.stripped.length) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, toolTexts: first.toolTexts, lastToolResult: first.lastToolResult, ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards, toolUrls: first.toolUrls, toolTexts: first.toolTexts, lastToolResult: first.lastToolResult, proposedActions: first.proposedActions, ...guard };
   }
   const retry = await complete(
     llm,
@@ -2727,7 +2727,7 @@ export async function generateReply(
     builtins,
   ).catch(() => null);
   if (!retry?.text) {
-    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards + (retry?.actionCards ?? 0), toolUrls: [...first.toolUrls, ...(retry?.toolUrls ?? [])], toolTexts: [...first.toolTexts, ...(retry?.toolTexts ?? [])], lastToolResult: new Map([...first.lastToolResult, ...(retry?.lastToolResult ?? [])]), ...guard };
+    return { promptTokens: first.promptTokens, completionTokens: first.completionTokens, model: first.model, toolCalls: first.toolCalls, widgets: first.widgets, producedIds: first.producedIds, actionCards: first.actionCards + (retry?.actionCards ?? 0), toolUrls: [...first.toolUrls, ...(retry?.toolUrls ?? [])], toolTexts: [...first.toolTexts, ...(retry?.toolTexts ?? [])], lastToolResult: new Map([...first.lastToolResult, ...(retry?.lastToolResult ?? [])]), proposedActions: [...first.proposedActions, ...(retry?.proposedActions ?? [])], ...guard };
   }
   for (const id of retry.contextIds) ids.add(id);
   const allBlessed2 = retry.toolUrls.length ? [...allBlessed, ...retry.toolUrls] : allBlessed;
@@ -2743,6 +2743,7 @@ export async function generateReply(
     toolUrls: [...first.toolUrls, ...retry.toolUrls],
     toolTexts: [...first.toolTexts, ...retry.toolTexts],
     lastToolResult: new Map([...first.lastToolResult, ...retry.lastToolResult]),
+    proposedActions: [...first.proposedActions, ...retry.proposedActions],
     ...g2,
   };
 }
@@ -3459,6 +3460,10 @@ interface Completion {
    *  results). Lets the caller narrate a completed-but-silent run
    *  truthfully instead of escalating it as an empty reply. */
   actionCards: number;
+  /** Gated calls a suggesting run couldn't execute — raw args + the ToolDef
+   *  snapshot (unlike inspectorArgs these are execution-faithful) so the
+   *  console card can decide them inline. Empty outside suggest mode. */
+  proposedActions: { name: string; tool: ToolDef; args: Record<string, unknown> }[];
 }
 
 /** OpenAI-compat multimodal content part — Gemini accepts image_url parts. */
@@ -3607,7 +3612,7 @@ export async function complete(
   builtins: BuiltinTool[] = [],
   onStall?: () => void,
 ): Promise<Completion> {
-  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[], producedIds: new Set<string>(), toolUrls: [] as string[], toolTexts: [] as string[], lastToolResult: new Map<string, string>(), contextIds: new Set<string>(), actionCards: 0 };
+  const empty = { text: null, promptTokens: 0, completionTokens: 0, model: llm.model, toolCalls: [], widgets: [] as WidgetComponent[], producedIds: new Set<string>(), toolUrls: [] as string[], toolTexts: [] as string[], lastToolResult: new Map<string, string>(), contextIds: new Set<string>(), actionCards: 0, proposedActions: [] as Completion['proposedActions'] };
   if (!llm.apiKey) return empty;
 
   const msgs: ChatMsg[] = [{ role: 'system', content: system }, ...history];
@@ -3740,6 +3745,7 @@ export async function complete(
   let servedModel = llm.model;
   const toolCalls: InspectorToolCall[] = [];
   const toolWidgets: WidgetComponent[] = [];
+  const proposedActions: Completion['proposedActions'] = [];
   // Provider ids surfaced by tool results this run — the only ids
   // identity-scoped tools may accept (see identityBlockReason).
   const producedIds = new Set<string>();
@@ -3947,6 +3953,7 @@ export async function complete(
         lastToolResult,
         contextIds,
         actionCards,
+        proposedActions,
       };
     }
 
@@ -4059,7 +4066,8 @@ export async function complete(
                 : tool
                   ? gated
                     ? ctx!.suggesting
-                      ? 'approval_required: this action needs a human teammate to approve it before it runs — describe it in the suggestion rather than claiming it was done'
+                      ? (proposedActions.push({ name: call.function.name, tool, args }),
+                        'approval_required: this action needs a human teammate to approve it before it runs — describe it in the suggestion rather than claiming it was done')
                       : await requestToolApproval(ctx!.db, ctx!.agent!, ctx!.convId, tool, args)
                     : await callTool(tool, args, secrets, {
                         shopper_context: ctx?.shopperMarket
@@ -4569,13 +4577,13 @@ export async function complete(
       const text = (json.choices?.[0]?.message?.content ?? '').trim() || null;
       if (text) {
         console.warn(`[hosted] tool-storm salvage — forced text after ${toolCalls.length} calls`);
-        return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, toolTexts, lastToolResult, contextIds, actionCards };
+        return { text, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, toolTexts, lastToolResult, contextIds, actionCards, proposedActions };
       }
     }
   } catch {
     // fall through — the null-text path escalates as before
   }
-  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, toolTexts, lastToolResult, contextIds, actionCards };
+  return { text: null, promptTokens, completionTokens, model: servedModel, toolCalls, widgets: toolWidgets, producedIds, toolUrls, toolTexts, lastToolResult, contextIds, actionCards, proposedActions };
 }
 
 const RECENT_WINDOW = 20;
@@ -5362,8 +5370,9 @@ export async function runHostedEvent(
       });
     }
     // The model sometimes mimics the transcript's speaker labels
-    // ("(human operator) ...") — strip any leading role prefix. LEARN:/
-    // BUTTON: lines are reply-path machinery — never show them in a draft.
+    // ("(human operator) ...") — strip any leading role prefix. LEARN:
+    // lines are reply-path machinery — never show them in a draft. BUTTON:
+    // chips ride the suggestion payload so they send with the draft.
     const stripLabel = (t?: string | null) => {
       const clean = stripTranscriptNotes(
         t?.replace(
@@ -5371,11 +5380,11 @@ export async function runHostedEvent(
           '',
         ) ?? '',
       );
-      return clean
-        ? unwrapInlineLists(extractButtons(extractLearns(clean).text).text) || undefined
-        : undefined;
+      if (!clean) return { text: undefined as string | undefined, buttons: [] as QuickReply[] };
+      const { text: noButtons, buttons } = extractButtons(extractLearns(clean).text);
+      return { text: unwrapInlineLists(noButtons) || undefined, buttons };
     };
-    let draft = stripLabel(result?.text);
+    let { text: draft, buttons } = stripLabel(result?.text);
     if (draft && CONTROL_TAG.test(draft)) draft = undefined;
 
     if (!draft) {
@@ -5411,13 +5420,18 @@ export async function runHostedEvent(
           byok: llm.byok,
         });
       }
-      draft = stripLabel(retry?.text);
+      const retryStrip = stripLabel(retry?.text);
+      draft = retryStrip.text;
+      if (retryStrip.buttons.length) buttons = retryStrip.buttons;
       if (draft && CONTROL_TAG.test(draft)) draft = undefined;
     }
 
     const text =
       draft ??
       'I want to make sure we get this right — let me look into it and follow up shortly.';
+    // Components the run produced ride the suggestion — tool-bound widgets,
+    // BUTTON chips, and gated calls the operator can decide inline. The
+    // operator's send path delivers them exactly like an agent reply.
     await storeSuggestion(
       db,
       convId,
@@ -5425,6 +5439,14 @@ export async function runHostedEvent(
         (await guardReplyLinks(text, blessedUrls, { exists: consoleIdChecker(db, agent.workspaceId) })).text,
       ).text,
       'agent',
+      undefined,
+      {
+        ...(result?.widgets?.length ? { widgets: result.widgets } : {}),
+        ...(buttons.length ? { buttons } : {}),
+        ...(result?.proposedActions?.length
+          ? { proposed_actions: result.proposedActions }
+          : {}),
+      },
     );
     return;
   }

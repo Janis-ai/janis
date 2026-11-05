@@ -402,6 +402,7 @@ export function toSuggestion(row: Row<typeof suggestions>): Suggestion {
     conversation_id: row.conversationId,
     text: row.text,
     notes: row.notes,
+    payload: (row.payload ?? {}) as Suggestion['payload'],
     source: row.source,
     status: row.status,
     created_at: iso(row.createdAt)!,

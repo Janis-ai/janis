@@ -1,0 +1,1 @@
+ALTER TABLE "suggestions" ADD COLUMN "payload" jsonb DEFAULT '{}'::jsonb NOT NULL;

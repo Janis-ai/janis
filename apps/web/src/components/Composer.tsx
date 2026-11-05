@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Attachment } from '@janis/shared';
-import { useSavedReplies } from '../api/hooks';
-import { Bot, Brain, Check, FileText, Headset, Image, Lock, Paperclip, Smile, Sparkles, X } from 'lucide-react';
+import { useAgentWidgets, useSavedReplies } from '../api/hooks';
+import { Bot, Brain, Check, FileText, Headset, Image, Lock, Paperclip, Shapes, Smile, Sparkles, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 
 export default function Composer({
@@ -20,6 +20,7 @@ export default function Composer({
   sending,
   uploadFile,
   placeholder,
+  onSendComponent,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -45,6 +46,9 @@ export default function Composer({
   /** Placeholder override — the sendAs-derived default fits inbox replies;
    *  other surfaces (merchant Ask) need their own. */
   placeholder?: string;
+  /** Saved-component send — resolves the WIDGET_REF path server-side and
+   *  delivers as the operator. Omit to hide the picker. */
+  onSendComponent?: (name: string, data?: Record<string, unknown>) => void;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -52,6 +56,9 @@ export default function Composer({
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [repliesOpen, setRepliesOpen] = useState(false);
   const [sendasOpen, setSendasOpen] = useState(false);
+  const [compOpen, setCompOpen] = useState(false);
+  const [compArgsFor, setCompArgsFor] = useState<string | null>(null);
+  const [compArgs, setCompArgs] = useState('');
   // Phone width gets terse placeholders + an icon-face mode picker —
   // the verbose "(Enter sends…)" hint means nothing on a touch keyboard
   // anyway.
@@ -67,16 +74,18 @@ export default function Composer({
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [uploading, setUploading] = useState(false);
   const { data: savedReplies } = useSavedReplies(agentId);
+  const { data: agentWidgets } = useAgentWidgets(agentId);
 
   // Dismiss the emoji/replies popovers on Escape or a click outside the
   // composer — re-clicking the trigger button is not the obvious close path.
   useEffect(() => {
-    if (!emojiOpen && !repliesOpen && !sendasOpen) return;
+    if (!emojiOpen && !repliesOpen && !sendasOpen && !compOpen) return;
     const close = (e: MouseEvent) => {
       if (!boxRef.current?.contains(e.target as Node)) {
         setEmojiOpen(false);
         setRepliesOpen(false);
         setSendasOpen(false);
+        setCompOpen(false);
       }
     };
     const esc = (e: KeyboardEvent) => {
@@ -84,6 +93,7 @@ export default function Composer({
         setEmojiOpen(false);
         setRepliesOpen(false);
         setSendasOpen(false);
+        setCompOpen(false);
       }
     };
     // Capture phase: the emoji picker's keydown handler stops propagation
@@ -94,7 +104,7 @@ export default function Composer({
       document.removeEventListener('mousedown', close);
       document.removeEventListener('keydown', esc, true);
     };
-  }, [emojiOpen, repliesOpen, sendasOpen]);
+  }, [emojiOpen, repliesOpen, sendasOpen, compOpen]);
 
   // autosize: grow with content up to ~8 lines; no scrollbar until it overflows
   useEffect(() => {
@@ -225,6 +235,17 @@ export default function Composer({
           {(savedReplies?.saved_replies.length ?? 0) > 0 && (
             <button type="button" className="btn icon" title="Saved replies" aria-label="Saved replies" onClick={() => setRepliesOpen((o) => !o)}><FileText size={16} /></button>
           )}
+          {onSendComponent && (agentWidgets?.widgets.length ?? 0) > 0 && (
+            <button
+              type="button"
+              className="btn icon"
+              title="Send a component"
+              aria-label="Send a saved component"
+              onClick={() => setCompOpen((o) => !o)}
+            >
+              <Shapes size={16} />
+            </button>
+          )}
           {onSuggest && (
             <button
               type="button"
@@ -308,6 +329,72 @@ export default function Composer({
               <span>{label}</span>
               {sendAs === mode && <Check size={14} className="ck" />}
             </button>
+          ))}
+        </div>
+      )}
+      {compOpen && onSendComponent && (
+        <div className="emoji-pop reply-pop">
+          <div className="row" style={{ padding: '4px 8px 0', alignItems: 'center' }}>
+            <span className="muted grow" style={{ fontSize: 11.5 }}>Components</span>
+            <button
+              type="button"
+              className="btn icon sm"
+              aria-label="Close components"
+              onClick={() => setCompOpen(false)}
+            >
+              <X size={13} />
+            </button>
+          </div>
+          {agentWidgets?.widgets.map((w) => (
+            <div key={w.id}>
+              <button
+                type="button"
+                className="reply-item"
+                onClick={() => {
+                  if (w.tool) {
+                    setCompArgsFor((cur) => (cur === w.name ? null : w.name));
+                    setCompArgs('');
+                  } else {
+                    onSendComponent(w.name);
+                    setCompOpen(false);
+                  }
+                }}
+              >
+                <strong>{w.name}</strong>
+                <span className="muted">
+                  {w.tool ? `needs ${w.tool.name} — tap to fill` : (w.description ?? 'send as-is')}
+                </span>
+              </button>
+              {compArgsFor === w.name && (
+                <div className="row" style={{ padding: '2px 8px 8px' }}>
+                  <input
+                    className="grow"
+                    placeholder='data as JSON (optional) — {"order_id":"#1234"}'
+                    value={compArgs}
+                    onChange={(e) => setCompArgs(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="btn sm primary"
+                    onClick={() => {
+                      let data: Record<string, unknown> | undefined;
+                      if (compArgs.trim()) {
+                        try {
+                          data = JSON.parse(compArgs) as Record<string, unknown>;
+                        } catch {
+                          return; // malformed JSON — leave the popover open
+                        }
+                      }
+                      onSendComponent(w.name, data);
+                      setCompOpen(false);
+                      setCompArgsFor(null);
+                    }}
+                  >
+                    Send
+                  </button>
+                </div>
+              )}
+            </div>
           ))}
         </div>
       )}

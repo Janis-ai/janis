@@ -1459,6 +1459,21 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   color: var(--muted); cursor: pointer;
 }
 .tool-note { font-size: 11px; color: var(--muted); margin-bottom: 1px; }
+
+/* suggestion card — rich payload (buttons preview, pending components chip) */
+.sug-chip {
+  font-size: 11.5px; color: var(--muted); border: 1px solid var(--border);
+  border-radius: 999px; padding: 2px 9px;
+}
+.pending-comp {
+  font-size: 11.5px; display: flex; align-items: center; gap: 6px;
+  padding: 2px 6px 4px;
+}
+.args-edit {
+  width: 100%; margin-top: 6px; font-family: var(--mono); font-size: 12px;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 8px; resize: vertical;
+}
 .inspector-toggle:hover { color: var(--accent); }
 .inspector-panel {
   margin-top: 4px; padding: 10px 12px; border: 1px solid var(--border);

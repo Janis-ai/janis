@@ -864,6 +864,25 @@ export const Suggestion = z.object({
   conversation_id: z.string(),
   text: z.string(),
   notes: z.string().nullable(),
+  // Rich draft material the suggest run produced — rendered in the console
+  // card and delivered verbatim on send. {} on text-only suggestions.
+  payload: z
+    .object({
+      widgets: z.array(z.unknown()).optional(),
+      buttons: z.array(QuickReply).optional(),
+      // Gated tool calls the run proposed — the operator decides inline
+      // (tool is the executable snapshot: a ToolDef or {builtin: name}).
+      proposed_actions: z
+        .array(
+          z.object({
+            name: z.string(),
+            tool: z.unknown(),
+            args: z.record(z.unknown()),
+          }),
+        )
+        .optional(),
+    })
+    .optional(),
   source: z.enum(['agent', 'llm']),
   status: z.enum(['pending', 'used', 'dismissed']),
   created_at: z.string(),

@@ -5,12 +5,14 @@ import { and, asc, desc, eq, gt, gte, inArray, lt, ne, or, sql } from 'drizzle-o
 import type { Db } from '../db/client.js';
 import {
   agents,
+  agentWidgets,
   alerts,
   channelBindings,
   conversations,
   convTombstones,
   memberships,
   messages,
+  pendingActions,
   slackThreads,
   suggestions,
   usageEvents,
@@ -34,7 +36,13 @@ import {
   teachAgent,
 } from '../services/takeover.js';
 import { requestSuggestion } from '../services/suggestions.js';
-import { operatorBrief } from '../lib/hostedAgent.js';
+import { operatorBrief, resolveWidgetRef } from '../lib/hostedAgent.js';
+import { decidePendingAction, requestToolApproval } from '../lib/approvals.js';
+import { toolsFor, type ToolDef } from '../lib/toolExec.js';
+import { WidgetComponent } from '../lib/widgets.js';
+import { loadSecretsMap } from '../lib/secrets.js';
+import { connectionSecrets } from '../lib/connections.js';
+import { QuickReply } from '@janis/shared';
 import { fetchAvatar } from '../lib/avatar.js';
 import { markOperatorTyping, shouldRelayTyping } from '../lib/typingState.js';
 import { markViewing } from '../lib/presence.js';
@@ -112,10 +120,19 @@ const replyBody = z
   .object({
     text: z.string().default(''),
     attachments: z.array(attachment).optional(),
+    // Rich components carried by a suggestion card or a manual component
+    // send — delivered exactly like an agent reply (native render or the
+    // per-channel mapping).
+    widgets: z.array(WidgetComponent).max(8).optional(),
+    quick_replies: z.array(QuickReply).max(13).optional(),
   })
-  .refine((d) => d.text.trim().length > 0 || (d.attachments?.length ?? 0) > 0, {
-    message: 'text or attachments required',
-  });
+  .refine(
+    (d) =>
+      d.text.trim().length > 0 ||
+      (d.attachments?.length ?? 0) > 0 ||
+      (d.widgets?.length ?? 0) > 0,
+    { message: 'text, attachments or widgets required' },
+  );
 
 export function conversationRoutes(db: Db) {
   const app = new Hono<SessionEnv>();
@@ -609,6 +626,7 @@ export function conversationRoutes(db: Db) {
         undefined,
         undefined,
         c.get('agentScope'),
+        { widgets: body.widgets, quickReplies: body.quick_replies },
       );
       // delivery.delivered is only true once the channel actually accepted
       // the send (Meta message id, SDK socket ack, or webchat pull); a
@@ -633,6 +651,7 @@ export function conversationRoutes(db: Db) {
         undefined,
         undefined,
         c.get('agentScope'),
+        { widgets: body.widgets, quickReplies: body.quick_replies },
       );
       return c.json({ message: toMessage(msg), delivery }, 201);
     } catch (err) {
@@ -665,7 +684,13 @@ export function conversationRoutes(db: Db) {
         ),
       )
       .limit(1);
-    const payload = (msg?.payload ?? {}) as { internal?: boolean; attachments?: AttachmentRef[] };
+    const payload = (msg?.payload ?? {}) as {
+      internal?: boolean;
+      attachments?: AttachmentRef[];
+      widgets?: SendOptions['widgets'];
+      quick_replies?: SendOptions['quickReplies'];
+      effects?: SendOptions['effects'];
+    };
     if (!msg || msg.direction === 'in' || payload.internal) {
       return c.json({ error: 'message cannot be resent' }, 400);
     }
@@ -677,6 +702,9 @@ export function conversationRoutes(db: Db) {
     // Preserve operator attribution on resend — same rules as humanReply.
     const opts: SendOptions & { messageId: string } = {
       messageId: msg.id,
+      widgets: payload.widgets,
+      quickReplies: payload.quick_replies,
+      effects: payload.effects,
     };
     if (msg.direction === 'human') {
       opts.humanAgent = true;
@@ -700,6 +728,135 @@ export function conversationRoutes(db: Db) {
       opts,
     );
     return c.json({ delivery });
+  });
+
+  // Decide a gated action the suggest card proposed. park=true hands the
+  // decision to the whole team — a real pending_action + transcript card +
+  // alert (today's machinery). Default runs it inline: the operator is
+  // already the approver, so the only transcript artifact is the compact
+  // result note decidePendingAction posts. The conversation stays
+  // human-owned either way — nothing resumes the agent.
+  const runActionBody = z.object({
+    name: z.string(),
+    args: z.record(z.unknown()).default({}),
+    park: z.boolean().optional(),
+  });
+  app.post('/:id/run-action', zValidator('json', runActionBody), async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const user = c.get('user');
+    const body = c.req.valid('json');
+    let convRow;
+    let agentRow;
+    try {
+      ({ conversation: convRow, agent: agentRow } = await getConversationForWorkspace(
+        db,
+        workspaceId,
+        c.req.param('id'),
+        c.get('agentScope'),
+      ));
+    } catch (err) {
+      if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+
+    // Resolve the executable snapshot server-side — never trust a
+    // client-supplied ToolDef body. Webhook defs come from the agent's live
+    // config; builtins park as {builtin: name} (decidePendingAction
+    // dispatches on that key) and can't be run inline — their executors
+    // only run inside a real agent turn, so park is the only honest path.
+    const tool = toolsFor(agentRow).find((t) => t.name === body.name);
+    const { BUILTIN_TOOLS } = await import('../lib/builtinTools.js');
+    const builtin = BUILTIN_TOOLS.find((b) => b.name === body.name);
+    if (!tool && !builtin) return c.json({ error: `no tool "${body.name}" on this agent` }, 400);
+    const snapshot = (tool ?? { name: builtin!.name, builtin: builtin!.name }) as ToolDef & {
+      builtin?: string;
+    };
+    if (body.park || !tool) {
+      if (body.park !== true && !tool)
+        return c.json({ error: 'builtin actions can only be parked for approval' }, 400);
+      await requestToolApproval(db, agentRow, convRow.id, snapshot, body.args);
+      return c.json({ parked: true }, 201);
+    }
+
+    // Inline approve — a decided pending_action row is the audit trail;
+    // decidePendingAction runs it and posts the compact result note.
+    const [action] = await db
+      .insert(pendingActions)
+      .values({
+        workspaceId,
+        agentId: agentRow.id,
+        conversationId: convRow.id,
+        toolName: snapshot.name,
+        tool: snapshot as never,
+        args: body.args as never,
+      })
+      .returning();
+    const decided = await decidePendingAction(db, action.id, { id: user.id, name: user.name }, true);
+    if (decided === 'not-pending' || !decided) {
+      return c.json({ error: 'action could not be decided' }, 409);
+    }
+    return c.json({ action: { id: decided.action.id, status: decided.action.status, result: decided.action.result } }, 201);
+  });
+
+  // Send a saved in-conversation component as the operator — resolves the
+  // WIDGET_REF path (bound tool runs as the operator, {prop} interpolation,
+  // state variants) then delivers through humanReply's widget support.
+  const sendComponentBody = z.object({
+    name: z.string(),
+    data: z.record(z.unknown()).optional(),
+  });
+  app.post('/:id/send-component', zValidator('json', sendComponentBody), async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const body = c.req.valid('json');
+    let convRow;
+    let agentRow;
+    try {
+      ({ conversation: convRow, agent: agentRow } = await getConversationForWorkspace(
+        db,
+        workspaceId,
+        c.req.param('id'),
+        c.get('agentScope'),
+      ));
+    } catch (err) {
+      if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
+      throw err;
+    }
+    const [def] = await db
+      .select()
+      .from(agentWidgets)
+      .where(and(eq(agentWidgets.agentId, agentRow.id), eq(agentWidgets.name, body.name)))
+      .limit(1);
+    if (!def) return c.json({ error: `no component "${body.name}" on this agent` }, 404);
+    const cap: { args?: Record<string, unknown>; result?: string; error?: string } = {};
+    const spec = await resolveWidgetRef(
+      { spec: def.spec as never, states: (def.states ?? undefined) as never, tool: (def.tool ?? undefined) as never },
+      body.data,
+      toolsFor(agentRow),
+      { ...(await loadSecretsMap(db, agentRow.id)), ...(await connectionSecrets(db, agentRow.id)) },
+      {
+        db,
+        convId: convRow.id,
+        workspaceId,
+        agent: agentRow,
+        identity: { emails: new Set(), operator: true },
+      },
+      new Set(),
+      cap,
+    );
+    if (!spec) return c.json({ error: cap.error ?? 'component produced nothing' }, 400);
+    const { message, delivery } = await humanReply(
+      db,
+      workspaceId,
+      convRow.id,
+      c.get('user'),
+      '',
+      undefined,
+      undefined,
+      undefined,
+      c.get('agentScope'),
+      { widgets: [spec] },
+    );
+    return c.json({ message: toMessage(message), delivery }, 201);
   });
 
   // Operator typing ping — ephemeral flag the /chat poll endpoint exposes so
