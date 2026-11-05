@@ -102,7 +102,11 @@ async function pushOwnsDelivery(db: Db, conversationId: string) {
     .where(eq(channelBindings.conversationId, conversationId))
     .limit(1);
   if (!bound) return false;
-  if (bound.kind === 'chatfuel') return false;
+  // An OAuth'd Chatfuel channel pushes replies via Send API like messenger —
+  // its page-webhook inbound has no ingest response to ride, so push owns
+  // delivery and the card response must stay empty (no doubles).
+  if (bound.kind === 'chatfuel')
+    return Boolean((bound.credentials as ChannelCredentials).access_token);
   if (bound.kind === 'manychat')
     return Boolean((bound.credentials as ChannelCredentials).manychat_token);
   return true;

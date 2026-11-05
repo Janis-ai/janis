@@ -646,6 +646,26 @@ describe('sendChannelMessage bot platforms', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it('chatfuel with page creds pushes via Send API like messenger', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response('{"message_id":"m_push1"}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    // An OAuth-connected Chatfuel page is webhook-fed — replies can't ride
+    // an ingest response that doesn't exist, so they push via /me/messages.
+    const res = await sendChannelMessage(
+      ch('chatfuel', { access_token: 'page-tok' }),
+      'PSID1',
+      'hi',
+    );
+    expect(res?.error).toBeNull();
+    expect(res?.mid).toBe('m_push1');
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/me/messages?access_token=page-tok'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
+
   it('manychat without a token has no push channel', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

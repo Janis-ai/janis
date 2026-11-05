@@ -750,11 +750,13 @@ export async function sendChannelMessage(
   }
   const creds = channel.credentials as ChannelCredentials;
   // Bot platforms pull the reply out of the synchronous ingest response —
-  // there is nothing to push to. A ManyChat channel holding an API token
-  // CAN push, though: replies that missed the card's window and operator
-  // sends still reach the subscriber, and the token'd channel then owns
-  // delivery so the ingest response must stay empty (no doubles).
-  if (channel.kind === 'chatfuel') return null;
+  // a credless channel has nothing to push to. A channel holding push
+  // creds owns delivery instead: an OAuth'd Chatfuel page sends via the
+  // same /me/messages path as Messenger (webhook-fed threads have no
+  // ingest response to ride), and a ManyChat channel holding an API token
+  // pushes via sendContent. The token'd channel then owns delivery so the
+  // ingest response must stay empty (no doubles).
+  if (channel.kind === 'chatfuel' && !creds.access_token) return null;
   if (channel.kind === 'manychat') {
     if (!creds.manychat_token) return null;
     const named =
