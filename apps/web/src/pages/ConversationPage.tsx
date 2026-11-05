@@ -1764,6 +1764,12 @@ export default function ConversationPage() {
             </div>
             {m.direction === 'out' && !isSystem && !!m.payload.inspector && (
               <div className="inspector-wrap">
+                {(() => {
+                  const note = toolNote(
+                    (m.payload.inspector as InspectorData).tools ?? [],
+                  );
+                  return note ? <div className="tool-note">{note}</div> : null;
+                })()}
                 <button
                   className="inspector-toggle"
                   onClick={() => {
@@ -2256,7 +2262,7 @@ interface InspectorData {
   kb?: string[];
   knowledge?: string[];
   prompt?: 'custom' | 'default';
-  tools?: { name: string; gated?: boolean; outcome: string }[];
+  tools?: { name: string; gated?: boolean; outcome: string; args?: Record<string, unknown> }[];
   esc_claim_stripped?: number;
 }
 
@@ -2266,6 +2272,32 @@ const TOOL_OUTCOME: Record<string, string> = {
   proposed: 'proposed — needs approval',
   simulated: 'simulated (test run)',
 };
+
+/** Inline transcript note — the same phrasing toolCallAnnotation feeds the
+ *  next turn ("searched the web for "q"; used x; y failed") so console and
+ *  model read the run identically. */
+function toolNote(tools: NonNullable<InspectorData['tools']>): string | null {
+  if (!tools.length) return null;
+  const ran: string[] = [];
+  const bits: string[] = [];
+  for (const t of tools) {
+    if (t.outcome === 'ran') {
+      const q =
+        typeof t.args?.q === 'string'
+          ? t.args.q
+          : typeof t.args?.query === 'string'
+            ? t.args.query
+            : '';
+      ran.push(t.name === 'web_search' && q ? `searched the web for "${q}"` : `used ${t.name}`);
+      continue;
+    }
+    if (t.outcome === 'failed') bits.push(`${t.name} failed`);
+    else if (t.outcome === 'proposed') bits.push(`${t.name} needs approval`);
+    else if (t.outcome === 'simulated') bits.push(`${t.name} simulated`);
+    else bits.push(t.name);
+  }
+  return [...ran, ...bits].join('; ');
+}
 
 function InspectorPanel({ data }: { data: unknown }) {
   const d = (data ?? {}) as InspectorData;
