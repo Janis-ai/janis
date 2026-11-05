@@ -930,7 +930,7 @@ export async function embedEnabled(db: Db, row: ShopRow): Promise<boolean | null
                 (key.startsWith(env.shopifyAppApiKey) || (b.type ?? '').includes('janis')) &&
                 (b.type ?? '').includes('apps'),
             );
-            if (ours) out = ours[1].disabled !== true;
+            out = ours ? ours[1].disabled !== true : false;
           }
         }
       }

@@ -1005,6 +1005,12 @@ describe('shopify embedded billing + theme detection', () => {
     expect(((await res.json()) as { embed_enabled?: boolean | null }).embed_enabled).toBeNull();
   });
 
+  it('embed_enabled is false when the theme probe works but no block exists', async () => {
+    stubShopifyApi({ embed: 'absent' });
+    const res = await postSession(sessionJwt('noembed.myshopify.com'));
+    expect(((await res.json()) as { embed_enabled?: boolean | null }).embed_enabled).toBe(false);
+  });
+
   it('rebinding a provisioned shop tears down the orphaned workspace', async () => {
     stubShopifyApi();
     await postSession(sessionJwt('orphan.myshopify.com'));
