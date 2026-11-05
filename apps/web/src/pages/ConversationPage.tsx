@@ -626,6 +626,9 @@ export default function ConversationPage() {
   // A picked saved component staged as an inline draft — resolves via the
   // send-component preview and waits for the operator's Send/Dismiss.
   const [componentDraft, setComponentDraft] = useState<{ name: string; widget: unknown } | null>(null);
+  // Sent the draft's text but undecided proposed actions remain — the card
+  // stays open showing just the actions until they're all decided.
+  const [draftSent, setDraftSent] = useState(false);
   // Mobile details slide-over — the right column is a drawer on phones,
   // opened from the header's ⓘ. The page never scrolls; transcript only.
   const [sideOpen, setSideOpen] = useState(false);
@@ -671,6 +674,8 @@ export default function ConversationPage() {
 
   const askSuggestion = () => {
     setSuggestOpen(true);
+    setDraftSent(false);
+    setActionResults({});
     suggest.mutate();
   };
 
@@ -1921,8 +1926,14 @@ export default function ConversationPage() {
                     {suggestions[0].notes}
                   </div>
                 )}
-                <div>{suggestions[0].text}</div>
-                {(suggestions[0].payload?.widgets?.length ?? 0) > 0 && (
+                {draftSent ? (
+                  <div className="muted" style={{ fontStyle: 'italic' }}>
+                    reply sent — the actions below still need a decision
+                  </div>
+                ) : (
+                  <div>{suggestions[0].text}</div>
+                )}
+                {!draftSent && (suggestions[0].payload?.widgets?.length ?? 0) > 0 && (
                   <div style={{ marginTop: 6 }}>
                     <Widgets
                       widgets={suggestions[0].payload!.widgets as ChatWidget[]}
@@ -1930,7 +1941,7 @@ export default function ConversationPage() {
                     />
                   </div>
                 )}
-                {(suggestions[0].payload?.buttons?.length ?? 0) > 0 && (
+                {!draftSent && (suggestions[0].payload?.buttons?.length ?? 0) > 0 && (
                   <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
                     {suggestions[0].payload!.buttons!.map((b, i) => (
                       <span key={i} className="sug-chip" title="Sends as a quick reply">
@@ -2049,6 +2060,7 @@ export default function ConversationPage() {
               <div className="muted">Thinking…</div>
             )}
             <div className="row" style={{ marginTop: 10 }}>
+              {!draftSent && (
               <button
                 className="btn primary"
                 disabled={!(suggestions?.length > 0) || outbox.some((o) => o.status === 'pending')}
@@ -2059,12 +2071,24 @@ export default function ConversationPage() {
                     ...(s.payload?.widgets?.length ? { widgets: s.payload.widgets } : {}),
                     ...(s.payload?.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
                   });
-                  suggestionStatus.mutate({ sid: s.id, status: 'used' });
-                  setSuggestOpen(false);
+                  const undecided = (s.payload?.proposed_actions ?? []).some(
+                    (_, i) => !actionResults[i],
+                  );
+                  if (undecided) {
+                    // Actions decide in place — the suggestion stays open
+                    // (still 'pending') until they're all resolved.
+                    setDraftSent(true);
+                  } else {
+                    suggestionStatus.mutate({ sid: s.id, status: 'used' });
+                    setSuggestOpen(false);
+                    setDraftSent(false);
+                  }
                 }}
               >
                 Send
               </button>
+              )}
+              {!draftSent && (
               <button
                 className="btn"
                 disabled={!(suggestions?.length > 0)}
@@ -2084,18 +2108,21 @@ export default function ConversationPage() {
               >
                 Edit
               </button>
+              )}
+              {!draftSent && (
               <button
                 className="btn icon"
                 title="Try another suggestion"
                 aria-label="Try another suggestion"
                 disabled={suggest.isPending}
-                onClick={() => { void dismissSuggestions(); suggest.mutate(); }}
+                onClick={() => { setDraftSent(false); setActionResults({}); void dismissSuggestions(); suggest.mutate(); }}
               >
                 <RefreshCw size={13} />
               </button>
+              )}
               <button
                 className="btn"
-                onClick={() => { setSuggestOpen(false); void dismissSuggestions(); }}
+                onClick={() => { setSuggestOpen(false); setDraftSent(false); void dismissSuggestions(); }}
               >
                 Dismiss
               </button>

@@ -997,7 +997,7 @@ export function systemPrompt(
   }
   if (opts.forSuggestion) {
     parts.push(
-      '\nNow write the reply you would send to the customer right now — your single best, most confident answer to their latest message, in your own voice. If details are missing, give the best answer you can and ask one targeted follow-up rather than hedging or deferring. Output only the reply text — no speaker labels, no preamble; never output [HANDOFF] in a draft.',
+      '\nNow write the reply you would send to the customer right now — your single best, most confident answer to their latest message, in your own voice. If details are missing, give the best answer you can and ask one targeted follow-up rather than hedging or deferring. Output only the reply text — no speaker labels, no preamble; never output [HANDOFF] in a draft. When the reply needs an action — sending a verification email, updating a profile, a gated tool — CALL that tool so it attaches to the draft as an operator-decidable card; never narrate an action you did not take, and never mention consoles, approvals or internal steps to the customer.',
     );
   } else {
     parts.push(
@@ -3029,6 +3029,18 @@ export async function saveUserProfile(
 const SEND_VERIFY_TOOL = 'send_verification_email';
 const CHECK_VERIFY_TOOL = 'check_verification_code';
 
+/** Name → executor for the customer-facing builtins — decidePendingAction
+ *  falls back here so a proposed/parked action on one of these executes
+ *  identically to the live tool loop. */
+export const CUSTOMER_BUILTINS: Record<
+  string,
+  (ctx: AgentRunContext, args: Record<string, unknown>) => Promise<string>
+> = {
+  [SAVE_PROFILE_TOOL]: saveUserProfile,
+  [SEND_VERIFY_TOOL]: sendVerificationEmail,
+  [CHECK_VERIFY_TOOL]: checkVerificationCode,
+};
+
 /** Pending email-code state — lives on the conversation's userProfile, so
  *  verification is scoped to this conversation and dies with it. */
 interface PendingVerification {
@@ -4057,7 +4069,17 @@ export async function complete(
                   : null;
           result =
             customerBuiltin && ctx
-              ? await customerBuiltin(ctx, args)
+              ? ctx.suggesting
+                ? // Drafts never fire real side effects — a discarded
+                  // suggestion can't un-send a verification email. The call
+                  // parks as a proposed action the operator decides.
+                  (proposedActions.push({
+                    name: call.function.name,
+                    tool: { name: call.function.name, builtin: call.function.name } as unknown as ToolDef,
+                    args,
+                  }),
+                  'approval_required: this action needs a human teammate to approve it before it runs — describe it in the suggestion rather than claiming it was done')
+                : await customerBuiltin(ctx, args)
               : builtin
                 ? await builtin.run(
                     Object.fromEntries(Object.entries(args).map(([k, v]) => [k, String(v)])),
@@ -5375,10 +5397,14 @@ export async function runHostedEvent(
     // chips ride the suggestion payload so they send with the draft.
     const stripLabel = (t?: string | null) => {
       const clean = stripTranscriptNotes(
-        t?.replace(
-          /^\s*\(?(human operator|operator|agent|assistant)\)?\s*[:\-–—]\s*/i,
-          '',
-        ) ?? '',
+        (t ?? '')
+          .replace(
+            /^\s*\(?(human operator|operator|agent|assistant)\)?\s*[:\-–—]\s*/i,
+            '',
+          )
+          // and transcript speaker labels mimicked mid-text — the model
+          // sometimes writes "(human operator) I prepared…" verbatim.
+          .replace(/\s*\(\s*(human operator|operator|agent|assistant)\s*\)\s*/gi, ' '),
       );
       if (!clean) return { text: undefined as string | undefined, buttons: [] as QuickReply[] };
       const { text: noButtons, buttons } = extractButtons(extractLearns(clean).text);

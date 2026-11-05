@@ -217,7 +217,22 @@ export async function decidePendingAction(
   if (approve) {
     if (builtinName) {
       const { BUILTIN_TOOLS } = await import('./builtinTools.js');
-      const b = BUILTIN_TOOLS.find((x) => x.name === builtinName);
+      let b = BUILTIN_TOOLS.find((x) => x.name === builtinName);
+      if (!b) {
+        // Customer-facing builtins (send_verification_email etc.) live in
+        // hostedAgent — lazy import avoids the module cycle.
+        const { CUSTOMER_BUILTINS } = await import('./hostedAgent.js');
+        const fn = CUSTOMER_BUILTINS[builtinName];
+        if (fn) {
+          b = {
+            name: builtinName,
+            description: '',
+            params: {},
+            available: () => true,
+            run: (args, ctx) => fn({ ...ctx, agent } as never, args as Record<string, unknown>),
+          };
+        }
+      }
       // Parked args pass through verbatim — String()-coercing turns object
       // args (apply_save_widget's spec, apply_agent_config's patch,
       // apply_routing_rule's config) into "[object Object]". Executors

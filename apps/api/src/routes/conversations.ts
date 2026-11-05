@@ -761,19 +761,18 @@ export function conversationRoutes(db: Db) {
 
     // Resolve the executable snapshot server-side — never trust a
     // client-supplied ToolDef body. Webhook defs come from the agent's live
-    // config; builtins park as {builtin: name} (decidePendingAction
-    // dispatches on that key) and can't be run inline — their executors
-    // only run inside a real agent turn, so park is the only honest path.
+    // config; builtins (incl. the customer-facing ones hostedAgent owns)
+    // snapshot as {builtin: name} — decidePendingAction dispatches both.
     const tool = toolsFor(agentRow).find((t) => t.name === body.name);
     const { BUILTIN_TOOLS } = await import('../lib/builtinTools.js');
-    const builtin = BUILTIN_TOOLS.find((b) => b.name === body.name);
+    const { CUSTOMER_BUILTINS } = await import('../lib/hostedAgent.js');
+    const builtin =
+      BUILTIN_TOOLS.find((b) => b.name === body.name) ?? CUSTOMER_BUILTINS[body.name];
     if (!tool && !builtin) return c.json({ error: `no tool "${body.name}" on this agent` }, 400);
-    const snapshot = (tool ?? { name: builtin!.name, builtin: builtin!.name }) as ToolDef & {
+    const snapshot = (tool ?? { name: body.name, builtin: body.name }) as ToolDef & {
       builtin?: string;
     };
-    if (body.park || !tool) {
-      if (body.park !== true && !tool)
-        return c.json({ error: 'builtin actions can only be parked for approval' }, 400);
+    if (body.park) {
       await requestToolApproval(db, agentRow, convRow.id, snapshot, body.args);
       return c.json({ parked: true }, 201);
     }
