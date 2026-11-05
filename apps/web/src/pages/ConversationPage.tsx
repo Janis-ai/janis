@@ -629,6 +629,22 @@ export default function ConversationPage() {
   // Sent the draft's text but undecided proposed actions remain — the card
   // stays open showing just the actions until they're all decided.
   const [draftSent, setDraftSent] = useState(false);
+  // Conversation switch — the page stays mounted, so every piece of
+  // per-thread state must reset or a pending send/draft from the previous
+  // conversation appears inside this one (a draft bubble that looks sent
+  // in every thread you open).
+  useEffect(() => {
+    setDraft('');
+    setPendingComponents(null);
+    setComponentDraft(null);
+    setDraftSent(false);
+    setActionResults({});
+    setEditAction(null);
+    setSuggestOpen(false);
+    setOb(() => []);
+    setError('');
+    receiptFor.current = null;
+  }, [id]);
   // Mobile details slide-over — the right column is a drawer on phones,
   // opened from the header's ⓘ. The page never scrolls; transcript only.
   const [sideOpen, setSideOpen] = useState(false);
