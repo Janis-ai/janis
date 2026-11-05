@@ -1475,10 +1475,17 @@ link on the rail; embedded app gained paid-plan change + cancel UI; the
 console Billing page waits for the rail probe before offering Stripe.
 RESUBMIT after Nov 7 via Partner Dashboard — billing surfaces only.
 
-Known remaining hole (flagged, not fixed — predates this work): PATCH
-/api/billing/plan is a workspace-admin self-serve plan write with no
-payment on the STRIPE rail too — intended as a support tool but any
-workspace admin can call it. Needs an internal-caller gate.
+Follow-ups (2026-11-05): eaea0f03 — bindShop now appSubscriptionCancels
+an ACTIVE sub when the destination workspace is Stripe-paid (was a
+stranded hidden charge = double billing). 3009f8e7 — PATCH
+/api/billing/plan gated behind x-internal-key (JANIS_INTERNAL_ADMIN_KEY;
+404 without it): closed the free-plan exploit — self-serve signup →
+workspace admin → PATCH plan='internal' ($0 uncapped). Support still
+comps via curl with the header. 1c12eaea — vitest.config.ts: hookTimeout
+60s / testTimeout 20s; the ~8 PGlite-migrating suites red-herringed the
+gate whenever the dev machine was loaded. 017262ef — /api/billing/summary
+carries shopify.provider/shop/test_mode so the console Billing page
+renders the Shopify variant on first paint (was a second-probe flash).
 
 Dashboard gaps hit (Shopify migration in progress): GDPR webhooks =
 toml-only; protected-customer-data request UI lives in Partner Dashboard
