@@ -677,6 +677,31 @@ describe('sendChannelMessage bot platforms', () => {
     expect(JSON.parse(init.body as string).tag).toBe('HUMAN_AGENT');
   });
 
+  it('agent replies never push on OAuth\'d manychat — page token is for humans', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    expect(
+      await sendChannelMessage(ch('manychat', { access_token: 'page-tok' }), 'SUB1', 'hi'),
+    ).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('human sends on OAuth\'d manychat push via Send API with HUMAN_AGENT', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response('{"message_id":"m_push2"}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const res = await sendChannelMessage(
+      ch('manychat', { access_token: 'page-tok' }),
+      'SUB1',
+      'hi',
+      undefined,
+      { humanAgent: true },
+    );
+    expect(res?.error).toBeNull();
+    expect(res?.mid).toBe('m_push2');
+  });
+
   it('manychat without a token has no push channel', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);

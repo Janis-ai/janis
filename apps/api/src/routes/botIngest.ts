@@ -227,9 +227,9 @@ export function botIngestRoutes(db: Db) {
       // webhook copy means THIS call is the pair's other half, a reply
       // poller only. A credless channel has no webhook; any prior copy is
       // a duplicate card call.
-      const webhookBacked =
-        flavor === 'chatfuel' &&
-        Boolean((channel.credentials as ChannelCredentials).access_token);
+      const webhookBacked = Boolean(
+        (channel.credentials as ChannelCredentials).access_token,
+      );
       const isDup = (rows: Awaited<ReturnType<typeof matching>>) => {
         const v = rows.filter((r) => r.via === flavor).length;
         const m = rows.filter((r) => r.via !== flavor && r.mid).length;

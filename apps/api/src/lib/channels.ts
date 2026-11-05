@@ -757,10 +757,14 @@ export async function sendChannelMessage(
   // no-token error instead of dying silently.
   if (channel.kind === 'chatfuel' && !opts?.humanAgent) return null;
   if (channel.kind === 'manychat') {
-    if (!creds.manychat_token) return null;
     const named =
       opts?.senderName && text.trim() ? `${opts.senderName}: ${text}` : text;
-    return sendManyChatReply(creds.manychat_token, platformUserId, named, opts, attachments);
+    // Token'd ManyChat pushes via sendContent — it owns delivery. Credless
+    // is pull-only for agent replies, but an OAuth'd (webhook-backed)
+    // channel still lets an operator's human sends reach the page below.
+    if (creds.manychat_token)
+      return sendManyChatReply(creds.manychat_token, platformUserId, named, opts, attachments);
+    if (!(creds.access_token && opts?.humanAgent)) return null;
   }
   if (!creds.access_token) {
     return {
