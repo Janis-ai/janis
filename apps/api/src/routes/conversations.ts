@@ -34,6 +34,7 @@ import {
   teachAgent,
 } from '../services/takeover.js';
 import { requestSuggestion } from '../services/suggestions.js';
+import { operatorBrief } from '../lib/hostedAgent.js';
 import { fetchAvatar } from '../lib/avatar.js';
 import { markOperatorTyping, shouldRelayTyping } from '../lib/typingState.js';
 import { markViewing } from '../lib/presence.js';
@@ -562,6 +563,27 @@ export function conversationRoutes(db: Db) {
         'cache-control': 'private, max-age=86400',
       },
     });
+  });
+
+  // Operator brief — an LLM digest of the transcript shown when a human
+  // opens the thread. Cached on the conversation keyed to last activity;
+  // only regenerates when the transcript advanced. ?refresh=1 forces a
+  // new pass. { summary: null } means there's nothing worth summarizing
+  // (short thread, no usable LLM, over the AI-spend ceiling).
+  app.get('/:id/summary', async (c) => {
+    const workspaceId = c.get('workspaceId');
+    const convId = await resolveConvId(db, c.req.param('id'));
+    const [row] = await db
+      .select({ conversation: conversations, agent: agents })
+      .from(conversations)
+      .innerJoin(agents, eq(conversations.agentId, agents.id))
+      .where(and(eq(conversations.id, convId), ...agentVis(workspaceId, c.get('agentScope'))))
+      .limit(1);
+    if (!row) return c.json({ error: 'not found' }, 404);
+    const brief = await operatorBrief(db, row.agent, row.conversation, {
+      force: c.req.query('refresh') === '1',
+    });
+    return c.json(brief);
   });
 
   app.post('/:id/takeover', async (c) => {

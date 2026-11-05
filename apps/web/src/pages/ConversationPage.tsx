@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Alert, Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
-import { useAgents, useConversation, useConversations, useInvalidateConversations, useMe, useSearch, useUsers } from '../api/hooks';
+import { useAgents, useConversation, useConversationBrief, useConversations, useInvalidateConversations, useMe, useSearch, useUsers } from '../api/hooks';
 import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, StateBadge, surfaceLabel } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
@@ -45,6 +45,38 @@ const ALERT_FLAG: Partial<Record<Alert['type'], keyof Message['flags']>> = {
 };
 
 const alertLabel = (a: Alert) => ALERT_LABELS[a.type] ?? a.type.replaceAll('_', ' ');
+
+/** Canonical markdown-ish block renderer — the same shape message bubbles
+ *  and the operator brief share (para / heading / list + inline mdSpans). */
+function MdBlocks({ text }: { text: string }) {
+  return (
+    <>
+      {splitBlocks(text).map((blk, bi) => {
+        const cls = blk.breakBefore ? ' md-gap' : '';
+        if (blk.kind === 'heading')
+          return (
+            <div key={bi} className={`md-head${cls}`}>
+              {mdSpans(blk.text ?? '', bi)}
+            </div>
+          );
+        if (blk.kind !== 'list')
+          return (
+            <div key={bi} className={`md-para${cls}`}>
+              {mdSpans(blk.text ?? '', bi)}
+            </div>
+          );
+        const Tag = blk.ordered ? 'ol' : 'ul';
+        return (
+          <Tag key={bi} className={`md-list${blk.loose ? ' md-loose' : ''}${cls}`}>
+            {(blk.items ?? []).map((item, ii) => (
+              <li key={ii}>{mdSpans(item)}</li>
+            ))}
+          </Tag>
+        );
+      })}
+    </>
+  );
+}
 
 /** Canonical transcript renderer lives in components/bits (mdSpans) — shared
  *  with the embedded Shopify inbox. */
@@ -104,6 +136,10 @@ export default function ConversationPage() {
   const jumpMsg = searchParams.get('msg'); // search-result deep link
   const returnScroll = searchParams.get('scroll'); // agent-page breadcrumb round-trip
   const { data, error: loadError } = useConversation(id);
+  // Operator brief — the first-entry digest. Only threads with enough
+  // visible history ask the server (it still decides there's nothing worth
+  // summarizing and answers null — the card just doesn't render).
+  const briefQ = useConversationBrief(id, Boolean(data && data.messages.length >= 6));
   // A merged conversation (visitor adoption) returns the survivor with
   // merged_from set — swap the URL to the surviving id silently.
   useEffect(() => {
@@ -307,12 +343,17 @@ export default function ConversationPage() {
   const [testSaved, setTestSaved] = useState(0);
   const jumpedFor = useRef('');
   const olderFor = useRef('');
+  // Brief dismissal is per-visit per-thread — navigating to another
+  // conversation re-arms it.
+  const [briefDismissed, setBriefDismissed] = useState(false);
+  const [briefBusy, setBriefBusy] = useState(false);
   if (olderFor.current !== id) {
     olderFor.current = id;
     setOlder([]);
     setOlderHasMore(null);
     setWin(null);
     jumpedFor.current = '';
+    setBriefDismissed(false);
   }
   const hasMore = win ? win.hasMoreBefore : (olderHasMore ?? data?.messages_has_more ?? false);
 
@@ -802,6 +843,21 @@ export default function ConversationPage() {
   }
   if (!data) return <div className="muted">Loading conversation…</div>;
   const { conversation: c, messages, alerts, suggestions } = data;
+  const brief = briefQ.data?.summary ?? null;
+  const refreshBrief = async () => {
+    if (briefBusy) return;
+    setBriefBusy(true);
+    try {
+      const r = await api<{ summary: string | null; generated_at: string | null }>(
+        `/api/conversations/${id}/summary?refresh=1`,
+      );
+      qc.setQueryData(['conv-brief', id], r);
+    } catch {
+      /* a failed refresh keeps the stale brief */
+    } finally {
+      setBriefBusy(false);
+    }
+  };
   const p = c.user_profile ?? {};
   const name = displayName(c);
   const snoozed = Boolean(c.snoozed_until && new Date(c.snoozed_until) > new Date());
@@ -1318,6 +1374,43 @@ export default function ConversationPage() {
           </div>
         )}
 
+        {/* Operator brief — the first-entry digest. Pinned above the
+            transcript so it's visible on the bottom-snapped first paint;
+            dismissed per visit, refreshable when the thread moved on. */}
+        {!briefDismissed && (brief || briefQ.isFetching) && (
+          <div className="card conv-brief">
+            <div className="conv-brief-head">
+              <Sparkles size={13} />
+              <span>Summary</span>
+              <span className="grow" />
+              {brief && (
+                <button
+                  className="conv-brief-btn"
+                  title="Regenerate the summary"
+                  aria-label="Regenerate the summary"
+                  disabled={briefBusy}
+                  onClick={() => void refreshBrief()}
+                >
+                  <RefreshCw size={13} />
+                </button>
+              )}
+              <button
+                className="conv-brief-btn"
+                title="Hide the summary"
+                aria-label="Hide the summary"
+                onClick={() => setBriefDismissed(true)}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            {brief ? (
+              <MdBlocks text={brief} />
+            ) : (
+              <div className="muted" style={{ fontSize: 13 }}>Summarizing…</div>
+            )}
+          </div>
+        )}
+
         <div
           className="transcript"
           ref={transcriptRef}
@@ -1492,29 +1585,7 @@ export default function ConversationPage() {
                   </span>
                 </div>
               )}
-              {splitBlocks(m.text ?? '').map((blk, bi) => {
-                const cls = blk.breakBefore ? ' md-gap' : '';
-                if (blk.kind === 'heading')
-                  return (
-                    <div key={bi} className={`md-head${cls}`}>
-                      {mdSpans(blk.text ?? '', bi)}
-                    </div>
-                  );
-                if (blk.kind !== 'list')
-                  return (
-                    <div key={bi} className={`md-para${cls}`}>
-                      {mdSpans(blk.text ?? '', bi)}
-                    </div>
-                  );
-                const Tag = blk.ordered ? 'ol' : 'ul';
-                return (
-                  <Tag key={bi} className={`md-list${blk.loose ? ' md-loose' : ''}${cls}`}>
-                    {(blk.items ?? []).map((item, ii) => (
-                      <li key={ii}>{mdSpans(item)}</li>
-                    ))}
-                  </Tag>
-                );
-              })}
+              <MdBlocks text={m.text ?? ''} />
               {isSystem && !isInternal && (
                 <span className="time" title={new Date(m.created_at).toLocaleString()}>
                   {' '}· {fmtTime(m.created_at)}

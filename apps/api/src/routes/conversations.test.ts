@@ -1,8 +1,8 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { eq, inArray } from 'drizzle-orm';
+import { desc, eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
@@ -795,5 +795,112 @@ describe('merge tombstones', () => {
       headers: { cookie: adminCookie },
     });
     expect(res.status).toBe(404);
+  });
+});
+
+describe('operator brief', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const briefResponse = (text: string) =>
+    new Response(JSON.stringify({ choices: [{ message: { content: text } }] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+
+  // BYOK so llmFor resolves without env keys — the fetch stub answers.
+  let briefAgent: typeof agents.$inferSelect;
+  beforeAll(async () => {
+    const { hash, preview } = generateApiKey();
+    [briefAgent] = await db
+      .insert(agents)
+      .values({
+        workspaceId: wsId,
+        name: 'BriefBot',
+        apiKeyHash: hash,
+        apiKeyPreview: preview,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.test', model: 'test-model' } },
+      })
+      .returning();
+  });
+
+  const seedThread = async (convId: string, count: number) => {
+    const t = Date.now() - count * 60_000;
+    for (let i = 0; i < count; i++) {
+      await db.insert(messages).values({
+        conversationId: convId,
+        direction: i % 2 ? 'out' : 'in',
+        text: `message ${i}`,
+        createdAt: new Date(t + i * 60_000),
+      });
+    }
+    await db
+      .update(conversations)
+      .set({ lastMessageAt: new Date(t + (count - 1) * 60_000) })
+      .where(eq(conversations.id, convId));
+  };
+
+  const getSummary = (id: string) =>
+    app.request(`/api/conversations/${id}/summary`, { headers: { cookie: adminCookie } });
+
+  it('returns null for a short conversation without calling the LLM', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(briefResponse('x'));
+    vi.stubGlobal('fetch', fetchMock);
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: briefAgent.id, externalId: 'brief-short' })
+      .returning();
+    await seedThread(conv.id, 3);
+
+    const res = await getSummary(conv.id);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ summary: null, generated_at: null });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('summarizes a thread, then serves the cache until the transcript advances', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        briefResponse('Customer wants a refund for order 9\n- **Ask:** refund'),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: briefAgent.id, externalId: 'brief-long' })
+      .returning();
+    await seedThread(conv.id, 8);
+
+    const res = await getSummary(conv.id);
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { summary: string | null; generated_at: string | null };
+    expect(body.summary).toContain('refund');
+    expect(body.generated_at).not.toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // cached — the second open doesn't pay for another completion
+    const again = await getSummary(conv.id);
+    expect((await again.json()).summary).toBe(body.summary);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // transcript advanced → the brief regenerates once
+    const [latest] = await db
+      .select({ createdAt: messages.createdAt })
+      .from(messages)
+      .where(eq(messages.conversationId, conv.id))
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+    const next = new Date(latest.createdAt.getTime() + 60_000);
+    await db.insert(messages).values({
+      conversationId: conv.id,
+      direction: 'in',
+      text: 'one more question',
+      createdAt: next,
+    });
+    await db
+      .update(conversations)
+      .set({ lastMessageAt: next })
+      .where(eq(conversations.id, conv.id));
+    await getSummary(conv.id);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

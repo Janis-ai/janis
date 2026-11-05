@@ -270,6 +270,11 @@ export const conversations = pgTable(
     // agentSummary so the hosted agent remembers the whole conversation
     agentSummary: text('agent_summary'),
     summaryUpTo: timestamp('summary_up_to', { withTimezone: true }),
+    // Operator brief — the digest shown when a human opens the thread.
+    // Cached on the row; regenerates when lastMessageAt moved past
+    // opSummaryUpTo (i.e. the transcript advanced since the brief ran).
+    opSummary: text('op_summary'),
+    opSummaryUpTo: timestamp('op_summary_up_to', { withTimezone: true }),
     // Unified customer record — resolved from channel identities via
     // contactForBinding; null for conversations predating contacts or those
     // whose identity never carried a matchable signal.

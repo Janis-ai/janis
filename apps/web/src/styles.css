@@ -1169,6 +1169,24 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   border: 1px solid var(--warn); color: var(--warn); background: none;
 }
 .alert-chip:hover { background: var(--panel-2); }
+/* Operator brief — the first-entry digest pinned above the transcript. */
+.conv-brief {
+  padding: 10px 14px; margin-top: 8px;
+  border-color: color-mix(in srgb, var(--copilot, #7c6cf0) 35%, var(--border));
+}
+.conv-brief-head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--muted); margin-bottom: 4px;
+}
+.conv-brief-head > svg { color: var(--copilot, #7c6cf0); }
+.conv-brief-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0; border: none; border-radius: 6px;
+  background: none; color: var(--muted); cursor: pointer;
+}
+.conv-brief-btn:hover { color: var(--text); background: var(--panel-2); }
+.conv-brief-btn:disabled { opacity: .5; cursor: default; }
+.conv-brief .md-para, .conv-brief .md-list { font-size: 13px; }
 .msg.alert-open {
   border: 1px solid var(--warn); border-radius: 12px; padding: 8px 14px;
 }

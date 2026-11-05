@@ -184,6 +184,23 @@ export function useConversation(id: string) {
   });
 }
 
+/** The operator brief — the LLM digest shown on first opening a thread.
+ *  Fetched once per mount (the server caches per transcript state and only
+ *  regenerates when messages landed since the last brief); a live thread's
+ *  updates come from the transcript itself, not a churning summary. */
+export function useConversationBrief(id: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ['conv-brief', id],
+    queryFn: () =>
+      api<{ summary: string | null; generated_at: string | null }>(
+        `/api/conversations/${id}/summary`,
+      ),
+    enabled,
+    refetchOnMount: 'always',
+    retry: 1,
+  });
+}
+
 export function useAgents() {
   return useQuery({
     queryKey: ['agents'],

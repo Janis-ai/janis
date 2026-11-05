@@ -4568,7 +4568,7 @@ const SUMMARY_SYSTEM =
   'You maintain a running summary of a customer support conversation. Fold the new messages into the existing summary. Track what the customer asked, what the agent answered or promised, decisions made, contact details shared, and anything still unresolved. Write compact prose under 200 words. Output only the updated summary.';
 
 /** One transcript line for the summarizer — internal notes become markers. */
-function summaryLine(m: {
+export function summaryLine(m: {
   direction: string;
   text: string | null;
   flags: unknown;
@@ -4911,6 +4911,142 @@ export async function refreshConversationSummary(
     .set({ agentSummary: res.text.trim(), summaryUpTo: boundary.createdAt })
     .where(eq(conversations.id, conv.id));
   return { summary: res.text.trim(), promptTokens: res.promptTokens, completionTokens: res.completionTokens, model: res.model };
+}
+
+const BRIEF_MIN_MESSAGES = 6;
+const BRIEF_MAX_CHARS = 1_200;
+const BRIEF_SYSTEM =
+  'You write a handoff brief for a support operator opening this conversation for the first time — ' +
+  'reading it should replace reading the transcript.\n' +
+  'Format (strict):\n' +
+  'Line 1: one sentence — what the customer wants and where things stand right now.\n' +
+  'Then up to 4 bullet lines starting with "- ": what happened, what the agent or operator already did ' +
+  'or promised, and what still needs doing or who is waiting on whom. Lead a bullet with a **short label** ' +
+  'when one helps scanning.\n' +
+  'Under 90 words total. Concrete details only (order numbers, amounts, dates, names) — no filler, ' +
+  'no guessing at sentiment. The customer is "customer", the AI is "agent", human teammates are "operator". ' +
+  'Output only the brief.';
+
+export interface OperatorBrief {
+  summary: string | null;
+  generated_at: string | null;
+}
+
+// Concurrent opens of the same thread share one generation — a second caller
+// rides the in-flight promise instead of burning another completion.
+const briefInFlight = new Map<string, Promise<OperatorBrief>>();
+
+/**
+ * The operator brief for a conversation — a one-look digest of the
+ * transcript for the human who just opened the thread. Cached on the
+ * conversation row keyed to lastMessageAt: a request only pays for a new
+ * generation when the transcript advanced since the last brief (or
+ * opts.force). Returns nulls for threads too short to need summarizing,
+ * agents with no usable LLM, and workspaces over the AI-spend ceiling —
+ * the card simply doesn't render.
+ */
+export async function operatorBrief(
+  db: Db,
+  agent: AgentRow,
+  conv: ConversationRow,
+  opts: { force?: boolean } = {},
+): Promise<OperatorBrief> {
+  if (
+    !opts.force &&
+    conv.opSummary &&
+    conv.opSummaryUpTo &&
+    conv.lastMessageAt &&
+    conv.opSummaryUpTo.getTime() >= conv.lastMessageAt.getTime()
+  ) {
+    return { summary: conv.opSummary, generated_at: conv.opSummaryUpTo.toISOString() };
+  }
+  const running = briefInFlight.get(conv.id);
+  if (running) return running;
+  const p = generateOperatorBrief(db, agent, conv).finally(() =>
+    briefInFlight.delete(conv.id),
+  );
+  briefInFlight.set(conv.id, p);
+  return p;
+}
+
+async function generateOperatorBrief(
+  db: Db,
+  agent: AgentRow,
+  conv: ConversationRow,
+): Promise<OperatorBrief> {
+  const none: OperatorBrief = { summary: null, generated_at: null };
+  // Same pause rule suggestions use — a workspace over its 24h AI ceiling
+  // doesn't burn Janis-keyed spend on niceties.
+  if ((await llmSpendOverCap(db, agent.workspaceId)) != null) return none;
+  let llm: LlmSettings;
+  try {
+    llm = await llmFor(db, agent);
+  } catch {
+    return none; // unpriced model / no usable LLM — silently skip
+  }
+  if (!llm.apiKey) return none;
+
+  // Latest window first — briefs are about where the thread stands, so the
+  // recent tail matters more than the deep history a long transcript has.
+  const rows = await db
+    .select({
+      direction: messages.direction,
+      text: messages.text,
+      flags: messages.flags,
+      payload: messages.payload,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .where(eq(messages.conversationId, conv.id))
+    .orderBy(desc(messages.createdAt))
+    .limit(400);
+  rows.reverse();
+  // Short threads don't need a digest — internal notes don't count toward
+  // the threshold but do feed the transcript when one is written.
+  const visible = rows.filter(
+    (m) => m.text && !(m.payload as { internal?: boolean } | null)?.internal,
+  );
+  if (visible.length < BRIEF_MIN_MESSAGES) return none;
+
+  let transcript = rows.map(summaryLine).filter((l): l is string => !!l).join('\n');
+  if (transcript.length > MAX_SUMMARY_SOURCE_CHARS) {
+    // Keep the opening ask AND the recent tail — the middle is what ages.
+    const head = 4_000;
+    transcript =
+      transcript.slice(0, head) +
+      '\n[…middle of the transcript omitted…]\n' +
+      transcript.slice(-(MAX_SUMMARY_SOURCE_CHARS - head));
+  }
+
+  const res = await complete(llm, BRIEF_SYSTEM, [{ role: 'user', content: transcript }]);
+  if (res.promptTokens || res.completionTokens) {
+    await recordLlmUsage(db, {
+      workspaceId: agent.workspaceId,
+      agentId: agent.id,
+      conversationId: conv.id,
+      model: res.model,
+      capModel: llm.model,
+      promptTokens: res.promptTokens,
+      completionTokens: res.completionTokens,
+      byok: llm.byok,
+    });
+  }
+  const text = res.text?.trim().slice(0, BRIEF_MAX_CHARS);
+  if (!text) return none; // transient failure — unstamped so the next open retries
+
+  // The stamp marks what the brief covers: lastMessageAt is ingest-stamped
+  // a few ms after the row's createdAt, so the newest message alone reads
+  // permanently stale. An arrival mid-generation still bumps lastMessageAt
+  // past this and the next request regenerates.
+  const stamp =
+    conv.lastMessageAt && conv.lastMessageAt > rows[rows.length - 1].createdAt
+      ? conv.lastMessageAt
+      : rows[rows.length - 1].createdAt;
+  await db
+    .update(conversations)
+    .set({ opSummary: text, opSummaryUpTo: stamp })
+    .where(eq(conversations.id, conv.id));
+  return { summary: text, generated_at: stamp.toISOString() };
 }
 
 /**

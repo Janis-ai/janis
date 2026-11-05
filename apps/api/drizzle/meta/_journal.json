@@ -869,6 +869,13 @@
       "when": 1793421074180,
       "tag": "0123_lean_tag",
       "breakpoints": true
+    },
+    {
+      "idx": 124,
+      "version": "7",
+      "when": 1793839572084,
+      "tag": "0124_cultured_pretty_boy",
+      "breakpoints": true
     }
   ]
 }
