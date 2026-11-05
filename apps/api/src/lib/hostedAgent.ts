@@ -3545,8 +3545,17 @@ async function applyCardSugarArgs(
   // Sale asks → inject the compare-at clause UPSTREAM so productsCount
   // quotes the sale total, not the whole catalogue. The widget's sale
   // filter drops unmarked rows as belt — the clause is the narrower.
-  if (['1', 'true', 'yes'].includes(String(args.sale_only ?? '').toLowerCase())) {
-    const q = String(args.query ?? '').trim();
+  // A model-written `sale_only:` inside query isn't a Shopify field —
+  // normalize it into the same real filter instead of a dead clause.
+  const wroteSaleClause = /\bsale_only\s*:/i.test(String(args.query ?? ''));
+  args.query = String(args.query ?? '')
+    .replace(/\bsale_only\s*:\s*\S+/gi, ' ')
+    .trim();
+  if (
+    wroteSaleClause ||
+    ['1', 'true', 'yes'].includes(String(args.sale_only ?? '').toLowerCase())
+  ) {
+    const q = String(args.query ?? '');
     if (!/compare_at_price\s*:/i.test(q))
       args.query = `${q} compare_at_price:>0`.trim();
   }
