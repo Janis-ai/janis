@@ -1453,7 +1453,16 @@ export default function ConversationPage() {
                 ? c.user_profile.name ?? WHO.in
                 : m.direction === 'out'
                   ? agent?.name ?? WHO.out
-                  : authorUser?.name ?? WHO.human;
+                  : (authorUser?.name ??
+                    (isInternal
+                      ? // The visitor decides their own concierge cards —
+                        // their user id isn't a member, so authorUser can't
+                        // resolve it. Unauthored internal notes (action
+                        // proposed/requested) are posted by the agent.
+                        ((m.author === c.user_profile.external_id
+                          ? c.user_profile.name
+                          : agent?.name) ?? WHO.human)
+                      : WHO.human));
             return (
             <>
             <div
@@ -1533,22 +1542,37 @@ export default function ConversationPage() {
                     ) : null}
                     <ArgsRows args={act.args} />
                     {act.status === 'pending' ? (
-                      <div className="row" style={{ marginTop: 6 }}>
-                        <button
-                          className="btn primary sm"
-                          disabled={decide.isPending}
-                          onClick={() => decide.mutate({ actionId: act.id, decision: 'approved' })}
-                        >
-                          Approve & run
-                        </button>
-                        <button
-                          className="btn sm"
-                          disabled={decide.isPending}
-                          onClick={() => decide.mutate({ actionId: act.id, decision: 'denied' })}
-                        >
-                          Deny
-                        </button>
-                      </div>
+                      // Concierge 'action proposed' cards are the visitor's
+                      // decision — the API 404s anyone but the verified
+                      // visitor, so operators get the read-only card.
+                      m.payload.event === 'action proposed' &&
+                      c.user_profile.external_id !== me?.user?.id ? (
+                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                          Waiting on {c.user_profile.name ?? 'the visitor'} — only they can
+                          approve this card
+                        </div>
+                      ) : (
+                        <div className="row" style={{ marginTop: 6 }}>
+                          <button
+                            className="btn primary sm"
+                            disabled={decide.isPending}
+                            onClick={() =>
+                              decide.mutate({ actionId: act.id, decision: 'approved' })
+                            }
+                          >
+                            Approve & run
+                          </button>
+                          <button
+                            className="btn sm"
+                            disabled={decide.isPending}
+                            onClick={() =>
+                              decide.mutate({ actionId: act.id, decision: 'denied' })
+                            }
+                          >
+                            Deny
+                          </button>
+                        </div>
+                      )
                     ) : (
                       <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
                         {act.status === 'approved' ? '✅ approved' : '⛔ denied'}

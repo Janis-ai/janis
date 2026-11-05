@@ -34,19 +34,23 @@ export function actionRoutes(db: Db) {
       .limit(1);
     const p = (conv?.userProfile ?? {}) as UserProfile;
     const merchantAsk = p.kind === 'merchant_ask';
-    // The concierge path only applies when the caller IS the verified
-    // visitor the card belongs to. A verified CUSTOMER's conversation on
-    // the operator workspace (a regular agent's test chat) is not a
-    // concierge card — misclassifying it 404'd every approval there.
-    const conciergeCard =
-      isConciergeAction(action.workspaceId, p) && !merchantAsk && p.external_id === user.id;
-    if (!conciergeCard) {
-      if (action.workspaceId !== workspaceId) return c.json({ error: 'not found' }, 404);
-      // The conversation must be visible to the caller — scoped users are
-      // limited to their grants, and hidden agents are excluded for members.
-      if (!(await conversationAgent(db, workspaceId, c.get('agentScope'), action.conversationId))) {
-        return c.json({ error: 'not found' }, 404);
-      }
+    // Concierge cards are the verified visitor's own decision — the write
+    // lands in THEIR workspace under THEIR admin rights, so theirs is the
+    // only vote. Workspace membership confers nothing here, not even on
+    // the operator workspace the concierge agent lives in: an operator
+    // approving "for" the visitor would be a silent cross-workspace write.
+    const concierge = isConciergeAction(action.workspaceId, p) && !merchantAsk;
+    const conciergeCard = concierge && p.external_id === user.id;
+    if (concierge ? !conciergeCard : action.workspaceId !== workspaceId) {
+      return c.json({ error: 'not found' }, 404);
+    }
+    // The conversation must be visible to the caller — scoped users are
+    // limited to their grants, and hidden agents are excluded for members.
+    if (
+      !concierge &&
+      !(await conversationAgent(db, workspaceId, c.get('agentScope'), action.conversationId))
+    ) {
+      return c.json({ error: 'not found' }, 404);
     }
 
     const decided = await decidePendingAction(

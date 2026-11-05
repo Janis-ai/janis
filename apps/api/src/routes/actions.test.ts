@@ -188,8 +188,27 @@ describe('action decide route', () => {
           args: { workspace_id: otherId, agent_id: target.id, entry: 'Decide-time entry.' },
         })
         .returning();
-      // The operator-workspace member isn't the conversation's visitor.
-      expect((await decide(action.id, 'approved', cookie)).status).toBe(404);
+      // The operator-workspace member isn't the conversation's visitor —
+      // session pinned to opWs so the member-fallback workspace check is
+      // the one that would wrongly admit them.
+      const [opMember] = await db
+        .insert(users)
+        .values({ email: 'opm2@x.c', name: 'OpM2', passwordHash: await hashPassword('password123') })
+        .returning();
+      await db.insert(memberships).values({
+        userId: opMember.id,
+        workspaceId: opWs.id,
+        role: 'admin',
+        acceptedAt: new Date(),
+      });
+      const { token: opToken, id: opSessId } = generateSessionToken();
+      await db.insert(sessions).values({
+        id: opSessId,
+        userId: opMember.id,
+        workspaceId: opWs.id,
+        expiresAt: new Date(Date.now() + 86_400_000),
+      });
+      expect((await decide(action.id, 'approved', `janis_session=${opToken}`)).status).toBe(404);
       // The verified visitor is — and approving executes the builtin.
       const res = await decide(action.id, 'approved', outsiderCookie);
       expect(res.status).toBe(200);
