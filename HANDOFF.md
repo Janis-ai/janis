@@ -93,6 +93,16 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-05b — Tool calls show inline in the transcript
+- `payload.inspector.tools` already held the run trace behind the "✦ why
+  this reply" toggle, but a call was invisible until the panel opened.
+  ConversationPage now renders a muted `.tool-note` under the reply
+  bubble — same phrasing `toolCallAnnotation` feeds the model ("used
+  gsheets_list; gsheets_append failed; searched the web for "q"") so the
+  console and the next turn read the run identically. The inspector
+  panel stays for args/results/model detail.
+- Probe: scripts/ui/tmp-toolnote.mjs (asserts notes + toggle on a conv
+  with inspector data). Committed a8314508; deployed janis-api-01443-648.
 ## 2026-11-05a — Invented ASK: directives no longer leak to customers
 - `extractButtons` only knew `ASK: email|phone` — a model riffing on the
   syntax (`ASK: name`, `ASK: order number`) produced a line nothing
