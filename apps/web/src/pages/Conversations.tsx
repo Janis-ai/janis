@@ -454,11 +454,11 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     if (!layout || !openConvId) return;
     let tight = false;
     const measure = () => {
+      // Minimized-first: the rail only yields to the drawer when it
+      // can't fit against the OTHER panels' minimums — the column
+      // compresses to its 220 floor before the rail is asked to move.
       const need =
-        storedPanelWidth('conv.colw', 290, 220, 480) +
-        420 +
-        storedPanelWidth('conv.railw', 280, 240, 560) +
-        32;
+        220 + 420 + storedPanelWidth('conv.railw', 280, 240, 560) + 32;
       const next = tight ? layout.clientWidth < need + 64 : layout.clientWidth < need;
       if (next !== tight) {
         tight = next;
