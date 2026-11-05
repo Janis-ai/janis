@@ -93,6 +93,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-05a — Invented ASK: directives no longer leak to customers
+- `extractButtons` only knew `ASK: email|phone` — a model riffing on the
+  syntax (`ASK: name`, `ASK: order number`) produced a line nothing
+  stripped, so it rendered verbatim in the customer message. Any
+  whole-line `ASK: <words>` is now treated as markup: email/phone still
+  become share-control quick replies, every other kind is removed while
+  the text's own ask (the model is told to always ask in text too)
+  survives. Committed 6cf00d73; deployed janis-api-01442-bfx.
+- Note: suggestions strip these lines too (same extractor via
+  stripLabel), and the operator path is text-only — see "rich sends for
+  operators" if that gap comes up again.
 ## 2026-11-04i — Conversation-switch loader + placeholder-data guards
 - useConversation keeps the prior thread mounted via placeholderData;
   while the next conv fetches, a zero-height sticky `.conv-fetch` pill
