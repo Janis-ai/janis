@@ -108,6 +108,12 @@ Commit style: imperative, terse, "why" over "what"; trailer:
 - Probe: scripts/ui/tmp-convloader.mjs delays /api/conversations/:id
   and samples the DOM across the switch — asserts pill + .switching
   fade + chrome mounted, cleared on arrival, absent on cached switch.
+- Cold loads got skeletons the same day (5703a5c0): the !data gate was a
+  blank "Loading conversation…" void over the whole three-pane layout —
+  now mirrors the real columns (ConvRowSkeleton rows, head, action icons,
+  transcript bubbles, composer, labeled rail cards) with nav-skel-pulse
+  blocks; inbox list's spinner gate uses the same row skeletons.
+  Probe: scripts/ui/tmp-skel.mjs.
 
 ## 2026-11-04h — Operator brief: on-demand Summarize card
 - GET /api/conversations/:id/summary writes a one-look digest (headline +
