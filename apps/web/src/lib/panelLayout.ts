@@ -13,26 +13,36 @@ export function useStoredFlag(key: string): [boolean, (v: boolean) => void] {
   ];
 }
 
+/** Read a stored panel width the way usePanelWidth clamps it — for
+ *  sibling code that needs the live value without owning the state. */
+export function storedPanelWidth(key: string, def: number, lo: number, hi: number): number {
+  const n = Number(localStorage.getItem(key));
+  return Number.isFinite(n) && n >= lo ? Math.min(hi, n) : def;
+}
+
 /** Draggable panel edge — the stored width plus props to spread on a
  *  .grip element. Pointermove updates live; double-click resets to the
  *  default. body.panel-resize freezes transitions + text selection for
- *  the drag's duration. */
+ *  the drag's duration. `max` may be a function — evaluated per move so a
+ *  grip can clamp against live layout (sibling widths, conv floor). */
 export function usePanelWidth(
   key: string,
   def: number,
   min: number,
-  max: number,
+  max: number | (() => number),
   /** -1 for grips on the LEFT edge of a right-side panel — moving the
    *  pointer left grows it (the delta sign inverts). */
   sign = 1,
 ) {
   const [w, setW] = useState(() => {
     const n = Number(localStorage.getItem(key));
-    return Number.isFinite(n) && n >= min ? Math.min(max, n) : def;
+    const cap = typeof max === 'function' ? Number.MAX_SAFE_INTEGER : max;
+    return Number.isFinite(n) && n >= min ? Math.min(cap, n) : def;
   });
   const set = (n: number) => {
     setW(n);
     localStorage.setItem(key, String(n));
+    window.dispatchEvent(new Event('panel-resize'));
   };
   const gripProps = {
     onPointerDown: (e: PointerEvent) => {
@@ -40,8 +50,10 @@ export function usePanelWidth(
       const startX = e.clientX;
       const startW = w;
       document.body.classList.add('panel-resize');
-      const mv = (ev: PointerEvent | globalThis.PointerEvent) =>
-        set(Math.min(max, Math.max(min, startW + sign * (ev.clientX - startX))));
+      const mv = (ev: PointerEvent | globalThis.PointerEvent) => {
+        const cap = typeof max === 'function' ? max() : max;
+        set(Math.min(cap, Math.max(min, startW + sign * (ev.clientX - startX))));
+      };
       const up = () => {
         document.body.classList.remove('panel-resize');
         window.removeEventListener('pointermove', mv);

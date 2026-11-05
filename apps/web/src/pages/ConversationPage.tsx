@@ -12,7 +12,7 @@ import { CorrectThisCard } from '../components/CorrectThis';
 import { type ScenarioTest, type ScenarioTurn } from '../components/ScenarioRow';
 import { useScenarioMatch } from '../lib/scenarioMatch';
 import { SNOOZE_OPTIONS, snoozeMinutes } from './Conversations';
-import { usePanelWidth } from '../lib/panelLayout';
+import { usePanelWidth, storedPanelWidth } from '../lib/panelLayout';
 import { ALERT_LABELS } from '../components/Layout';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
@@ -164,8 +164,14 @@ export default function ConversationPage() {
   const id = params.cid ?? params.id ?? '';
   // Details rail is user-resizable — --rail-w feeds the ≥681px container
   // rule (drawer widths keep their own). The grip lands in the parent's
-  // .conv-layout beside the aside's left edge.
-  const { width: railW, gripProps: railGrip } = usePanelWidth('conv.railw', 280, 240, 560, -1);
+  // .conv-layout beside the aside's left edge. The max is live too: the
+  // rail can't be dragged past inbox-col + 420px conv floor, so the drag
+  // itself can't squeeze the transcript out of existence.
+  const { width: railW, gripProps: railGrip } = usePanelWidth('conv.railw', 280, 240, () => {
+    const layout = document.querySelector('.conv-layout');
+    const colW = storedPanelWidth('conv.colw', 290, 220, 480);
+    return Math.min(560, Math.max(240, (layout?.clientWidth ?? 560) - colW - 420 - 32));
+  }, -1);
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const navigate = useNavigate();

@@ -11,7 +11,7 @@ import { Archive, ArchiveRestore, Bot, Check, Cog, Headset, ListFilter, Mail, Ma
 import { useConfirm, usePrompt } from '../components/Prompt';
 import { clearLastAgent, setLastAgent, useContextAgent } from '../lib/agentContext';
 import { isEditableTarget } from '../lib/keys';
-import { usePanelWidth } from '../lib/panelLayout';
+import { usePanelWidth, storedPanelWidth } from '../lib/panelLayout';
 import { usePageTitle } from '../lib/title';
 
 /** Multi-select filter model — each group's values ride its own csv list
@@ -434,10 +434,49 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     : null;
   // Split column is user-resizable (drag grip, persists) — inline width
   // only while the class is .conv-inbox so .inbox-col keeps its 100%.
-  const { width: colW, gripProps: colGrip } = usePanelWidth('conv.colw', 290, 220, 480);
+  // The max is live: the drag can never push conv-main below its 420px
+  // floor or shove the details rail out of view.
+  const colRef = useRef<HTMLDivElement>(null);
+  const layoutEl = () => colRef.current?.parentElement ?? null;
+  const { width: colW, gripProps: colGrip } = usePanelWidth('conv.colw', 290, 220, () => {
+    const layout = layoutEl();
+    const rail = layout?.classList.contains('rail-tight')
+      ? 0
+      : storedPanelWidth('conv.railw', 280, 240, 560);
+    return Math.min(480, Math.max(220, (layout?.clientWidth ?? 480) - 420 - rail - 32));
+  });
+  // "Rail in view" is a real space cost — the drawer flip can't be the
+  // flat 680px it used to be: it fires only when col + 420 conv floor +
+  // rail genuinely don't fit (hysteresis stops a boundary drag from
+  // oscillating the mode).
+  useEffect(() => {
+    const layout = layoutEl();
+    if (!layout || !openConvId) return;
+    let tight = false;
+    const measure = () => {
+      const need =
+        storedPanelWidth('conv.colw', 290, 220, 480) +
+        420 +
+        storedPanelWidth('conv.railw', 280, 240, 560) +
+        32;
+      const next = tight ? layout.clientWidth < need + 64 : layout.clientWidth < need;
+      if (next !== tight) {
+        tight = next;
+        layout.classList.toggle('rail-tight', tight);
+      }
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(layout);
+    window.addEventListener('panel-resize', measure);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('panel-resize', measure);
+      layout.classList.remove('rail-tight');
+    };
+  }, [openConvId]);
   const listRef = useRef<HTMLDivElement>(null);
   const sentRef = useRef<HTMLDivElement>(null);
-  const colRef = useRef<HTMLDivElement>(null);
   // Full mode scrolls the .conv-list; split mode the .conv-inbox column —
   // on the class flip keep the clicked row at the SAME screen position:
   // mini rows are a different height, so copying scrollTop verbatim shows
