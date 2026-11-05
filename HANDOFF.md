@@ -93,6 +93,19 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-04g — Concierge action cards decidable only by the verified visitor
+- The /api/actions/:id/decide member-fallback admitted OPERATOR-workspace
+  members on concierge (action proposed) cards — the concierge agent lives
+  in that workspace, so an operator's Approve would execute writes into
+  the visitor's own workspace under the visitor's re-verified admin
+  rights. Now only p.external_id === caller decides; everyone else 404s.
+- Console inbox renders visitor-decision cards read-only for non-visitors
+  ("Waiting on {name} — only they can approve"); 'action proposed' vs
+  'approval requested' payload.event is the discriminator.
+- Internal note attribution fixed: visitor self-decisions resolve to the
+  visitor's name (their user id isn't a member), unauthored internal
+  notes resolve to the agent — was blanket "Operator".
+
 ## 2026-11-04f — Zapier card on agent Integrations (embed surface)
 - Agent Actions tab gets a static "8,000+ more apps via Zapier" card
   under the catalog grid — blurb covers both directions (triggers on
