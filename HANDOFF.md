@@ -127,7 +127,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   ad92b49f — sel-pin must key on list data (cold open has no .sel row
   until rows land); scrollIntoView block:'start' + scroll-margin-top 52px.
   93b685b0 — pin gated to cold open (mountOpen): in-session selects keep
-  the inherited offset, never jump.
+  the inherited offset, never jump. 2179ce18 scopes it further to the
+  mounted conv; 1e3ff8af restores the clicked row's absolute screen-y on
+  the open flip (delta captured in render, .main padding shift matters).
+- Panel collapse + drag-resize (6e6763eb): sidebar gets a top-row
+  PanelLeftClose/Open toggle + ⌘B → 60px icon rail (.sidebar.mini reuses
+  the conv-open slim grammar, ≥721px), plus .nav-grip drag 170–340px.
+  Conv split gets .conv-col-grip (inbox col 220–480px) and
+  .conv-rail-grip (details rail 240–560px via --rail-w under
+  @container convl ≥681px; drawers keep their widths). Shared hooks in
+  lib/panelLayout.ts (useStoredFlag, usePanelWidth — sign=-1 for
+  left-edge-of-right-panel grips); double-click resets, all persisted.
 
 ## 2026-11-04h — Operator brief: on-demand Summarize card
 - GET /api/conversations/:id/summary writes a one-look digest (headline +
