@@ -777,6 +777,12 @@ export default function ConversationPage() {
   // slides into the card and it feels like dismiss loads another iteration.
   const dismissSuggestions = async () => {
     const pending = data?.suggestions ?? [];
+    // Optimistic — the card closes on click, not on the server round-trip.
+    qc.setQueryData(
+      ['conversation', id],
+      (old: { suggestions?: unknown[] } | undefined) =>
+        old ? { ...old, suggestions: [] } : old,
+    );
     await Promise.all(
       pending.map((s) =>
         api(`/api/conversations/${id}/suggestions/${s.id}/status`, {
@@ -1931,7 +1937,9 @@ export default function ConversationPage() {
 
         {canSuggest && (suggestOpen || suggestions?.length > 0) && (
           <div className="card suggestion draft">
-            {suggestions?.length > 0 ? (
+            {suggest.isPending ? (
+              <div className="muted">Thinking…</div>
+            ) : suggestions?.length > 0 ? (
               <>
                 <div className="muted" style={{ marginBottom: 6 }}>
                   <span className="draft-tag">draft</span> Suggested (
@@ -2161,6 +2169,11 @@ export default function ConversationPage() {
         {/* Composer is always up for non-archived threads — the reply-as
             dropdown inside it covers agent/note/teach modes, and the Take
             over ⇄ Resume toggle lives next to Send. Ops row is gone. */}
+        {previewComponent.isPending && (
+          <div className="card suggestion draft">
+            <div className="muted">Resolving component…</div>
+          </div>
+        )}
         {componentDraft && (
           <div className="card suggestion draft">
             <div className="muted" style={{ marginBottom: 6 }}>
