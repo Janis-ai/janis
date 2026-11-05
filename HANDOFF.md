@@ -1446,3 +1446,6 @@ Three chatfuel-delivery fixes shipped + deployed (janis-api-01405-jzl+):
   bare-tag fallbacks compose a one-shot localized line via complete()
   with canned English as the failure fallback. Escalation tests stub the
   extra compose call.
+- Same webhook-backed parity for OAuth'd ManyChat channels (0fdec9b9):
+  human sends push via page token (agent replies still ride card/sendContent),
+  access_token marks a channel webhook-backed for the pair dedup either flavor.
