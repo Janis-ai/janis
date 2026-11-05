@@ -461,6 +461,14 @@ export default function ShopifyApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.kind, tab]);
 
+  // One-shot preview for the home tab — the inbox tab owns the poll loop.
+  useEffect(() => {
+    if (state.kind !== 'linked' || tab !== 'home' || inbox) return;
+    void shopifyApi<{ conversations: InboxConv[] }>('/api/shopify/inbox')
+      .then((res) => setInbox(res.conversations))
+      .catch(() => {});
+  }, [state.kind, tab, inbox]);
+
   const openThread = async (id: string) => {
     threadId.current = id;
     setInboxError('');
@@ -1574,6 +1582,21 @@ export default function ShopifyApp() {
                 until you pick a plan below.
               </div>
             ) : null}
+            <p className="muted" style={{ fontSize: 12.5, margin: '6px 0 0' }}>
+              {state.embedEnabled === true ? (
+                <span style={{ color: '#059669' }}>● Chat live on your storefront</span>
+              ) : state.embedEnabled === false ? (
+                <span style={{ color: '#b45309' }}>○ Storefront chat not enabled yet</span>
+              ) : (
+                '… checking storefront chat'
+              )}
+              {inbox && inbox.length > 0
+                ? ` · ${inbox.length} conversation${inbox.length === 1 ? '' : 's'}`
+                : ''}
+              {state.usage
+                ? ` · ${state.usage.used.toLocaleString()} of ${state.usage.included.toLocaleString()} messages this month`
+                : ''}
+            </p>
             {(state.embedEnabled ?? embedOpened) ? (
               // Returning visit — embed link was opened once, so the CTA
               // flips to day-2 actions: tune the agent, edit the embed.
@@ -1652,6 +1675,26 @@ export default function ShopifyApp() {
                     : ''}
                   {state.billing?.status === 'PENDING' ? ' · awaiting charge approval' : ''}
                 </p>
+                {state.usage && state.usage.included > 0 ? (
+                  <div
+                    style={{
+                      height: 6,
+                      borderRadius: 3,
+                      background: '#e5e7eb',
+                      margin: '4px 0 8px',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${Math.min(100, (state.usage.used / state.usage.included) * 100)}%`,
+                        height: '100%',
+                        background:
+                          state.usage.used >= state.usage.included ? '#dc2626' : '#059669',
+                      }}
+                    />
+                  </div>
+                ) : null}
                 {state.plans
                   .filter((p) => p.key !== state.plan)
                   .map((p) => (
@@ -1711,6 +1754,56 @@ export default function ShopifyApp() {
                 {' — billing is managed in the Janis console'}
               </p>
             )}
+
+            {inbox && inbox.length > 0 ? (
+              <div
+                style={{
+                  marginTop: 16,
+                  padding: 12,
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  textAlign: 'left',
+                }}
+              >
+                <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 6px' }}>
+                  Recent conversations
+                </p>
+                {inbox.slice(0, 3).map((cv) => (
+                  <div
+                    key={cv.id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      padding: '6px 0',
+                      borderTop: '1px solid #f3f4f6',
+                      fontSize: 12.5,
+                    }}
+                  >
+                    <span style={{ fontWeight: 600, flexShrink: 0 }}>
+                      {cv.is_unread ? <span style={{ color: '#2563eb' }}>● </span> : null}
+                      {convName(cv)}
+                    </span>
+                    <span
+                      className="muted"
+                      style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    >
+                      {cv.last_message_preview ?? ''}
+                    </span>
+                    <span className="muted" style={{ flexShrink: 0 }}>
+                      {cv.last_message_at ? fmtTime(cv.last_message_at) : ''}
+                    </span>
+                  </div>
+                ))}
+                <button
+                  className="btn"
+                  style={{ width: '100%', marginTop: 8, textAlign: 'center' }}
+                  onClick={() => setTab('inbox')}
+                >
+                  Open inbox →
+                </button>
+              </div>
+            ) : null}
 
             {state.stats && state.stats.orders_30d > 0 ? (
               <div
