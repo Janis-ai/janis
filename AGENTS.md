@@ -412,7 +412,9 @@ is a day on launch)*
     auth/presentations.readonly (deck-paste KB source, googleSource.ts)
     but the console's Data Access list only had spreadsheets+documents;
     Google requires strict string match. Fix = add
-    auth/presentations.readonly in console → Data Access (Mike), then
+    auth/presentations.readonly in console → Data Access (Mike) — in
+    project janis-qqdctd (#294775392557, owns the GOOGLE_CLIENT_ID
+    OAuth client; janis-prod-mn only hosts Cloud Run), then
     reply — likely needs a fresh demo video since the consent screen
     gains a "view your Slides" line. Gmail's restricted-tier scopes
     (gmail.readonly/gmail.send/contacts.other.readonly) stay out of the
