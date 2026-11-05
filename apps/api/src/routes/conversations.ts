@@ -57,6 +57,19 @@ import {
 
 const listQuery = convListQuery;
 
+/** Working a paused conversation — asking for a draft, deciding an
+ *  action, staging a component — IS operator activity. Only actual
+ *  sends reset humanSince today, so the auto-resume window could lapse
+ *  mid-draft and the agent replied while the operator was still
+ *  composing. Any engagement endpoint resets the clock + the warning,
+ *  so silence (not activity) is what resumes the agent. */
+async function touchTakeover(db: Db, conversationId: string) {
+  await db
+    .update(conversations)
+    .set({ humanSince: new Date(), resumeWarnedAt: null })
+    .where(and(eq(conversations.id, conversationId), eq(conversations.state, 'human')));
+}
+
 /** Follow merge tombstones — a conversation id deleted by visitor adoption
  *  resolves to the surviving conversation, so links minted pre-merge
  *  (alert emails, bookmarks) keep working. Bounded chain for A→B→C merges. */
@@ -758,6 +771,7 @@ export function conversationRoutes(db: Db) {
       if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
       throw err;
     }
+    await touchTakeover(db, convRow.id);
 
     // Resolve the executable snapshot server-side — never trust a
     // client-supplied ToolDef body. Webhook defs come from the agent's live
@@ -850,6 +864,7 @@ export function conversationRoutes(db: Db) {
       if (err instanceof TakeoverError) return c.json({ error: err.message }, err.status);
       throw err;
     }
+    await touchTakeover(db, convRow.id);
     const [def] = await db
       .select()
       .from(agentWidgets)
@@ -1022,6 +1037,7 @@ export function conversationRoutes(db: Db) {
       if (conversation.state === 'archived') {
         return c.json({ error: 'conversation is archived' }, 409);
       }
+      await touchTakeover(db, conversation.id);
       const result = await requestSuggestion(db, conversation, agent);
       return c.json(
         result.mode === 'llm'
@@ -1045,6 +1061,7 @@ export function conversationRoutes(db: Db) {
         c.req.param('id'),
         c.get('agentScope'),
       );
+      await touchTakeover(db, conversation.id);
       const [row] = await db
         .update(suggestions)
         .set({ status: c.req.valid('json').status })
