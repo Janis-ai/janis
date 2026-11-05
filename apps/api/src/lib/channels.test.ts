@@ -646,24 +646,35 @@ describe('sendChannelMessage bot platforms', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('chatfuel with page creds pushes via Send API like messenger', async () => {
+  it('agent replies never push on chatfuel, even with page creds', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    expect(
+      await sendChannelMessage(ch('chatfuel', { access_token: 'page-tok' }), 'PSID1', 'hi'),
+    ).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('human sends on chatfuel push via Send API with the HUMAN_AGENT tag', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(new Response('{"message_id":"m_push1"}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
-    // An OAuth-connected Chatfuel page is webhook-fed — replies can't ride
-    // an ingest response that doesn't exist, so they push via /me/messages.
+    // Operator takeover on an OAuth'd Chatfuel page — the page token and
+    // the HUMAN_AGENT tag are the handover-protocol send path.
     const res = await sendChannelMessage(
       ch('chatfuel', { access_token: 'page-tok' }),
       'PSID1',
       'hi',
+      undefined,
+      { humanAgent: true },
     );
     expect(res?.error).toBeNull();
     expect(res?.mid).toBe('m_push1');
-    expect(fetchMock).toHaveBeenCalledWith(
-      expect.stringContaining('/me/messages?access_token=page-tok'),
-      expect.objectContaining({ method: 'POST' }),
-    );
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain('/me/messages?access_token=page-tok');
+    expect(JSON.parse(init.body as string).messaging_type).toBe('MESSAGE_TAG');
+    expect(JSON.parse(init.body as string).tag).toBe('HUMAN_AGENT');
   });
 
   it('manychat without a token has no push channel', async () => {

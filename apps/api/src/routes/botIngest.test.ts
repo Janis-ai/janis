@@ -123,36 +123,6 @@ describe('bot ingest', () => {
     expect(other).toBeUndefined();
   }, 20_000);
 
-  it('leaves the card response empty when the bound chatfuel channel can push', async () => {
-    const agent = await agentFor(KEY);
-    // OAuth-connected Chatfuel page: replies push via Send API, so the
-    // card response must stay empty or the user sees every reply twice.
-    const [ch] = await db
-      .insert(channels)
-      .values({
-        workspaceId: wsId,
-        agentId: agent.id,
-        kind: 'chatfuel',
-        name: 'Chatfuel',
-        credentials: { access_token: 'page-tok' },
-      })
-      .returning();
-    const [conv] = await db
-      .insert(conversations)
-      .values({ agentId: agent.id, externalId: 'chatfuel:psid-oauth', userProfile: {} })
-      .returning();
-    const { channelBindings } = await import('../db/schema.js');
-    await db
-      .insert(channelBindings)
-      .values({ channelId: ch.id, conversationId: conv.id, platformUserId: 'psid-oauth' });
-    const r = await app.request(`/bot/${KEY}/chatfuel`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ 'messenger user id': 'psid-oauth', 'user input': 'card hello' }),
-    });
-    expect(await r.json()).toEqual({ messages: [] });
-  }, 20_000);
-
   it('dedups the same message arriving via webhook + card', async () => {
     const agent = await agentFor(KEY);
     const [conv] = await db

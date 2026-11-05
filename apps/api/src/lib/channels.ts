@@ -749,14 +749,13 @@ export async function sendChannelMessage(
     return sendSlackReply(db, channel, platformUserId, text, attachments, opts);
   }
   const creds = channel.credentials as ChannelCredentials;
-  // Bot platforms pull the reply out of the synchronous ingest response —
-  // a credless channel has nothing to push to. A channel holding push
-  // creds owns delivery instead: an OAuth'd Chatfuel page sends via the
-  // same /me/messages path as Messenger (webhook-fed threads have no
-  // ingest response to ride), and a ManyChat channel holding an API token
-  // pushes via sendContent. The token'd channel then owns delivery so the
-  // ingest response must stay empty (no doubles).
-  if (channel.kind === 'chatfuel' && !creds.access_token) return null;
+  // Bot platforms pull agent replies out of the synchronous ingest
+  // response — Chatfuel owns delivery, so an agent reply must never push.
+  // Human sends are the exception: an operator takeover needs the
+  // HUMAN_AGENT tag path below, and an OAuth'd channel carries the page
+  // token for exactly that. A credless human send falls through to the
+  // no-token error instead of dying silently.
+  if (channel.kind === 'chatfuel' && !opts?.humanAgent) return null;
   if (channel.kind === 'manychat') {
     if (!creds.manychat_token) return null;
     const named =
