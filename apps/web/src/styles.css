@@ -1807,7 +1807,11 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    through or stack beneath. */
 /* The 1100px .main cap leaves dead space right of the details rail on
    wide screens — conversation pages scale to fill. */
-.layout.conv-open .main { display: flex; flex-direction: column; overflow: hidden; padding-top: 0; padding-bottom: 0; max-width: none; }
+/* min-width:0 is load-bearing: without it .main's min-content (inbox +
+   420 conv floor + rail) floors the flex item wider than the window —
+   .conv-layout then reports a phantom width, the fit cascade thinks
+   everything fits, and the rail clips off-screen instead of yielding. */
+.layout.conv-open .main { display: flex; flex-direction: column; overflow: hidden; padding-top: 0; padding-bottom: 0; max-width: none; min-width: 0; }
 .conv-open .conv-layout { flex: 1 1 auto; min-height: 0; }
 .conv-open .conv-main { min-height: 0; }
 .conv-open .transcript { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
