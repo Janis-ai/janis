@@ -1641,6 +1641,12 @@ export default function ShopifyApp() {
               >
                 <p style={{ fontSize: 13, fontWeight: 600, margin: '0 0 4px' }}>
                   Plan: {PLAN_NAMES[state.plan] ?? state.plan}
+                  {(() => {
+                    const cur = state.plans.find((p) => p.key === state.plan);
+                    return cur && cur.price_cents > 0
+                      ? ` $${(cur.price_cents / 100).toFixed(0)}/mo`
+                      : '';
+                  })()}
                   {state.usage
                     ? ` — ${state.usage.used.toLocaleString()} / ${state.usage.included.toLocaleString()} messages this month`
                     : ''}
