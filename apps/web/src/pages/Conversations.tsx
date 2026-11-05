@@ -482,8 +482,11 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       }
       const listNeed = dragging ? colW : 460; // 220 col floor + 240 rail floor
       const railNeed = dragging ? colW + railW : 240;
-      const nextList = listTight ? avail < listNeed + 16 : avail < listNeed;
-      const nextTight = tight ? avail < railNeed + 48 : avail < railNeed;
+      // Deadband only matters while a drag can oscillate the measure —
+      // resize readings are stable, so release almost immediately.
+      const db = dragging ? 48 : 8;
+      const nextList = listTight ? avail < listNeed + db : avail < listNeed;
+      const nextTight = tight ? avail < railNeed + db : avail < railNeed;
       if (nextTight !== tight) {
         tight = nextTight;
         layout.classList.toggle('rail-tight', tight);

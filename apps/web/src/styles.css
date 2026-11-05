@@ -1720,8 +1720,10 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-inbox .tail-dots .alert-dot, .conv-inbox .tail-dots .unread-dot { width: 7px; height: 7px; }
 @media (min-width: 721px) {
   /* The column kisses the rail — .main's left padding drops so the inbox
-     is the left edge, carrying its own content inset. */
-  .layout.conv-open .main { padding-left: 0; }
+     is the left edge, carrying its own content inset. Only while the
+     column actually shows: hidden (list-tight) the padding returns so
+     the transcript doesn't bleed against the nav rail. */
+  .layout.conv-open:has(.conv-layout:not(.list-tight)) .main { padding-left: 0; }
   .conv-inbox {
     display: block; width: 290px; flex-shrink: 0;
     border-right: 1px solid var(--border);
