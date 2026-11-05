@@ -734,6 +734,10 @@
     '<div id="janis-menu">' +
     '<button type="button" id="janis-menu-end">End chat</button>' +
     '<button type="button" id="janis-menu-new" style="display:none">Start a new chat</button>' +
+    '<div id="janis-menu-cf" style="display:none;padding:10px 14px;font-size:13px;color:#1f2937">Close this chat and start a new one?<div style="display:flex;gap:6px;margin-top:8px">' +
+    '<button type="button" id="janis-menu-yes" style="width:auto;flex:1;background:#dc2626;color:#fff;border-radius:6px;padding:7px 8px;font-size:12.5px">Start new</button>' +
+    '<button type="button" id="janis-menu-no" style="width:auto;flex:1;background:#fff;color:#1f2937;border:1px solid #d1d5db;border-radius:6px;padding:7px 8px;font-size:12.5px">Cancel</button>' +
+    '</div></div>' +
     '</div>' +
     '<div id="janis-msgs"></div>' +
     '<div id="janis-attach"></div>' +
@@ -772,6 +776,9 @@
   var menu = panel.querySelector('#janis-menu');
   var menuEnd = panel.querySelector('#janis-menu-end');
   var menuNew = panel.querySelector('#janis-menu-new');
+  var menuCf = panel.querySelector('#janis-menu-cf');
+  var menuYes = panel.querySelector('#janis-menu-yes');
+  var menuNo = panel.querySelector('#janis-menu-no');
 
   // Chat options (⋯) — Zendesk-style: end the chat, or start a fresh thread
   // once it's ended. The server archives on end (CSAT prompt follows), and
@@ -822,14 +829,16 @@
       return poll();
     }).catch(function () {});
   };
-  menuNew.onclick = function () {
-    menu.classList.remove('open');
-    // A live thread's rendered transcript is replaced by the fresh one —
-    // confirm before it disappears from view (the old chat stays in the
-    // team's inbox; the visitor just can't scroll back to it).
-    var ended = state.convState === 'archived' || !!msgs.querySelector('.janis-ended');
-    if (!ended && msgs.querySelector('.janis-msg') &&
-      !window.confirm('Start a new chat? Your current conversation will be closed.')) return;
+  // "Start a new chat" on a live thread swaps the ⋯ menu into an inline
+  // confirm — a window.confirm() inside the iframe pops up with the
+  // browser's "embedded page at <host>" chrome and reads as a store bug.
+  function menuConfirmMode(on) {
+    menuCf.style.display = on ? 'block' : 'none';
+    menuEnd.style.display = on ? 'none' : '';
+    menuNew.style.display = on ? 'none' : '';
+    if (!on) syncMenu();
+  }
+  function startNewChat() {
     fetch(API + '/chat/' + TOKEN + '/new', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -848,7 +857,22 @@
       state.convState = 'agent';
       return poll();
     }).catch(function () {});
+  }
+  menuNew.onclick = function () {
+    // A live thread's rendered transcript is replaced by the fresh one —
+    // confirm before it disappears from view (the old chat stays in the
+    // team's inbox; the visitor just can't scroll back to it).
+    var ended = state.convState === 'archived' || !!msgs.querySelector('.janis-ended');
+    if (!ended && msgs.querySelector('.janis-msg')) { menuConfirmMode(true); return; }
+    menu.classList.remove('open');
+    startNewChat();
   };
+  menuYes.onclick = function () {
+    menuConfirmMode(false);
+    menu.classList.remove('open');
+    startNewChat();
+  };
+  menuNo.onclick = function () { menuConfirmMode(false); };
 
   // ---- transcript loading gate ----------------------------------------------
   // The composer stays disabled until the first poll resolves (or fails) —
