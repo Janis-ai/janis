@@ -4930,6 +4930,9 @@ const BRIEF_SYSTEM =
 export interface OperatorBrief {
   summary: string | null;
   generated_at: string | null;
+  /** Why there's no brief — lets the on-demand UI say something useful
+   *  instead of silently rendering nothing. */
+  reason?: 'short' | 'no_llm' | 'over_cap' | 'error';
 }
 
 // Concurrent opens of the same thread share one generation — a second caller
@@ -4974,17 +4977,21 @@ async function generateOperatorBrief(
   agent: AgentRow,
   conv: ConversationRow,
 ): Promise<OperatorBrief> {
-  const none: OperatorBrief = { summary: null, generated_at: null };
+  const none = (reason: OperatorBrief['reason']): OperatorBrief => ({
+    summary: null,
+    generated_at: null,
+    reason,
+  });
   // Same pause rule suggestions use — a workspace over its 24h AI ceiling
   // doesn't burn Janis-keyed spend on niceties.
-  if ((await llmSpendOverCap(db, agent.workspaceId)) != null) return none;
+  if ((await llmSpendOverCap(db, agent.workspaceId)) != null) return none('over_cap');
   let llm: LlmSettings;
   try {
     llm = await llmFor(db, agent);
   } catch {
-    return none; // unpriced model / no usable LLM — silently skip
+    return none('no_llm'); // unpriced model / no usable LLM
   }
-  if (!llm.apiKey) return none;
+  if (!llm.apiKey) return none('no_llm');
 
   // Latest window first — briefs are about where the thread stands, so the
   // recent tail matters more than the deep history a long transcript has.
@@ -5006,7 +5013,7 @@ async function generateOperatorBrief(
   const visible = rows.filter(
     (m) => m.text && !(m.payload as { internal?: boolean } | null)?.internal,
   );
-  if (visible.length < BRIEF_MIN_MESSAGES) return none;
+  if (visible.length < BRIEF_MIN_MESSAGES) return none('short');
 
   let transcript = rows.map(summaryLine).filter((l): l is string => !!l).join('\n');
   if (transcript.length > MAX_SUMMARY_SOURCE_CHARS) {
@@ -5032,7 +5039,7 @@ async function generateOperatorBrief(
     });
   }
   const text = res.text?.trim().slice(0, BRIEF_MAX_CHARS);
-  if (!text) return none; // transient failure — unstamped so the next open retries
+  if (!text) return none('error'); // transient failure — unstamped, retryable
 
   // The stamp marks what the brief covers: lastMessageAt is ingest-stamped
   // a few ms after the row's createdAt, so the newest message alone reads

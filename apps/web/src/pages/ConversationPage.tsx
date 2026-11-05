@@ -27,7 +27,7 @@ import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { BookmarkPlus, Bot, Brain, ChevronLeft, Headset, Info, ListFilter, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
+import { BookmarkPlus, Bot, Brain, ChevronLeft, Headset, Info, ListFilter, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, ScrollText, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -45,6 +45,15 @@ const ALERT_FLAG: Partial<Record<Alert['type'], keyof Message['flags']>> = {
 };
 
 const alertLabel = (a: Alert) => ALERT_LABELS[a.type] ?? a.type.replaceAll('_', ' ');
+
+/** Why a summary request came back empty — shown in the card so a click
+ *  always produces visible feedback. */
+const BRIEF_REASON: Record<string, string> = {
+  short: 'Nothing to summarize yet — this thread is still short.',
+  no_llm: "This agent has no LLM configured, so Janis can't write a summary.",
+  over_cap: 'Summaries are paused — the workspace hit its 24h AI spend limit.',
+  error: "Couldn't write a summary — try again.",
+};
 
 /** Canonical markdown-ish block renderer — the same shape message bubbles
  *  and the operator brief share (para / heading / list + inline mdSpans). */
@@ -136,10 +145,10 @@ export default function ConversationPage() {
   const jumpMsg = searchParams.get('msg'); // search-result deep link
   const returnScroll = searchParams.get('scroll'); // agent-page breadcrumb round-trip
   const { data, error: loadError } = useConversation(id);
-  // Operator brief — the first-entry digest. Only threads with enough
-  // visible history ask the server (it still decides there's nothing worth
-  // summarizing and answers null — the card just doesn't render).
-  const briefQ = useConversationBrief(id, Boolean(data && data.messages.length >= 6));
+  // Operator brief — on demand via the Summarize button. Enabled flips the
+  // query on; the server decides whether there's anything worth writing.
+  const [briefOpen, setBriefOpen] = useState(false);
+  const briefQ = useConversationBrief(id, briefOpen);
   // A merged conversation (visitor adoption) returns the survivor with
   // merged_from set — swap the URL to the surviving id silently.
   useEffect(() => {
@@ -343,9 +352,6 @@ export default function ConversationPage() {
   const [testSaved, setTestSaved] = useState(0);
   const jumpedFor = useRef('');
   const olderFor = useRef('');
-  // Brief dismissal is per-visit per-thread — navigating to another
-  // conversation re-arms it.
-  const [briefDismissed, setBriefDismissed] = useState(false);
   const [briefBusy, setBriefBusy] = useState(false);
   if (olderFor.current !== id) {
     olderFor.current = id;
@@ -353,7 +359,7 @@ export default function ConversationPage() {
     setOlderHasMore(null);
     setWin(null);
     jumpedFor.current = '';
-    setBriefDismissed(false);
+    setBriefOpen(false);
   }
   const hasMore = win ? win.hasMoreBefore : (olderHasMore ?? data?.messages_has_more ?? false);
 
@@ -1182,6 +1188,16 @@ export default function ConversationPage() {
           >
             <Sparkles size={15} />
           </button>
+          <button
+            className={`btn brief-toggle${briefOpen ? ' on' : ''}`}
+            title="Summarize this conversation"
+            aria-label="Summarize this conversation"
+            aria-pressed={briefOpen}
+            onClick={() => setBriefOpen((v) => !v)}
+          >
+            <ScrollText size={15} />
+            <span className="btn-label">Summarize</span>
+          </button>
           <SearchInput
             className="conv-search"
             placeholder="Search this conversation…"
@@ -1374,13 +1390,12 @@ export default function ConversationPage() {
           </div>
         )}
 
-        {/* Operator brief — the first-entry digest. Pinned above the
-            transcript so it's visible on the bottom-snapped first paint;
-            dismissed per visit, refreshable when the thread moved on. */}
-        {!briefDismissed && (brief || briefQ.isFetching) && (
+        {/* Operator brief — on demand from the Summarize button. Pinned
+            above the transcript so it's visible wherever the scroll sits. */}
+        {briefOpen && (
           <div className="card conv-brief">
             <div className="conv-brief-head">
-              <Sparkles size={13} />
+              <ScrollText size={13} />
               <span>Summary</span>
               <span className="grow" />
               {brief && (
@@ -1396,17 +1411,21 @@ export default function ConversationPage() {
               )}
               <button
                 className="conv-brief-btn"
-                title="Hide the summary"
-                aria-label="Hide the summary"
-                onClick={() => setBriefDismissed(true)}
+                title="Close the summary"
+                aria-label="Close the summary"
+                onClick={() => setBriefOpen(false)}
               >
                 <X size={14} />
               </button>
             </div>
             {brief ? (
               <MdBlocks text={brief} />
-            ) : (
+            ) : briefQ.isFetching ? (
               <div className="muted" style={{ fontSize: 13 }}>Summarizing…</div>
+            ) : (
+              <div className="muted" style={{ fontSize: 13 }}>
+                {BRIEF_REASON[briefQ.data?.reason ?? 'error'] ?? BRIEF_REASON.error}
+              </div>
             )}
           </div>
         )}

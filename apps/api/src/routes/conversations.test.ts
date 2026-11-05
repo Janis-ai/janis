@@ -853,7 +853,7 @@ describe('operator brief', () => {
 
     const res = await getSummary(conv.id);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ summary: null, generated_at: null });
+    expect(await res.json()).toEqual({ summary: null, generated_at: null, reason: 'short' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

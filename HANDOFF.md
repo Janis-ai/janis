@@ -93,17 +93,19 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
-## 2026-11-04h — Operator brief: summary card on first opening a thread
+## 2026-11-04h — Operator brief: on-demand Summarize card
 - GET /api/conversations/:id/summary writes a one-look digest (headline +
   labeled bullets) through the agent's own LLM via complete(); cached as
   conversations.op_summary keyed to last activity (op_summary_up_to), so
   a request only pays for a new pass when the transcript advanced —
-  ?refresh=1 forces one. In-flight map dedupes concurrent opens; BYOK
+  ?refresh=1 forces one. In-flight map dedupes concurrent clicks; BYOK
   agents run on their own key; workspaces over the 24h AI ceiling and
-  threads under 6 visible messages get {summary:null} — no card, no spend.
-- Console pins a dismissible "Summary" card above the transcript (bottom
-  snap means a card INSIDE the scroll area would never be seen on entry).
-  Fetched once per mount — live updates come from the transcript itself.
+  threads under 6 visible messages get {summary:null, reason} — reason
+  ('short'|'no_llm'|'over_cap'|'error') is what the card says on a miss.
+- Console: a Summarize toggle in the conv-actions toolbar (ScrollText
+  icon, next to Ask Janis) reveals the card above the transcript — ON
+  DEMAND only, no fetch on entry (Mike rejected the auto-show card as
+  interface-blocking). Dismiss X closes; refresh ↻ regenerates.
 - Gotcha for future summary work: lastMessageAt is ingest-stamped a few ms
   AFTER the newest message's createdAt — stamping a cache cursor with the
   message ts alone reads permanently stale. Stamp with max(lastMessageAt,

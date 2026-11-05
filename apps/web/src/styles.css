@@ -1187,6 +1187,7 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
 .conv-brief-btn:hover { color: var(--text); background: var(--panel-2); }
 .conv-brief-btn:disabled { opacity: .5; cursor: default; }
 .conv-brief .md-para, .conv-brief .md-list { font-size: 13px; }
+.conv-actions .brief-toggle.on { color: var(--copilot, #7c6cf0); }
 .msg.alert-open {
   border: 1px solid var(--warn); border-radius: 12px; padding: 8px 14px;
 }
