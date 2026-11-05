@@ -93,6 +93,13 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-05f — Narrow composer + concierge spec-leak fix
+- Mobile composer: emoji/replies/components/suggest collapse into a single
+  "+" popover (labeled rows) at ≤720px — attach, mode, Resume, Send stay on
+  the bar. Verified at 390px via Playwright.
+- Concierge suggest prompt: operator drafts call apply_*/save_widget for
+  apply work instead of emitting raw JSON spec blobs (a real draft shipped
+  a fenced form spec to the operator). a9c71117 / janis-api-01447-fv6.
 ## 2026-11-05e — Drafts carry executable actions; no side effects in suggest mode
 - Customer builtins (send_verification_email, save_user_profile,
   check_verification_code) ran for real inside suggest runs — a discarded
