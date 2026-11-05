@@ -93,6 +93,22 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-04i — Conversation-switch loader + placeholder-data guards
+- useConversation keeps the prior thread mounted via placeholderData;
+  while the next conv fetches, a zero-height sticky `.conv-fetch` pill
+  ("⟳ Loading…") pins over the faded transcript — no flow space, so
+  nothing shifts when the new thread lands. Cached convs and the 15s
+  poll never show it (isPlaceholderData is only true on the key-change
+  fetch window).
+- Same window needed effect guards — every consumer of `data` acting on
+  route `id` was re-keyed to `data.conversation.id === id`: auto-mark-
+  read (was stamping markedReadFor against the OLD conv's flags, so the
+  arriving unread thread never marked read), the merged_from redirect,
+  ?scroll= restore, ?msg= jump, and loadOlder.
+- Probe: scripts/ui/tmp-convloader.mjs delays /api/conversations/:id
+  and samples the DOM across the switch — asserts pill + .switching
+  fade + chrome mounted, cleared on arrival, absent on cached switch.
+
 ## 2026-11-04h — Operator brief: on-demand Summarize card
 - GET /api/conversations/:id/summary writes a one-look digest (headline +
   labeled bullets) through the agent's own LLM via complete(); cached as
