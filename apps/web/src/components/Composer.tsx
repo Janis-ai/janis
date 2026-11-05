@@ -60,6 +60,16 @@ export default function Composer({
   const [compArgsFor, setCompArgsFor] = useState<string | null>(null);
   const [compArgs, setCompArgs] = useState('');
   const [plusOpen, setPlusOpen] = useState(false);
+
+  /** One popover at a time — opening one closes its siblings (two stacked
+   *  menus was the narrow-screen failure mode). */
+  const togglePopover = (which: 'emoji' | 'replies' | 'sendas' | 'comp' | 'plus') => {
+    setEmojiOpen((o) => (which === 'emoji' ? !o : false));
+    setRepliesOpen((o) => (which === 'replies' ? !o : false));
+    setSendasOpen((o) => (which === 'sendas' ? !o : false));
+    setCompOpen((o) => (which === 'comp' ? !o : false));
+    setPlusOpen((o) => (which === 'plus' ? !o : false));
+  };
   // Phone width gets terse placeholders + an icon-face mode picker —
   // the verbose "(Enter sends…)" hint means nothing on a touch keyboard
   // anyway.
@@ -243,17 +253,17 @@ export default function Composer({
               title="More"
               aria-label="More composer actions"
               aria-expanded={plusOpen}
-              onClick={() => setPlusOpen((o) => !o)}
+              onClick={() => togglePopover('plus')}
             >
               <Plus size={16} />
             </button>
           )}
           {!narrow && (
-            <button type="button" className="btn icon" title="Emoji" aria-label="Emoji picker" onClick={() => setEmojiOpen((o) => !o)}><Smile size={16} /></button>
+            <button type="button" className="btn icon" title="Emoji" aria-label="Emoji picker" onClick={() => togglePopover('emoji')}><Smile size={16} /></button>
           )}
           <button type="button" className="btn icon" title="Attach file" aria-label="Attach file" onClick={() => fileRef.current?.click()}><Paperclip size={16} /></button>
           {!narrow && (savedReplies?.saved_replies.length ?? 0) > 0 && (
-            <button type="button" className="btn icon" title="Saved replies" aria-label="Saved replies" onClick={() => setRepliesOpen((o) => !o)}><FileText size={16} /></button>
+            <button type="button" className="btn icon" title="Saved replies" aria-label="Saved replies" onClick={() => togglePopover('replies')}><FileText size={16} /></button>
           )}
           {!narrow && onSendComponent && (agentWidgets?.widgets.length ?? 0) > 0 && (
             <button
@@ -261,7 +271,7 @@ export default function Composer({
               className="btn icon"
               title="Send a component"
               aria-label="Send a saved component"
-              onClick={() => setCompOpen((o) => !o)}
+              onClick={() => togglePopover('comp')}
             >
               <Shapes size={16} />
             </button>
@@ -297,7 +307,7 @@ export default function Composer({
               title="Reply as"
               aria-label="Reply as"
               aria-expanded={sendasOpen}
-              onClick={() => setSendasOpen((o) => !o)}
+              onClick={() => togglePopover('sendas')}
             >
               <ModeIcon size={16} />
             </button>
@@ -368,7 +378,7 @@ export default function Composer({
           <button
             type="button"
             className="reply-item"
-            onClick={() => { setPlusOpen(false); setEmojiOpen(true); }}
+            onClick={() => togglePopover('emoji')}
           >
             <span className="row" style={{gap:8,alignItems:'center'}}><Smile size={14} /><strong>Emoji</strong></span>
           </button>
@@ -376,7 +386,7 @@ export default function Composer({
             <button
               type="button"
               className="reply-item"
-              onClick={() => { setPlusOpen(false); setRepliesOpen(true); }}
+              onClick={() => togglePopover('replies')}
             >
               <span className="row" style={{gap:8,alignItems:'center'}}><FileText size={14} /><strong>Saved replies</strong></span>
             </button>
@@ -385,7 +395,7 @@ export default function Composer({
             <button
               type="button"
               className="reply-item"
-              onClick={() => { setPlusOpen(false); setCompOpen(true); }}
+              onClick={() => togglePopover('comp')}
             >
               <span className="row" style={{gap:8,alignItems:'center'}}><Shapes size={14} /><strong>Send a component</strong></span>
             </button>
