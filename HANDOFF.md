@@ -93,6 +93,22 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-05e — Drafts carry executable actions; no side effects in suggest mode
+- Customer builtins (send_verification_email, save_user_profile,
+  check_verification_code) ran for real inside suggest runs — a discarded
+  draft could still fire the email. They now park as proposed_actions;
+  run-action executes them via CUSTOMER_BUILTINS in decidePendingAction
+  ({builtin:name} snapshots). Send keeps the draft card open while
+  undecided actions remain. Mid-text speaker labels ((human operator)…)
+  stripped; suggest prompt says call the tool, never narrate. b3aa2542.
+## 2026-11-05d — Suggestions/components stage as inline drafts
+- UX rework of 2026-11-05c: the suggestion card is a dashed-border DRAFT
+  bubble at the transcript tail showing exactly what would send (text +
+  widgets + chips + proposed-action cards) with Send / Edit / Dismiss —
+  one click delivers, Edit still fills the composer with components
+  attached. Saved-component picks resolve via a new `preview` flag on
+  POST /:id/send-component and stage in the same draft slot (nothing
+  sends on pick anymore). Committed 2201bc09.
 ## 2026-11-05c — Operator sends carry rich components end-to-end
 - The paused-conversation gap closed: suggestions now store a payload
   ({widgets, buttons, proposed_actions} — migration 0125 adds
