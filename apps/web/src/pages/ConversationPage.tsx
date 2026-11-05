@@ -2115,7 +2115,7 @@ export default function ConversationPage() {
                 title="Try another suggestion"
                 aria-label="Try another suggestion"
                 disabled={suggest.isPending}
-                onClick={() => { setDraftSent(false); setActionResults({}); void dismissSuggestions(); suggest.mutate(); }}
+                onClick={() => { setDraftSent(false); setActionResults({}); suggest.mutate(); }}
               >
                 <RefreshCw size={13} />
               </button>

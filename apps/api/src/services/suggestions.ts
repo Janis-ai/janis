@@ -61,10 +61,7 @@ export async function requestSuggestion(
       400,
     );
   }
-  const [row] = await db
-    .insert(suggestions)
-    .values({ conversationId: conv.id, text, notes: result?.notes ?? null, source: 'llm' })
-    .returning();
+  const row = await storeSuggestion(db, conv.id, text, 'llm', result?.notes ?? undefined);
   return { mode: 'llm', suggestion: row };
 }
 
@@ -77,6 +74,13 @@ export async function storeSuggestion(
   notes?: string,
   payload?: Record<string, unknown>,
 ) {
+  // One live draft per conversation — a new suggestion supersedes the
+  // previous pending one atomically, so a refresh can't race a
+  // dismiss-all against the fresh row and lose it.
+  await db
+    .update(suggestions)
+    .set({ status: 'dismissed' })
+    .where(and(eq(suggestions.conversationId, conversationId), eq(suggestions.status, 'pending')));
   const [row] = await db
     .insert(suggestions)
     .values({
