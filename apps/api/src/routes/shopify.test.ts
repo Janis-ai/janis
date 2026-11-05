@@ -1109,6 +1109,49 @@ describe('shopify embedded billing + theme detection', () => {
     await db.delete(shopifyShops).where(eq(shopifyShops.id, row.id));
     await db.update(workspaces).set({ plan: 'free' }).where(eq(workspaces.id, workspaceId));
   });
+
+  it('rebinding a subscribed shop onto a Stripe-paid workspace cancels the Shopify charge', async () => {
+    const queries: string[] = [];
+    stubShopifyApi({ onGraphql: (q) => queries.push(q) });
+    await postSession(sessionJwt('rebind-paid.myshopify.com'));
+    const [row] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.shop, 'rebind-paid.myshopify.com'));
+    // Merchant approved a Starter sub on the provisioned workspace.
+    await db
+      .update(shopifyShops)
+      .set({ billing: { subscriptionId: 'sub_1', plan: 'starter', status: 'ACTIVE' } })
+      .where(eq(shopifyShops.id, row.id));
+    // …then rebinds to their real workspace, which is paid via Stripe. A
+    // Shopify charge can't stack onto a Stripe subscription — it must be
+    // cancelled, not left ACTIVE and invisible.
+    await db
+      .update(workspaces)
+      .set({ plan: 'pro', billingProvider: 'stripe' })
+      .where(eq(workspaces.id, workspaceId));
+    const res = await app.request('/api/shopify/link', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ code: signLinkCode(row.id), agent_id: agentId }),
+    });
+    expect(res.status).toBe(200);
+    expect(queries.find((q) => q.includes('appSubscriptionCancel'))).toContain('sub_1');
+    const [ws] = await db.select().from(workspaces).where(eq(workspaces.id, workspaceId));
+    expect(ws.plan).toBe('pro');
+    expect(ws.billingProvider).toBe('stripe');
+    const [after] = await db
+      .select()
+      .from(shopifyShops)
+      .where(eq(shopifyShops.id, row.id));
+    expect((after.billing as { status?: string }).status).toBe('CANCELLED');
+    // Unbind + free so later tests see a clean slate.
+    await db
+      .update(shopifyShops)
+      .set({ workspaceId: null, agentId: null, state: 'unlinked' })
+      .where(eq(shopifyShops.id, row.id));
+    await db.update(workspaces).set({ plan: 'free' }).where(eq(workspaces.id, workspaceId));
+  });
 });
 
 describe('shopify usage billing', () => {

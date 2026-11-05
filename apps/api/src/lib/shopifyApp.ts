@@ -586,17 +586,29 @@ export async function bindShop(
       });
     }
     const prior = shopBilling(row);
-    if (prior.subscriptionId && prior.status === 'ACTIVE' && PLANS[prior.plan ?? '']) {
+    if (
+      prior.subscriptionId &&
+      (prior.status === 'ACTIVE' || prior.status === 'PENDING')
+    ) {
       const [newWs] = await db
         .select({ plan: workspaces.plan, billingProvider: workspaces.billingProvider })
         .from(workspaces)
         .where(eq(workspaces.id, binding.workspaceId))
         .limit(1);
-      if (newWs && (newWs.plan === 'free' || newWs.billingProvider === 'shopify')) {
+      const adoptable =
+        newWs && (newWs.plan === 'free' || newWs.billingProvider === 'shopify');
+      if (adoptable && prior.status === 'ACTIVE' && PLANS[prior.plan ?? '']) {
         await setWorkspacePlan(db, binding.workspaceId, {
           plan: prior.plan!,
           billingProvider: 'shopify',
         });
+      } else if (!adoptable) {
+        // Stripe-paid target — a Shopify charge can't stack onto a Stripe
+        // subscription, and a hidden ACTIVE sub would keep billing the
+        // merchant for a plan nothing serves. Cancel it outright.
+        await cancelBillingSubscription(db, row).catch((err) =>
+          console.error(`shopify cancel-on-rebind ${row.shop}:`, err),
+        );
       }
     }
   }
