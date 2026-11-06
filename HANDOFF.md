@@ -93,6 +93,14 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06b — Row tag chips capped: overflow collapses to "+N"
+- Follow-up to 11-05i's wrap feature: the wrapped chip line was unbounded —
+  20 tags = 3 chip lines in the wide list and ~14 in the 290px split column
+  (reproduced by PATCHing a stress tag set onto a live conv). ConvRow now
+  budgets ~60 chars of tag text in the row; chips past the budget collapse
+  into a "+N" chip whose title lists the hidden tags. Fitting rows are
+  unchanged; worst case is ~2-3 chip lines in the split column. Verified
+  end-to-end via scripts/ui/tmp-tagwrap.mjs screenshots both layouts.
 ## 2026-11-06a — Suggest-flow fixes round 2
 - run-action dedupe guards only in-flight rows: a decided twin re-executes
   (was silently swallowing a second approve — 'no email sent').

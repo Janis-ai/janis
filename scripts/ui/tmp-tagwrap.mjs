@@ -1,0 +1,12 @@
+import { BASE, launch, login, shot } from './lib.mjs';
+const CONV = '4bcd70a8-1381-4386-8c5d-19a03fa55c4d';
+const ctx = await launch();
+await login(ctx.context);
+await ctx.page.goto(`${BASE}/conversations`, { waitUntil: 'networkidle' });
+await ctx.page.waitForTimeout(1500);
+await shot(ctx.page, 'tagwrap-inbox');
+await ctx.page.goto(`${BASE}/conversations/${CONV}`, { waitUntil: 'networkidle' });
+await ctx.page.waitForTimeout(1500);
+await shot(ctx.page, 'tagwrap-conv');
+await ctx.browser.close();
+console.log('done');

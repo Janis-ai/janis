@@ -199,6 +199,15 @@ export function ConvRow({
   // taps toggle rather than navigate — the link click is suppressed
   // either way once the press fires.
   const lp = useRef<{ t?: number; fired?: boolean }>({});
+  // Row chips are budgeted by characters — past the budget the rest collapse
+  // into a "+N" chip (title lists them). Unbudgeted, a heavily-tagged thread
+  // wraps to a dozen chip lines in the split column and ~3 in the wide list.
+  let tagChars = 0;
+  const rowTags = (c.tags ?? []).filter((t) => {
+    tagChars += t.length + 3; // text + chip padding + gap
+    return tagChars <= 60;
+  });
+  const hiddenTags = (c.tags ?? []).slice(rowTags.length);
   return (
     <Link
       to={`${base}/${c.id}`}
@@ -271,9 +280,14 @@ export function ConvRow({
             </span>
           )}
           {c.intent && <span className="channel-tag intent-tag" title="Classified intent">{c.intent}</span>}
-          {c.tags?.map((t) => (
+          {rowTags.map((t) => (
             <span key={t} className="channel-tag conv-tag" title="Tag">{t}</span>
           ))}
+          {hiddenTags.length > 0 && (
+            <span className="channel-tag conv-tag" title={hiddenTags.join(', ')}>
+              +{hiddenTags.length}
+            </span>
+          )}
           {snoozed && (
             <span className="channel-tag" title={`Snoozed until ${new Date(c.snoozed_until!).toLocaleString()}`}>
               <Moon size={11} style={{ verticalAlign: '-1px', marginRight: 3 }} />
