@@ -93,6 +93,19 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06h — Open conversations stay read; flag toggles paint instantly
+- Ingest flagged every inbound message isUnread unconditionally — a new
+  customer message re-lit the unread dot on the thread the operator was
+  staring at (markedReadFor only marks once per open, so it never
+  recovered). The `viewers` presence table already knew who was looking;
+  ingest now suppresses the auto-flag when a live heartbeat exists. A
+  manual mark-unread still survives (flag ORs, never clears).
+- Read/star toggles waited on PATCH + a full infinite-list refetch.
+  hooks.ts patchConversationCaches writes the field into every cached
+  conversation list (['conversations'] infinite, ['conversations-page'],
+  ['search']) up front — single-row verbs, bulk mark_read/star, and the
+  detail page's Mail toggle all repaint before the round-trip; the
+  invalidate still reconciles. 127cd4bb.
 ## 2026-11-06g — /conversations/:id deep links render split view again
 - Conversations derived openConvId from inboxBase, which follows the
   PERSISTED context agent (ctxAgent) — with a last-visited agent stored,
