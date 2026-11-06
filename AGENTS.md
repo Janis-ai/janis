@@ -1549,12 +1549,25 @@ wordhopapi retires (then migrated agents take over by default).
 Remaining to fully migrate a payer silently:
 1. Import bots w/ DF creds (monitor→dialogflow) + messenger channel +
    legacy_stripe (scripts exist: export-legacy-bots/import-legacy).
+   ⚠ ENGINE RULE (found 2026-11-06): card/SDK-driven bots (chatfuel,
+   manychat, botcopy — all 7 payers) must keep config.engine='monitor' —
+   engine='dialogflow' makes the Meta-webhook path (runLegacyReply) send
+   DF replies via the page token directly, double-replying alongside the
+   card's mirror-verdict answer. config.dialogflow{project}+
+   DIALOGFLOW_SA_JSON is what runFallback needs for its shadow eval;
+   engine='dialogflow' is only for messenger-native bots (janis200's
+   BotDylan shape — janis_only, no card).
 2. Slack team cutover: write slack_installations {migrated:true,
    mode:'classic', classicConfig from the Mongo doc} + reseed
    slack_classic_channels/prefs + markLegacyTeamMigrated LAST. NB: no
    classic-mode installs exist on prod yet; runSlackMigration (self-serve
    path) does NOT set mode/classicConfig — the token-import shape is
    janis200-setup.ts, not runSlackMigration.
+   VERIFIED deployed whslack semantics (live slug 2026-11-06): migrated
+   teams are DROPPED both directions — handleWebhookPayload acks+200s
+   all Slack→whslack traffic, and the /wordhopapi/receive gate drops
+   wordhopapi→whslack emissions (60s-refresh flag read from Mongo).
+   Nothing forwards; the new API owns the whole surface post-mark.
 3. Parent-child: leave child teams' slack_integrations un-marked — the
    /in+fallback mirrors keep wordhopapi emitting to them. Air Tahiti's
    2 children ride the mirror until cross-workspace subscription fan-out
@@ -1562,6 +1575,56 @@ Remaining to fully migrate a payer silently:
    Guard: never let two workspaces hold agents with the same
    legacy_client_key — agentForKey takes first match.
 4. Rollback per customer = flip migrated off; wordhop-slack resumes.
+
+BLOCKERS found by tracing the cutover paths (2026-11-06 — fix before
+any payer migrates):
+a. DOUBLE USAGE-METERING — deployed wordhopapi's incrementUsageRecords
+   has no x-janis-mirror guard (messenger.js ~3008); our reportLegacyUsage
+   also fires per DF turn (legacy.ts:578) and per /in (legacyApi.ts:299).
+   Every mirrored turn meters twice on subs carrying a metered item —
+   BasePro/BasePro25 aren't in PER_USER_PLANS so per-message plans double
+   every turn. Fix: meter only when OUR answer stands (mirror failed/
+   non-OK) — move the call out of runFallback to after mirrorVerdict.
+   /in needs the same verdict gate. Audit first: pull Stripe usage
+   summaries for each payer's meter item to catch any already-live
+   double-count on imported agents' /in traffic.
+b. PAUSE DOESN'T PROPAGATE — our classic /pause + takeover() set
+   conv.state='human' + the classic channel doc, but wordhopapi's Mongo
+   channel doc stays unpaused → its mirrored eval keeps answering → bot
+   replies through a takeover on card bots. wordhopapi→us propagation
+   exists (/api/v1/mirror); us→them doesn't. Fix: pause/resume on a
+   legacy_client_key conv must POST wordhopapi /api/v1/update_channel
+   (or set the Mongo channel doc via LEGACY_MONGODB_URI).
+c. CARD-PATH ALERT EMISSION — emitAlertEvent only fires inside
+   runLegacyReply (messenger-webhook path). runFallback records
+   custom_alert/failure/handoff flags in the transcript but never emits
+   the classic events → post-mark, alert cards/failure logs/help-
+   requests on card bots die silently (whslack dropped, we never emit).
+   Fix: map runFallback's flag events → emitAlertEvent with the reply
+   JSON (member intent gates read it).
+d. transcript skew during hybrid: 'bot message' lines post our SHADOW
+   answer — if wordhopapi's delivered reply differs (or is suppressed),
+   the j-channel lies. Bounded: mirror is usually authoritative; accept
+   or suppress our message_out emit when mirror returned their answer.
+e. Deployed wordhopapi metering/paused facts confirmed via `heroku run`
+   (local checkouts are stale — wordhopapi-good predates the mirror
+   code): incrementUsageRecords runs unguarded on mirrors; sendMessage
+   honors req.channel.paused (that's what update_channel flips);
+   common.js:1165 mirrors takeover state → NEW_JANIS_API_URL/api/v1/mirror.
+
+VERIFICATION instruments (build/rehearse before payer #1):
+- Stripe audit per payer: sub status + metered item id vs
+  legacy_stripe.meter_item_id + usage-summary baseline.
+- Mirror-divergence log: record ours-vs-theirs on every fallback call
+  per imported bot → parity rate before trusting the shadow answer.
+- classic-replay --file on each team's real captured feed → diff
+  posted/suppressed vs whslack history (fixtures exist for Air Tahiti).
+- janis200 = proven assisted-migration rig (install f279e9f1, classic,
+  BotDylan dialogflow+SA, messenger channel live).
+- Cutover order: jessicavictoria (no Slack) → trifit → aesthetibot
+  (botcopy /api/v1 path) → architeqt → oicosmetic → Air Tahiti
+  (parent-child — PARTIAL until fan-out ships) → Botsheets HQ ($150,
+  Josh's own — coordinate).
 
 ## Deferred — hosted chat subdomains (decided 2026-10-28)
 
