@@ -558,6 +558,9 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       if (nextTight !== tight) {
         tight = nextTight;
         layout.classList.toggle('rail-tight', tight);
+        // Wide → narrow always hides the rail — no stale open drawer +
+        // scrim can survive the transition.
+        if (tight) window.dispatchEvent(new CustomEvent('conv-rail-hide'));
       }
       if (nextList !== listTight) {
         listTight = nextList;

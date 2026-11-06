@@ -684,6 +684,13 @@ export default function ConversationPage() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [sideOpen]);
+  // A wide→narrow flip hides the rail outright — the drawer never
+  // carries an open/scrim state across the boundary.
+  useEffect(() => {
+    const hide = () => setSideOpen(false);
+    window.addEventListener('conv-rail-hide', hide);
+    return () => window.removeEventListener('conv-rail-hide', hide);
+  }, []);
 
   const decide = useMutation({
     mutationFn: ({ actionId, decision }: { actionId: string; decision: 'approved' | 'denied' }) =>
