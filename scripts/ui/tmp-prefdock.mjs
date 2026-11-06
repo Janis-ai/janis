@@ -25,3 +25,21 @@ console.log(await page.evaluate(() => {
   });
 }));
 await browser.close();
+// (appended) re-run fresh: after dock collapses nav, user expand must hold
+const { browser: b2, page: p2 } = await launch();
+await login(p2);
+await p2.goto('http://localhost:5173/conversations', { waitUntil: 'domcontentloaded' });
+await p2.setViewportSize({ width: 1140, height: 900 });
+await p2.evaluate(() => localStorage.setItem('nav.collapse', JSON.stringify({ v: 'expanded', vw: 1140 })));
+await p2.reload({ waitUntil: 'domcontentloaded' });
+await p2.waitForSelector('.conv-row', { timeout: 15000 });
+await p2.locator('.conv-row').nth(2).click();
+await p2.waitForSelector('.conv-main', { timeout: 10000 });
+await p2.evaluate(() => window.dispatchEvent(new CustomEvent('janis:open-copilot')));
+await p2.waitForTimeout(700);
+const w2 = () => p2.evaluate(() => Math.round(document.querySelector('.sidebar').getBoundingClientRect().width));
+console.log('after-dock nav:', await w2());
+await p2.locator('.nav-collapse').click();
+await p2.waitForTimeout(400);
+console.log('after-user-expand nav:', await w2());
+await b2.close();
