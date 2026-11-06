@@ -1798,6 +1798,8 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .conv-side {
     position: absolute; top: 0; right: 0; bottom: 0; z-index: 75;
     width: min(88vw, 340px);
+    padding-left: 12px;
+    padding-top: 0;
     background: var(--bg); border-left: 1px solid var(--border);
     transform: translateX(105%);
     transition: transform .18s ease;
@@ -1812,10 +1814,11 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   }
   .conv-side-scrim {
     display: block;
-    position: absolute; inset: 0; z-index: 72; border: 0; padding: 0;
+    position: fixed; inset: 0; z-index: 72; border: 0; padding: 0;
     background: rgba(8,10,14,.45); cursor: default;
   }
-  .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; order: -2; }
+  .conv-side-head { display: flex; justify-content: flex-end; align-items: center; height: 43px; padding: 6px 0; order: -2; }
+  .conv-side-head .cmh-collapse { display: inline-flex; }
   .conv-actions .copilot-btn { display: inline-flex; }
 }
 /* rail-tight — the JS-measured version of the ≤680 drawer flip: fires
@@ -1831,6 +1834,8 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-layout.rail-tight .conv-side {
   position: absolute; top: 0; right: 0; bottom: 0; z-index: 75;
   width: min(88vw, 340px);
+  padding-left: 12px;
+  padding-top: 0;
   background: var(--bg); border-left: 1px solid var(--border);
   transform: translateX(105%);
   transition: transform .18s ease;
@@ -1843,10 +1848,11 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   box-shadow: -12px 0 32px rgba(0,0,0,.4);
 }
 .conv-layout.rail-tight .conv-side-scrim {
-  display: block; position: absolute; inset: 0; z-index: 72; border: 0; padding: 0;
+  display: block; position: fixed; inset: 0; z-index: 72; border: 0; padding: 0;
   background: rgba(8,10,14,.45); cursor: default;
 }
-.conv-layout.rail-tight .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; order: -2; }
+.conv-layout.rail-tight .conv-side-head { display: flex; justify-content: flex-end; align-items: center; height: 43px; padding: 6px 0; order: -2; }
+.conv-layout.rail-tight .conv-side-head .cmh-collapse { display: inline-flex; }
 .conv-layout.rail-tight .conv-actions .copilot-btn { display: inline-flex; }
 .conv-layout.rail-tight .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: inline-flex; }
 /* User-hidden rail — same affordance grammar as rail-tight: freed space
@@ -2016,13 +2022,16 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .layout.dock-open .conv-layout.rail-tight .conv-side {
     position: absolute; top: 0; right: 0; bottom: 0; z-index: 75;
     width: min(340px, 88vw);
+    padding-left: 12px;
+    padding-top: 0;
     background: var(--bg); border-left: 1px solid var(--border);
     transform: translateX(105%); transition: transform .18s ease;
     overflow-y: auto;
   }
   .layout.dock-open .conv-layout.rail-tight .conv-side.open { transform: none; box-shadow: -12px 0 32px rgba(0,0,0,.4); }
-  .layout.dock-open .conv-layout.rail-tight .conv-side-scrim { display: block; position: absolute; inset: 0; z-index: 72; border: 0; padding: 0; background: rgba(8,10,14,.45); cursor: default; }
-  .layout.dock-open .conv-layout.rail-tight .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
+  .layout.dock-open .conv-layout.rail-tight .conv-side-scrim { display: block; position: fixed; inset: 0; z-index: 72; border: 0; padding: 0; background: rgba(8,10,14,.45); cursor: default; }
+  .layout.dock-open .conv-layout.rail-tight .conv-side-head { display: flex; justify-content: flex-end; align-items: center; height: 43px; padding: 6px 0; }
+  .layout.dock-open .conv-layout.rail-tight .conv-side-head .cmh-collapse { display: inline-flex; }
   .layout.dock-open .conv-actions .copilot-btn { display: inline-flex; }
   /* stacked mode: keep the transcript internally scrollable so the composer
      stays adjacent instead of dropping below a page-length of messages */
@@ -2347,7 +2356,8 @@ details summary:hover { color: var(--text); }
     position: fixed; inset: 0; z-index: 72; border: 0; padding: 0;
     background: rgba(8,10,14,.45); cursor: default;
   }
-  .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; order: -2; }
+  .conv-side-head { display: flex; justify-content: flex-end; align-items: center; height: 43px; padding: 6px 0; order: -2; }
+  .conv-side-head .cmh-collapse { display: inline-flex; }
   /* Phone padding for the static foot block. */
   .conv-foot {
     margin: 0 -14px; padding: 6px 14px calc(10px + env(safe-area-inset-bottom));

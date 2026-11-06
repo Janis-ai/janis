@@ -2347,12 +2347,12 @@ export default function ConversationPage() {
       >
         <div className="conv-side-head">
           <button
-            className="cmh-back"
+            className="cmh-collapse"
             aria-label="Close details"
             title="Close details"
             onClick={() => setSideOpen(false)}
           >
-            <X size={18} />
+            <PanelRightClose size={16} />
           </button>
         </div>
         {/* DOM order: Details leads — the rail is a reference panel first
