@@ -93,6 +93,20 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06a — Suggest-flow fixes round 2
+- run-action dedupe guards only in-flight rows: a decided twin re-executes
+  (was silently swallowing a second approve — 'no email sent').
+- Regen shows Thinking… until the new suggestion lands — the hosted
+  endpoint returns before the LLM finishes, so the stale draft flickered
+  back mid-run.
+- TOOL_INSTRUCTION strip: tool-result sentences like 'then call
+  check_verification_code with it' can no longer parrot into outbound
+  replies; leftover WIDGET:/WIDGET_REF: lines strip from drafts; action
+  card shows the result's first sentence not the instruction tail.
+- Cause of 'verification email from my gmail': verificationSender prefers
+  the agent's real mailbox (gmail channel existed since Sep 30); delete
+  it and sends fall back to alerts@inbound.janis.ai.
+  e278f164 / janis-api-pending.
 ## 2026-11-05h — Suggest-flow UX hardening round
 - storeSuggestion supersedes pending rows atomically — a refresh could
   race dismiss-all against the fresh insert and the draft vanished.
