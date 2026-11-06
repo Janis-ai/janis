@@ -93,6 +93,14 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06d — Composer component list updates live on concierge saves
+- The conversation composer's component picker used query key
+  ['agentWidgets'] while WidgetComposer + the 'agent' SSE invalidation
+  used ['agent-widgets'] — apply_save_widget never reached the open
+  picker; a concierge-drafted component only appeared after browser
+  reload. useAgentWidgets now shares the ['agent-widgets'] key (one
+  resource, one cache) so saves, SSE invalidation, and the Tools tab all
+  hit the same entry.
 ## 2026-11-06c — bot_key mints wherever a bot URL is needed
 - Follow-up to 11-05h: inspect_agent's post_url was still null when the
   agent's key hadn't been lazily minted (channel created via API, card
