@@ -1685,7 +1685,15 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           enabled: f.enabled,
           source_url: f.sourceUrl,
         })),
-        channels: chans,
+        channels: chans.map((ch) => {
+          if (ch.kind !== 'chatfuel' && ch.kind !== 'manychat') return ch;
+          // The URL the visitor pastes into the bot platform — shown on the
+          // channel's setup card, so it reads back verbatim here. Without it
+          // the model composes /bot/<key>/… itself and guesses the key.
+          const meta = (agent.metadata ?? {}) as { bot_key?: string; legacy_client_key?: string };
+          const key = meta.bot_key ?? meta.legacy_client_key;
+          return { ...ch, post_url: key ? `${env.apiOrigin}/bot/${key}/${ch.kind}` : null };
+        }),
         alert_rules: rules.map((r) => ({ kind: r.kind, config: r.config })),
         components: widgets,
       });

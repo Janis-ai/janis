@@ -1,5 +1,5 @@
 import { createHmac, randomInt } from 'node:crypto';
-import { and, asc, desc, eq, gt, inArray, isNotNull, lte, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNotNull, lte, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import type { AgentConfig, OutboundWebhook, QuickReply, UserProfile } from '@janis/shared';
 
@@ -1139,7 +1139,7 @@ function consoleHosts(): Set<string> {
   return hosts;
 }
 
-type ConsoleSlot = { kind: 'conversation' | 'agent' | 'channel' | 'contact' | 'article'; id: string; parent?: string };
+type ConsoleSlot = { kind: 'conversation' | 'agent' | 'channel' | 'contact' | 'article' | 'botkey'; id: string; parent?: string };
 
 /** A console URL is a lie unless its path is a real route — fetch-checking
  *  can't judge an SPA (every path returns the shell's 200). Returns the id
@@ -1186,6 +1186,15 @@ function consoleSlots(pathname: string): ConsoleSlot[] | null {
     ];
   }
   if (a === 'llm') return b === 'callback' && segs.length === 2 ? [] : null;
+  // /bot/<key>/{chatfuel,manychat} — the bot-platform POST URL lives on the
+  // API origin, which is the console host on same-origin deploys. The key is
+  // an agent credential, verified like any other claimed id (kept raw — keys
+  // aren't uuids and legacy keys can be mixed-case).
+  if (a === 'bot') {
+    if (segs.length !== 3 || (c !== 'chatfuel' && c !== 'manychat')) return null;
+    const raw = pathname.split('/').filter(Boolean)[1];
+    return raw ? [{ kind: 'botkey', id: raw }] : null;
+  }
   return CONSOLE_PAGES.has(a) && segs.length === 1 ? [] : null;
 }
 
@@ -1227,6 +1236,23 @@ function consoleIdChecker(db: Db, workspaceId: string, opts?: { crossWorkspace?:
           .select({ id: contacts.id })
           .from(contacts)
           .where(and(eq(contacts.id, id), ...scope(contacts.workspaceId)))
+          .limit(1);
+        return r.length > 0;
+      }
+      if (kind === 'botkey') {
+        // A POST key that matches no agent is a dead URL. Unscoped: the key
+        // itself is the credential — the concierge legitimately cites a key
+        // belonging to the visitor's workspace, not the concierge's own.
+        const lower = id.toLowerCase();
+        const r = await db
+          .select({ id: agents.id })
+          .from(agents)
+          .where(
+            or(
+              sql`lower(${agents.metadata}->>'bot_key') = ${lower}`,
+              sql`lower(${agents.metadata}->>'legacy_client_key') = ${lower}`,
+            ),
+          )
           .limit(1);
         return r.length > 0;
       }

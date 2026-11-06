@@ -135,6 +135,22 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   component picks show a Resolving state.
   37c9be1c 206129dc 7ae64185 dc6369b7 3f7b12dc e8b0b7c0 /
   janis-api-01450-kgl + 01451-jn4 + final.
+## 2026-11-05h — Link guard verifies bot-platform POST URLs
+- Prod alert trail showed the concierge minting dead links: the KB dangled
+  a `…/bot/{key}/chatfuel` template the model filled with a channel uuid
+  (or shipped with the literal `{key}`), and agent-name slugs landed in
+  /agents/<uuid>/ slots. All correct strips, but guaranteed to recur.
+- consoleSlots now recognizes /bot/<key>/{chatfuel,manychat} (the
+  bot-platform POST URL lives on the API origin = console host on
+  same-origin deploys) — new 'botkey' slot verified against
+  metadata.bot_key/legacy_client_key, unscoped (the concierge cites
+  visitor-workspace keys). inspect_agent returns the real URL as
+  channels[].post_url for bot kinds so the concierge can quote it.
+- concierge-kb.txt: entry 380 no longer dangles the {key} template ("the
+  key is a per-agent secret you can't guess — link the channel page or
+  quote post_url"), jargon dropped ("ingest endpoint" → plain terms), and
+  the console-link rule now says uuids only, never agent names — call
+  inspect_agent when the id isn't in context. Synced to prod.
 ## 2026-11-05g — Widget-annotation echoes stripped; run-action idempotent
 - '[form shown]'/'[cards shown]'/'[options shown]' are transcript CONTEXT
   markup — the model echoed them into drafts verbatim. stripTranscriptNotes

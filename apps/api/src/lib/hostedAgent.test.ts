@@ -519,6 +519,33 @@ describe('guardReplyLinks', () => {
     expect(r.stripped).toHaveLength(1);
   });
 
+  it('keeps bot-platform POST URLs whose key the resolver verifies', async () => {
+    // The URL a visitor pastes into Chatfuel/ManyChat lives on the API origin
+    // — the console host on same-origin deploys. A real key is a working URL.
+    const exists = vi.fn(async (kind: string) => kind === 'botkey');
+    const r = await guardReplyLinks(
+      'paste https://app.janis.ai/bot/bk_aebdc03e3a36ac9a42642e51d62923a9/chatfuel into a JSON API card',
+      blessed,
+      { exists },
+    );
+    expect(r.stripped).toHaveLength(0);
+    expect(r.text).toContain('/bot/bk_aebdc03e3a36ac9a42642e51d62923a9/chatfuel');
+    expect(exists).toHaveBeenCalledWith('botkey', 'bk_aebdc03e3a36ac9a42642e51d62923a9', undefined);
+  });
+
+  it('strips bot-platform URLs whose key matches no agent — and wrong flavors', async () => {
+    // Prod incident: the concierge filled the {key} slot with a channel uuid —
+    // a plausible-looking id that authorizes nothing.
+    const exists = vi.fn(async () => false);
+    const r = await guardReplyLinks(
+      'use https://app.janis.ai/bot/a5611b77-37fa-4458-b040-ad5bd8b12637/chatfuel and https://app.janis.ai/bot/bk_abc/discord',
+      blessed,
+      { exists },
+    );
+    expect(r.stripped).toHaveLength(2);
+    expect(exists).toHaveBeenCalledWith('botkey', 'a5611b77-37fa-4458-b040-ad5bd8b12637', undefined);
+  });
+
   it('keeps builder links — /agents/new and /agents/new/<id>?step=teach', async () => {
     const exists = vi.fn(async () => true);
     const r = await guardReplyLinks(
