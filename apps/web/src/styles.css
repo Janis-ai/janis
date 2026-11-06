@@ -1974,37 +1974,37 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    collapses to icons and the details panel stacks under the transcript in the
    middle column. The rail stays docked — other pages are unaffected. */
 @media (max-width: 1400px) {
-  .layout.dock-open:has(.conv-layout) .sidebar { width: 60px; }
-  .layout.dock-open:has(.conv-layout) .sidebar .brand, .layout.dock-open:has(.conv-layout) .sidebar a { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
-  .layout.dock-open:has(.conv-layout) .sidebar .brand .brand-wide { display: none; }
-  .layout.dock-open:has(.conv-layout) .sidebar .brand .brand-mark { display: block; margin: 0 auto; }
-  .layout.dock-open:has(.conv-layout) .sidebar a .label, .layout.dock-open:has(.conv-layout) .sidebar .ask-toggle .label { display: none; }
-  .layout.dock-open:has(.conv-layout) .sidebar .user { display: flex; justify-content: center; padding: 12px 0; }
-  .layout.dock-open:has(.conv-layout) .sidebar .user .user-text { display: none; }
-  .layout.dock-open:has(.conv-layout) .sidebar .user .user-ic { display: inline-flex; color: var(--muted); }
-  .layout.dock-open:has(.conv-layout) .sidebar .user .user-ic:hover { color: var(--text); }
-  .layout.dock-open:has(.conv-layout) .sidebar a .icon, .layout.dock-open:has(.conv-layout) .sidebar .ask-toggle .icon { display: inline-flex; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini { width: 60px; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini .brand, .layout.dock-open:has(.conv-layout) .sidebar.mini a { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini .brand .brand-wide { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini .brand .brand-mark { display: block; margin: 0 auto; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini a .label, .layout.dock-open:has(.conv-layout) .sidebar.mini .ask-toggle .label { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini .user { display: flex; justify-content: center; padding: 12px 0; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini .user .user-text { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini .user .user-ic { display: inline-flex; color: var(--muted); }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini .user .user-ic:hover { color: var(--text); }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini a .icon, .layout.dock-open:has(.conv-layout) .sidebar.mini .ask-toggle .icon { display: inline-flex; }
   /* icon rail: no indent — icons centre like every other row; the agent
      label collapses to its bot glyph */
-  .layout.dock-open:has(.conv-layout) .sidebar a.nav-indent { padding-left: 0; }
-  .layout.dock-open:has(.conv-layout) .sidebar .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
-  .layout.dock-open:has(.conv-layout) .sidebar .nav-sec span { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini a.nav-indent { padding-left: 0; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini .nav-sec { padding-left: 0; padding-right: 0; justify-content: center; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini .nav-sec span { display: none; }
   /* the plain-text BUILD/CONFIGURE headers have no icon representation —
      drop them; the agent-name row keeps its Bot glyph */
-  .layout.dock-open:has(.conv-layout) .sidebar .nav-sec:not(:has(svg)) { display: none; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini .nav-sec:not(:has(svg)) { display: none; }
   /* badge overlays the icon's top-right so the icon itself stays centred
      and aligned with the rows below */
-  .layout.dock-open:has(.conv-layout) .sidebar a { position: relative; }
-  .layout.dock-open:has(.conv-layout) .sidebar a .nav-badge {
+  .layout.dock-open:has(.conv-layout) .sidebar.mini a { position: relative; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini a .nav-badge {
     position: absolute; top: 1px; left: 50%; margin: 0 0 0 7px;
     font-size: 9px; line-height: 13px; min-width: 13px; padding: 0 3px;
     border-radius: 8px;
   }
   /* step marks badge the icon when the label is gone */
-  .layout.dock-open:has(.conv-layout) .sidebar a .step-mark {
+  .layout.dock-open:has(.conv-layout) .sidebar.mini a .step-mark {
     position: absolute; top: 2px; left: 50%; margin: 0 0 0 6px; font-size: 10px;
   }
-  .layout.dock-open:has(.conv-layout) .sidebar .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
+  .layout.dock-open:has(.conv-layout) .sidebar.mini .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
   /* Dock-open squeeze: the rail yields to the drawer only when the fit
      cascade says so (.rail-tight) — while it fits it stays docked
      beside the transcript like normal. */

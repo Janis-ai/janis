@@ -579,7 +579,12 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         // details drawers. Only below that total minimum does the
         // margin shrink and the dock overlay instead.
         const need = (nextList ? 0 : 220) + 420 + 32;
-        const before = layout.clientWidth + (parseFloat(getComputedStyle(main).marginRight) || 0);
+        // Available room for .main = the root row minus the nav — never
+        // derive it from convl+margin or the margin feeds back into
+        // itself and drags oscillate.
+        const rootEl = layout.closest<HTMLElement>('.layout');
+        const sbEl = document.querySelector<HTMLElement>('.sidebar');
+        const before = (rootEl?.clientWidth ?? 0) - (sbEl?.clientWidth ?? 0);
         main.style.marginRight = `${Math.min(
           Math.round(dockEl.getBoundingClientRect().width),
           Math.max(0, before - need),
