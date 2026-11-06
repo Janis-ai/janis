@@ -381,15 +381,15 @@ is a day on launch)*
     from apps/web/public. Done: tenant associated to PC account,
     janis.ai DNS-verified in the tenant (new CLOUDFLARE_API_TOKEN in
     dev .env — the old cfat one was revoked), publisher domain
-    www.janis.ai set. BLOCKED on Microsoft: portal "Verify and save"
-    + Graph setVerifiedPublisher both error ("temporary problem" /
-    body-not-parsed — known backend bug); retry pane periodically,
-    Partner Center support ticket if still failing 2026-11-04+.
-    Remaining audits: confirm both https://www.janis.ai/outlook/callback
-    and https://app.janis.ai/outlook/callback in the new app's
-    Authentication blade (Overview showed 3 web URIs), and re-consent
-    each connected mailbox once — old-app refresh tokens are dead,
-    channels re-link by email_address on reconnect.
+    www.janis.ai set. DONE 2026-11-06 (per Mike) — publisher
+    verification cleared after a Partner Center support ticket (portal
+    "Verify and save" + Graph setVerifiedPublisher had been erroring
+    "temporary problem" / body-not-parsed since 11-03). Follow-up
+    audits also closed: both https://www.janis.ai/outlook/callback and
+    https://app.janis.ai/outlook/callback confirmed in the new app's
+    Authentication blade, and connected mailboxes re-consented once —
+    old-app refresh tokens were dead, channels re-linked by
+    email_address on reconnect.
 13. DONE (per Mike 2026-10-29) — LLM pro accounts funded/raised-tier for
     platform-hosted inference. Re-up mechanism = ops alert, not auto-
     reload: first time a workspace pins an agent to a non-default vendor,
