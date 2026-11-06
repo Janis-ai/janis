@@ -155,6 +155,12 @@ function argObjectArray(v: unknown): unknown[] | undefined {
   return Array.isArray(v) ? v : undefined;
 }
 
+/** The model spells "no binding" as {"name":"none"} often enough that
+ *  erroring on it just burns a retry — treat the sentinel names as absent. */
+function toolBindingOrNull(v: WidgetToolBinding | null): WidgetToolBinding | null {
+  return v && !['none', 'null', 'n/a'].includes(v.name.trim().toLowerCase()) ? v : null;
+}
+
 /** Resolve which of the visitor's workspaces a concierge tool should act on.
  * Order: explicit `workspace` name hint → the workspace they're currently
  * viewing (the context pack's current_workspace trait) → their only
@@ -3248,7 +3254,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if (toolParsed.success === false) {
         return JSON.stringify({ error: `invalid tool binding — ${toolParsed.error.issues[0]?.message}` });
       }
-      const toolBind = toolParsed.success ? toolParsed.data : null;
+      const toolBind = toolBindingOrNull(toolParsed.data);
       if (toolBind) {
         const def = toolsFor(agent).find((t) => t.name === toolBind.name);
         if (!def) return JSON.stringify({ error: `no tool named "${toolBind.name}" on ${agent.name}` });
@@ -3340,7 +3346,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const statesParsed = z.array(WidgetState).max(12).safeParse(argObjectArray(args.states));
       const states = statesParsed.success ? statesParsed.data : null;
       const toolParsed = WidgetToolBinding.nullable().safeParse(argObjectOrNull(args.tool));
-      const tool = toolParsed.success ? toolParsed.data : null;
+      const tool = toolParsed.success ? toolBindingOrNull(toolParsed.data) : null;
       if (tool) {
         // Re-verify at decide time — the bound tool must still exist and be
         // a plain read on the target agent.

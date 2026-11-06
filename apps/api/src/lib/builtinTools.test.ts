@@ -1494,6 +1494,42 @@ describe('save_widget builtin', () => {
     const [w] = await db.select().from(agentWidgets).where(eq(agentWidgets.name, 'hours'));
     expect(w.autoGreet).toBe(true);
   });
+
+  it('tool {"name":"none"} means no binding — parks the card, apply stores null tool', async () => {
+    // Regression (prod 2026-11-06): the model passed tool {"name":"none"}
+    // which failed as a real binding ("no tool named none") — the run
+    // flashed 'tool failed: save_widget' before the retry without it ran.
+    const out = await save().run(
+      {
+        workspace: 'free',
+        agent: 'bot2',
+        name: 'no-binding',
+        spec: '{"type":"options","title":"Pick","items":[{"label":"A"}]}',
+        tool: '{"name":"none"}',
+      },
+      cctx(CONV2),
+    );
+    expect(out).toContain('action_card');
+    const pa = (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_save_widget' && p.status === 'pending');
+    expect(pa).toBeTruthy();
+    expect((pa!.args as { tool?: unknown }).tool).toBeUndefined();
+    const applied = JSON.parse(
+      await applyW().run(pa!.args as Record<string, unknown>, {
+        db,
+        convId: CONV2,
+        workspaceId: WS,
+      }),
+    );
+    expect(applied.ok).toBe(true);
+    const [w] = await db.select().from(agentWidgets).where(eq(agentWidgets.name, 'no-binding'));
+    expect(w.tool).toBeNull();
+  });
 });
 
 describe('teach_from_conversation + assign_conversation builtins', () => {
