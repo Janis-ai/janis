@@ -185,15 +185,15 @@ export async function sendPushToEndpoint(
   }
 }
 
-/** Transactional email via Resend — no-op until RESEND_API_KEY is configured. */
+/** Transactional email via Resend — no-op (false) until RESEND_API_KEY is configured. */
 export async function sendEmail(
   to: string[],
   title: string,
   body: string,
   url?: string,
   opts?: { attachments?: { filename: string; content: string }[] },
-) {
-  if (!env.resendApiKey || to.length === 0) return;
+): Promise<boolean> {
+  if (!env.resendApiKey || to.length === 0) return false;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
@@ -215,7 +215,11 @@ export async function sendEmail(
     }),
     signal: AbortSignal.timeout(10_000),
   });
-  if (!res.ok) console.error('email send failed:', res.status, await res.text().catch(() => ''));
+  if (!res.ok) {
+    console.error('email send failed:', res.status, await res.text().catch(() => ''));
+    return false;
+  }
+  return true;
 }
 
 export interface ResolvedRecipients {

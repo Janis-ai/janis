@@ -3586,6 +3586,29 @@ describe('email code verification — guest earns verified identity', () => {
     }
   });
 
+  it('reports an error instead of claiming sent when every sender rejects', async () => {
+    const origFetch = globalThis.fetch;
+    const key = env.resendApiKey;
+    env.resendApiKey = 're_test';
+    globalThis.fetch = (async (url: unknown, init?: RequestInit) => {
+      if (String(url).includes('api.resend.com/emails')) {
+        return new Response('{"name":"validation_error"}', { status: 422 });
+      }
+      return origFetch(url as never, init);
+    }) as typeof fetch;
+    try {
+      const a = await mkAgent('vc-fail');
+      const conv = await mkConv(a.id, 'webchat:vcfail');
+      const ctx = { db, convId: conv.id, workspaceId: wsId };
+      const out = await sendVerificationEmail(ctx, { email: 'nope@x.co' });
+      expect(out).toMatch(/^error:/);
+      expect(out).not.toContain('a 6-digit verification code was emailed');
+    } finally {
+      globalThis.fetch = origFetch;
+      env.resendApiKey = key;
+    }
+  });
+
   it('sends the code from the agent\'s email channel — branded name + reply address', async () => {
     const r = stubResend();
     try {

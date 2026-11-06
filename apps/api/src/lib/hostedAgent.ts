@@ -3136,7 +3136,11 @@ async function verificationSender(ctx: AgentRunContext): Promise<VerifySender | 
  *  mailbox. Falls back to the global notify sender when nothing is
  *  configured or the send fails — delivery beats branding (a code that
  *  never arrives verifies nobody). */
-async function sendVerificationMail(ctx: AgentRunContext, email: string, code: string) {
+async function sendVerificationMail(
+  ctx: AgentRunContext,
+  email: string,
+  code: string,
+): Promise<boolean> {
   const subject = 'Your verification code';
   const text = `Your verification code is ${code} — enter it in the chat to continue. It expires in 10 minutes. If you did not request it, you can ignore this email.`;
   try {
@@ -3158,7 +3162,7 @@ async function sendVerificationMail(ctx: AgentRunContext, email: string, code: s
         }),
         signal: AbortSignal.timeout(15_000),
       });
-      if (res.ok) return;
+      if (res.ok) return true;
       console.error(
         'verification email via agent domain failed:',
         res.status,
@@ -3178,7 +3182,7 @@ async function sendVerificationMail(ctx: AgentRunContext, email: string, code: s
           subject,
           text,
         });
-        return;
+        return true;
       }
       if (channel.kind === 'outlook') {
         const { ensureMsToken, sendMail } = await import('./outlook.js');
@@ -3190,7 +3194,7 @@ async function sendVerificationMail(ctx: AgentRunContext, email: string, code: s
           subject,
           text,
         });
-        return;
+        return true;
       }
       // kind === 'email' (Resend): a from_address on a verified custom
       // domain stays the From; otherwise the channel's own reply address
@@ -3219,7 +3223,7 @@ async function sendVerificationMail(ctx: AgentRunContext, email: string, code: s
           }),
           signal: AbortSignal.timeout(15_000),
         });
-        if (res.ok) return;
+        if (res.ok) return true;
         console.error(
           'verification email via channel failed:',
           res.status,
@@ -3230,7 +3234,12 @@ async function sendVerificationMail(ctx: AgentRunContext, email: string, code: s
   } catch (e) {
     console.error('verification email channel send failed — falling back to default sender:', e);
   }
-  await sendEmail([email], subject, text);
+  try {
+    return await sendEmail([email], subject, text);
+  } catch (e) {
+    console.error('verification email fallback send failed:', e);
+    return false;
+  }
 }
 
 /**
@@ -3297,7 +3306,10 @@ export async function sendVerificationEmail(
       userProfile: sql`coalesce(${conversations.userProfile}, '{}'::jsonb) || jsonb_build_object('pending_verification', ${JSON.stringify(pending)}::jsonb)`,
     })
     .where(eq(conversations.id, ctx.convId));
-  await sendVerificationMail(ctx, email, code);
+  const delivered = await sendVerificationMail(ctx, email, code);
+  if (!delivered) {
+    return 'error: verification email could not be sent — every configured sender rejected or was unreachable; offer a human instead';
+  }
   return `sent — a 6-digit verification code was emailed to ${email}. Ask the customer for the code, then call check_verification_code with it. If it doesn't arrive, suggest checking spam before resending.`;
 }
 
