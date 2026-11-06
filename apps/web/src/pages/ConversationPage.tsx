@@ -629,6 +629,16 @@ export default function ConversationPage() {
   // Sent the draft's text but undecided proposed actions remain — the card
   // stays open showing just the actions until they're all decided.
   const [draftSent, setDraftSent] = useState(false);
+  // Regenerating: the hosted path returns before the LLM finishes, so
+  // isPending clears early and the STALE draft reappears until the fresh
+  // row lands via refetch. Track the row being replaced — while it still
+  // tops the list the card stays on Thinking.
+  const [replacedSid, setReplacedSid] = useState<string | null>(null);
+  useEffect(() => {
+    if (!replacedSid) return;
+    const t = setTimeout(() => setReplacedSid(null), 30_000);
+    return () => clearTimeout(t);
+  }, [replacedSid]);
   // Conversation switch — the page stays mounted, so every piece of
   // per-thread state must reset or a pending send/draft from the previous
   // conversation appears inside this one (a draft bubble that looks sent
@@ -692,6 +702,7 @@ export default function ConversationPage() {
     setSuggestOpen(true);
     setDraftSent(false);
     setActionResults({});
+    setReplacedSid(null);
     suggest.mutate();
   };
 
@@ -805,6 +816,12 @@ export default function ConversationPage() {
 
   // Inline approve (default) or park-for-teammate (park:true) on a gated
   // action the suggestion proposed.
+  /** First sentence of a tool result — the rest is model-facing
+   *  instruction ("then call check_verification_code…"), not an outcome
+   *  the operator needs to read. */
+  const actionResultLine = (r?: string | null) =>
+    (r ?? 'done').split(/(?<=\.)\s|\n/)[0].slice(0, 140);
+
   const runAction = useMutation({
     mutationFn: ({ name, args, park }: { name: string; args: Record<string, unknown>; park?: boolean }) =>
       api<{ parked?: boolean; action?: { status: string; result?: string | null } }>(
@@ -1937,7 +1954,8 @@ export default function ConversationPage() {
 
         {canSuggest && (suggestOpen || suggestions?.length > 0) && (
           <div className="card suggestion draft">
-            {suggest.isPending ? (
+            {suggest.isPending ||
+            (replacedSid !== null && suggestions?.[0]?.id === replacedSid) ? (
               <div className="muted">Thinking…</div>
             ) : suggestions?.length > 0 ? (
               <>
@@ -2014,7 +2032,7 @@ export default function ConversationPage() {
                                   onSuccess: (r) => {
                                     setActionResults((p) => ({
                                       ...p,
-                                      [ai]: `ran — ${(r.action?.result ?? 'done').slice(0, 140)}`,
+                                      [ai]: `ran — ${actionResultLine(r.action?.result)}`,
                                     }));
                                     setEditAction(null);
                                   },
@@ -2043,7 +2061,7 @@ export default function ConversationPage() {
                                   onSuccess: (r) =>
                                     setActionResults((p) => ({
                                       ...p,
-                                      [ai]: `ran — ${(r.action?.result ?? 'done').slice(0, 140)}`,
+                                      [ai]: `ran — ${actionResultLine(r.action?.result)}`,
                                     })),
                                 },
                               )
@@ -2148,7 +2166,12 @@ export default function ConversationPage() {
                 title="Try another suggestion"
                 aria-label="Try another suggestion"
                 disabled={suggest.isPending}
-                onClick={() => { setDraftSent(false); setActionResults({}); suggest.mutate(); }}
+                onClick={() => {
+                  setReplacedSid(suggestions?.[0]?.id ?? null);
+                  setDraftSent(false);
+                  setActionResults({});
+                  suggest.mutate();
+                }}
               >
                 <RefreshCw size={13} />
               </button>

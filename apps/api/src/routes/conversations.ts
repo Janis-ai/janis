@@ -791,9 +791,10 @@ export function conversationRoutes(db: Db) {
       return c.json({ parked: true }, 201);
     }
 
-    // Idempotent — an identical action already recorded decides once. A
-    // repeat click returns the existing decision instead of double-firing
-    // the side effect or 409ing on 'not-pending'.
+    // Idempotent only while in-flight — a repeat click on the same pending
+    // action decides THAT row instead of stacking a duplicate. A decided
+    // twin is history, not a block: approving again re-runs on a fresh row
+    // (the tool itself no-ops true duplicates like 'already sent').
     const [existing] = await db
       .select()
       .from(pendingActions)
@@ -801,17 +802,12 @@ export function conversationRoutes(db: Db) {
         and(
           eq(pendingActions.conversationId, convRow.id),
           eq(pendingActions.toolName, body.name),
+          eq(pendingActions.status, 'pending'),
           sql`${pendingActions.args} = ${JSON.stringify(body.args)}::jsonb`,
         ),
       )
       .limit(1);
     if (existing) {
-      if (existing.status !== 'pending') {
-        return c.json({
-          action: { id: existing.id, status: existing.status, result: existing.result },
-          deduped: true,
-        });
-      }
       const decided = await decidePendingAction(db, existing.id, { id: user.id, name: user.name }, true);
       if (decided === 'not-pending' || !decided) {
         return c.json({ error: 'action could not be decided' }, 409);

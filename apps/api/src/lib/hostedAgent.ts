@@ -5425,7 +5425,13 @@ export async function runHostedEvent(
       // WIDGET: markup in the draft parses into payload.widgets — without
       // this it renders to the operator as raw spec text.
       const { text: noWidgets, widgets } = extractWidgets(noButtons);
-      return { text: unwrapInlineLists(noWidgets) || undefined, buttons, widgets };
+      // Unparseable leftovers (truncated JSON, malformed refs) are still
+      // directive markup — never show them as draft text either.
+      const text = noWidgets
+        .split('\n')
+        .filter((l) => !/^\s*WIDGET(?:_REF)?:/i.test(l))
+        .join('\n');
+      return { text: unwrapInlineLists(text) || undefined, buttons, widgets };
     };
     let { text: draft, buttons, widgets } = stripLabel(result?.text);
     if (draft && CONTROL_TAG.test(draft)) draft = undefined;
@@ -5678,10 +5684,16 @@ const CONTROL_TAGS = new RegExp(CONTROL_TAG.source, 'gi');
 const TRANSCRIPT_NOTE =
   /\s*(?:\((?:an action was submitted for (?:teammate\s+|your\s+)?approval|a proposal card was shown[^)]*)\)|\[(?:cards|options|form) shown[^\]]*\])\s*/gi;
 
+// Tool results teach the model next steps ("then call check_verification_code
+// with it") — when the model parrots a result as its reply, that instruction
+// text reaches the customer verbatim. Sentences naming an underscore-style
+// tool call are machinery, never message.
+const TOOL_INSTRUCTION = /[^.!?\n]*\bcall\s+(?:the\s+)?[a-zA-Z]*_[a-zA-Z_]+[^.!?\n]*[.!?]?/g;
+
 export function stripTranscriptNotes(text: string): string {
   // A matched annotation takes its surrounding whitespace with it — replace
   // with a single space so sentences on either side don't join, then trim.
-  return text.replace(TRANSCRIPT_NOTE, ' ').trim();
+  return text.replace(TRANSCRIPT_NOTE, ' ').replace(TOOL_INSTRUCTION, '').replace(/\s{2,}/g, ' ').trim();
 }
 
 /** Split a control token out of the model's reply — null when absent. */
