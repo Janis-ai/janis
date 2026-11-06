@@ -2185,7 +2185,7 @@ details summary:hover { color: var(--text); }
      (strip or open panel) is there to open copilot. */
   .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: none; }
   .layout.dock-available .cmh-copilot, .layout.dock-open .cmh-copilot { display: none; }
-  .layout:not(.dock-open) .conv-layout:not(.rail-tight):not(.rail-closed) .conv-mobile-head .cmh-collapse { display: inline-flex; }
+  .conv-layout:not(.rail-tight):not(.rail-closed) .conv-mobile-head .cmh-collapse { display: inline-flex; }
   /* The conv head overhangs conv-main by the rail's width — the search
      field spans the details rail so the ⓘ/collapse slot lands at the
      window's right edge whether the rail is open or hidden. Rail
