@@ -127,7 +127,8 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
 @media (max-width: 720px) { .conv-col-grip { display: none; } }
 .conv-layout.list-tight .conv-col-grip { display: none; }
 @container convl (max-width: 680px) { .conv-rail-grip { display: none; } }
-@media (max-width: 1400px) { .layout.dock-open .conv-layout.rail-tight .conv-rail-grip { display: none; } }
+@media (max-width: 1400px) { .layout.dock-open .conv-layout.rail-tight { overflow-x: visible; }
+.conv-layout.rail-tight .conv-rail-grip { display: none; } }
 /* Mobile: the sidebar is an overlay drawer, so collapse is meaningless —
    hide the toggle and show a plain × close in its place. Desktop hides
    the ×. */
@@ -1796,7 +1797,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 @container convl (max-width: 680px) {
   .conv-side:not(.open) { display: none; }
   .conv-side {
-    position: absolute; top: 0; right: 0; bottom: 0; z-index: 75;
+    position: absolute; top: 0; right: calc(-1 * var(--lay-r, 0px)); bottom: 0; z-index: 75;
     width: min(88vw, 340px);
     padding-left: 12px;
     padding-top: 0;
@@ -1814,7 +1815,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   }
   .conv-side-scrim {
     display: block;
-    position: fixed; inset: 0; z-index: 72; border: 0; padding: 0;
+    position: fixed; z-index: 72; border: 0; padding: 0;
+    top: 0; bottom: 0;
+    left: calc(-1 * var(--lay-l, 0px)); right: calc(-1 * var(--lay-r, 0px));
     background: rgba(8,10,14,.45); cursor: default;
   }
   .conv-side-head { display: flex; justify-content: flex-end; align-items: center; height: 43px; padding: 6px 0; order: -2; }
@@ -1825,6 +1828,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    when col + 420 conv floor + rail genuinely don't fit, at whatever
    container width that happens to be (dragged panels move the line).
    The column itself shrinks before the transcript's floor does. */
+.conv-layout.rail-tight { overflow-x: visible; }
 .conv-layout.rail-tight .conv-rail-grip { display: none; }
 .conv-layout.rail-tight .conv-inbox { max-width: calc(100% - 436px); }
 /* list-tight — the inbox is the second-to-last victim of the fit
@@ -1832,7 +1836,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    nav-rail + conv + details as the narrow desktop arrangement. */
 .conv-layout.list-tight .conv-inbox { display: none; }
 .conv-layout.rail-tight .conv-side {
-  position: absolute; top: 0; right: 0; bottom: 0; z-index: 75;
+  position: absolute; top: 0; right: calc(-1 * var(--lay-r, 0px)); bottom: 0; z-index: 75;
   width: min(88vw, 340px);
   padding-left: 12px;
   padding-top: 0;
@@ -1848,7 +1852,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   box-shadow: -12px 0 32px rgba(0,0,0,.4);
 }
 .conv-layout.rail-tight .conv-side-scrim {
-  display: block; position: fixed; inset: 0; z-index: 72; border: 0; padding: 0;
+  display: block; position: fixed; z-index: 72; border: 0; padding: 0;
+  top: 0; bottom: 0;
+  left: calc(-1 * var(--lay-l, 0px)); right: calc(-1 * var(--lay-r, 0px));
   background: rgba(8,10,14,.45); cursor: default;
 }
 .conv-layout.rail-tight .conv-side-head { display: flex; justify-content: flex-end; align-items: center; height: 43px; padding: 6px 0; order: -2; }
@@ -2020,7 +2026,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
      beside the transcript like normal. */
   .layout.dock-open .conv-layout.rail-tight .conv-side:not(.open) { display: none; }
   .layout.dock-open .conv-layout.rail-tight .conv-side {
-    position: absolute; top: 0; right: 0; bottom: 0; z-index: 75;
+    position: absolute; top: 0; right: calc(-1 * var(--lay-r, 0px)); bottom: 0; z-index: 75;
     width: min(340px, 88vw);
     padding-left: 12px;
     padding-top: 0;
@@ -2029,7 +2035,8 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
     overflow-y: auto;
   }
   .layout.dock-open .conv-layout.rail-tight .conv-side.open { transform: none; box-shadow: -12px 0 32px rgba(0,0,0,.4); }
-  .layout.dock-open .conv-layout.rail-tight .conv-side-scrim { display: block; position: fixed; inset: 0; z-index: 72; border: 0; padding: 0; background: rgba(8,10,14,.45); cursor: default; }
+  .layout.dock-open .conv-layout.rail-tight { overflow-x: visible; }
+  .layout.dock-open .conv-layout.rail-tight .conv-side-scrim { display: block; position: fixed; z-index: 72; border: 0; padding: 0; top: 0; bottom: 0; left: calc(-1 * var(--lay-l, 0px)); right: calc(-1 * var(--lay-r, 0px)); background: rgba(8,10,14,.45); cursor: default; }
   .layout.dock-open .conv-layout.rail-tight .conv-side-head { display: flex; justify-content: flex-end; align-items: center; height: 43px; padding: 6px 0; }
   .layout.dock-open .conv-layout.rail-tight .conv-side-head .cmh-collapse { display: inline-flex; }
   .layout.dock-open .conv-actions .copilot-btn { display: inline-flex; }

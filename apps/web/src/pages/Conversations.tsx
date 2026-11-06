@@ -607,6 +607,12 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         listTight = nextList;
         layout.classList.toggle('list-tight', listTight);
       }
+      // How far the layout's edges sit from the window's — the drawer
+      // and scrim overhang by these so the dock strip's reserved 48px
+      // (and anything left of the layout) doesn't leave a bright gap.
+      const layR = layout.getBoundingClientRect();
+      layout.style.setProperty('--lay-l', `${Math.round(layR.left)}px`);
+      layout.style.setProperty('--lay-r', `${Math.max(0, Math.round(window.innerWidth - layR.right))}px`);
       const dockEl = document.querySelector<HTMLElement>('.dock');
       if (main && dockEl && dockOpen) {
         // The dock claims its full width and the cascade absorbs it:
