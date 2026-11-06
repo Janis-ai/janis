@@ -473,8 +473,13 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   // filters, scroll, selection and every row's DOM survive the switch.
   const outlet = useOutlet();
   const location = useLocation();
-  const openConvId = location.pathname.startsWith(`${inboxBase}/`)
-    ? location.pathname.slice(inboxBase.length + 1).split('/')[0]
+  // The open-conversation id comes from the ROUTE this component serves —
+  // scopeAgent pins /agents/:id/inbox, no prop means /conversations — never
+  // inboxBase, which follows the persisted context agent and would read a
+  // /conversations/:id deep link as "no conversation open".
+  const routeBase = scopeAgent ? `/agents/${scopeAgent}/inbox` : '/conversations';
+  const openConvId = location.pathname.startsWith(`${routeBase}/`)
+    ? location.pathname.slice(routeBase.length + 1).split('/')[0]
     : null;
   // Split column is user-resizable (drag grip, persists) — inline width
   // only while the class is .conv-inbox so .inbox-col keeps its 100%.

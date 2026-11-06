@@ -93,6 +93,14 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06g — /conversations/:id deep links render split view again
+- Conversations derived openConvId from inboxBase, which follows the
+  PERSISTED context agent (ctxAgent) — with a last-visited agent stored,
+  /conversations/:id computed "no conversation open" and stacked the
+  standalone inbox over a 0-height conv-main (transcript invisible, the
+  280px details column overlapping everything on the left). openConvId
+  now keys off the route the component actually serves (scopeAgent prop),
+  so /conversations/:id splits correctly regardless of context agent.
 ## 2026-11-06f — Operator-sent widgets render in the chat widget
 - buildMsgEl gated renderWidgets on direction 'out', so a form/cards an
   operator sent (Contact Details, etc.) arrived with payload.widgets but
