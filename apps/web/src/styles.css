@@ -2189,7 +2189,7 @@ details summary:hover { color: var(--text); }
     position: relative; z-index: 6;
     width: calc(100% + 16px + var(--railfit, var(--rail-w, 280px)));
   }
-  .conv-layout:not(.rail-tight):not(.rail-closed) .conv-side { padding-top: 52px; }
+  .conv-layout:not(.rail-tight):not(.rail-closed) .conv-side { margin-top: 52px; padding-top: 0; }
 }
 @container convl (max-width: 680px) {
   /* Drawer mode — no rail beside the transcript, the ⓘ earns its spot. */
