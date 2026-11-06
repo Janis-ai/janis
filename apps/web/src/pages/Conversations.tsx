@@ -527,9 +527,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       // in the cascade: the user-hidden rail (.rail-closed) and the
       // dock-open rail, which is already an overlay drawer, both count
       // as absent so they can't be "obscured" or squeeze siblings.
-      const railOut =
-        layout.classList.contains('rail-closed') ||
-        Boolean(layout.closest('.layout')?.classList.contains('dock-open'));
+      const railOut = layout.classList.contains('rail-closed');
       const railW = railOut ? 0 : storedPanelWidth('conv.railw', 280, 240, 560);
       const dragging = document.body.classList.contains('panel-resize');
       // avail = what's left for the two side panels once the conv holds

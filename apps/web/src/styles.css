@@ -127,7 +127,7 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
 @media (max-width: 720px) { .conv-col-grip { display: none; } }
 .conv-layout.list-tight .conv-col-grip { display: none; }
 @container convl (max-width: 680px) { .conv-rail-grip { display: none; } }
-@media (max-width: 1400px) { .layout.dock-open .conv-rail-grip { display: none; } }
+@media (max-width: 1400px) { .layout.dock-open .conv-layout.rail-tight .conv-rail-grip { display: none; } }
 /* Mobile: the sidebar is an overlay drawer, so collapse is meaningless —
    hide the toggle and show a plain × close in its place. Desktop hides
    the ×. */
@@ -1853,9 +1853,10 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-layout.rail-closed .conv-side { display: none; }
 .conv-layout.rail-closed .conv-rail-grip { display: none; }
 .conv-layout.rail-closed .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: inline-flex; }
-/* Copilot dock open — the details rail is an overlay drawer, so its
-   trigger stays reachable or the rail vanishes with no way back. */
-.layout.dock-open .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: inline-flex; }
+/* Copilot dock open — under the drawer the ⓘ stays reachable (the
+   rail-tight reveal above already covers it whenever the cascade
+   drawers the rail). */
+.layout.dock-open .conv-layout.rail-tight .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: inline-flex; }
 .conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; container-name: conv; }
 /* Anchored conversation: .main never scrolls — the transcript is the
    only scroller, head stays up top, foot is a static block at the
@@ -2002,18 +2003,19 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
     position: absolute; top: 2px; left: 50%; margin: 0 0 0 6px; font-size: 10px;
   }
   .layout.dock-open:has(.conv-layout) .sidebar .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
-  /* Dock-open squeeze: the rail can't fit beside, so it becomes the ⓘ
-     drawer — never stacked below the transcript where it can't scroll. */
-  .layout.dock-open .conv-side {
+  /* Dock-open squeeze: the rail yields to the drawer only when the fit
+     cascade says so (.rail-tight) — while it fits it stays docked
+     beside the transcript like normal. */
+  .layout.dock-open .conv-layout.rail-tight .conv-side {
     position: absolute; top: 0; right: 0; bottom: 0; z-index: 75;
     width: min(340px, 88vw);
     background: var(--bg); border-left: 1px solid var(--border);
     transform: translateX(105%); transition: transform .18s ease;
     overflow-y: auto;
   }
-  .layout.dock-open .conv-side.open { transform: none; box-shadow: -12px 0 32px rgba(0,0,0,.4); }
-  .layout.dock-open .conv-side-scrim { display: block; position: absolute; inset: 0; z-index: 72; border: 0; padding: 0; background: rgba(8,10,14,.45); cursor: default; }
-  .layout.dock-open .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
+  .layout.dock-open .conv-layout.rail-tight .conv-side.open { transform: none; box-shadow: -12px 0 32px rgba(0,0,0,.4); }
+  .layout.dock-open .conv-layout.rail-tight .conv-side-scrim { display: block; position: absolute; inset: 0; z-index: 72; border: 0; padding: 0; background: rgba(8,10,14,.45); cursor: default; }
+  .layout.dock-open .conv-layout.rail-tight .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
   .layout.dock-open .conv-actions .copilot-btn { display: inline-flex; }
   /* stacked mode: keep the transcript internally scrollable so the composer
      stays adjacent instead of dropping below a page-length of messages */
