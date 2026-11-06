@@ -514,6 +514,11 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   // does; while the user drags a panel wider the order inverts so the
   // rail yields to their asserted width instead. Hysteresis (48px)
   // stops a boundary drag oscillating a mode.
+  // layoutMounted flips on the render AFTER the conv split mounts —
+  // a cold direct-load (agent inbox route) renders the list shell first,
+  // so the effect must re-run once the layout actually exists or the
+  // whole fit cascade stays detached on that route.
+  const layoutMounted = Boolean(colRef.current?.parentElement);
   useEffect(() => {
     const layout = layoutEl();
     if (!layout || !openConvId) return;
@@ -674,7 +679,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       layout.classList.remove('list-tight');
       if (main) main.style.marginRight = '';
     };
-  }, [openConvId]);
+  }, [openConvId, layoutMounted]);
   const listRef = useRef<HTMLDivElement>(null);
   const sentRef = useRef<HTMLDivElement>(null);
   // Route-away → back restores the list scroll (mobile: the inbox is a
