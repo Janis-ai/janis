@@ -93,6 +93,16 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06k — save_widget accepts {"name":"none"} as "no binding"
+- Ask rail flashed "Run error — tool failed: save_widget" mid-run even
+  though the approval card parked and applied fine. Inspector showed the
+  model's first call passed tool {"name":"none"} — it parsed as a real
+  binding and failed the agent-tool lookup ("no tool named none"), and
+  only the retry without it ran. toolBindingOrNull() now maps the
+  none/null/n-a sentinel names to absent at both parse sites (propose +
+  apply). If a run issue is reported but the change clearly landed, pull
+  the reply's payload.inspector.tools — the failed call's args + result
+  are right there.
 ## 2026-11-06j — Stale tabs self-heal after deploys
 - Mike re-reported the 11-06g layout fix "still broken" on prod 12h after
   it deployed — a tab open since before the rollout keeps the OLD bundle
