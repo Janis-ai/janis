@@ -2333,7 +2333,7 @@ export default function ConversationPage() {
           the header's ⓘ — scrim/Esc/X close it. On desktop it's the
           static rail, exactly as before. */}
       <div className="conv-rail-grip" style={{ right: railW - 4 }} {...railGrip} />
-      {sideOpen && (
+      {sideOpen && !sideClosed && (
         <button
           className="conv-side-scrim"
           aria-label="Close details"
