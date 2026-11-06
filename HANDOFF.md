@@ -93,6 +93,14 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06e — Error-alert cooldown claimed atomically
+- A deploy cutover RST'd every pooled Neon connection at once; eight
+  concurrent 500s each read workspaces.config.error_alert_at before any
+  writer landed, so one sub-second blip sent three operator emails.
+  alertOperatorError now claims the slot with a single conditional
+  UPDATE ... RETURNING — only the caller that advances the watermark
+  sends. Transient deploy-churn 500s still record to /errors; they just
+  can't multi-page. b229529e.
 ## 2026-11-06d — Composer component list updates live on concierge saves
 - The conversation composer's component picker used query key
   ['agentWidgets'] while WidgetComposer + the 'agent' SSE invalidation
