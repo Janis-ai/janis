@@ -125,9 +125,10 @@ export function useSticky<T>(key: string, initial: T | (() => T)): [T, (v: T) =>
 }
 
 /** Gmail-style list stamp — clock time today, "Nov 2" this year, "11/2/25" older. */
-// Inbox scroll survives navigation away + back — the list unmounts on
-// mobile (separate route), so a ref can't hold it.
-let savedConvListScroll = 0;
+// Inbox scroll survives navigation away + back by ANY mechanism — UI
+// back, browser back, gesture-swipe back (which can hit bfcache or a
+// full reload). sessionStorage covers all of them; a module var can't.
+const CONV_LIST_SCROLL_KEY = 'conv.list.scroll';
 
 function listTime(iso: string | null): string {
   if (!iso) return '';
@@ -687,13 +688,14 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   // unmount (refs are null by cleanup time, so save on scroll instead);
   // restore waits until the re-rendered rows actually overflow.
   const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
-    savedConvListScroll = e.currentTarget.scrollTop;
+    sessionStorage.setItem(CONV_LIST_SCROLL_KEY, String(e.currentTarget.scrollTop));
   };
   useLayoutEffect(() => {
+    const saved = Number(sessionStorage.getItem(CONV_LIST_SCROLL_KEY) || 0);
     const el = listRef.current;
-    if (savedConvListScroll && el && el.scrollHeight > el.clientHeight) {
-      el.scrollTop = savedConvListScroll;
-      savedConvListScroll = 0;
+    if (saved && el && el.scrollHeight > el.clientHeight) {
+      el.scrollTop = saved;
+      sessionStorage.removeItem(CONV_LIST_SCROLL_KEY);
     }
   });
   // Full mode scrolls the .conv-list; split mode the .conv-inbox column —

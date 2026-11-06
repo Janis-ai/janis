@@ -1071,9 +1071,9 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
    stay flat. Placed before :hover/.sel so both still win; mobile keeps
    rows flat. */
 .conv-row.unread { background: var(--panel); }
-.conv-row:hover { background: var(--panel-2); }
+@media (hover: hover) { .conv-row:hover { background: var(--panel-2); } }
 .conv-row.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); }
-.conv-row.sel:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+@media (hover: hover) { .conv-row.sel:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); } }
 .conv-row .who { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 10px; }
 /* Sender is its own column (Gmail) — chips live in .tags between name and
    preview and clip whole at the column edge, never squeezing the name. */
@@ -1160,7 +1160,7 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
 .row-act:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .row-act select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
 @media (hover: hover) {
-  .conv-row:hover .row-actions { display: inline-flex; }
+  @media (hover: hover) { .conv-row:hover .row-actions { display: inline-flex; } }
 }
 /* Sides pad to the same 24px inset as the head — the pager's › lands on
    the search field's right edge while the row bleeds past it. */
