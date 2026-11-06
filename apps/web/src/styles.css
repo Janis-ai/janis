@@ -1735,7 +1735,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-inbox .conv-row { flex-wrap: wrap; align-items: flex-start; gap: 8px; padding: 8px 12px; }
 .conv-inbox .conv-row .who { flex-wrap: wrap; row-gap: 1px; column-gap: 8px; }
 .conv-inbox .conv-row .who .name { flex: 0 1 auto; max-width: 100%; }
-.conv-inbox .conv-row .who .tags { flex-basis: 100%; order: 2; margin-top: 2px; }
+/* Chips own a line here — let it wrap too, otherwise the same clipping the
+   wide list fixed just moves to the slim column's single chip line. */
+.conv-inbox .conv-row .who .tags { flex-basis: 100%; order: 2; margin-top: 2px; flex-wrap: wrap; }
 .conv-inbox .conv-row .who .preview { flex-basis: 100%; order: 3; }
 /* The hover rail outranks a plain hide — it must lose in the mini column
    where the rail would clip at the column edge. */
@@ -2412,7 +2414,7 @@ details summary:hover { color: var(--text); }
      chips keep their natural pill widths; preview wraps last. */
   .conv-row .who { flex-wrap: wrap; row-gap: 1px; column-gap: 8px; }
   .conv-row .who .name { flex: 0 1 auto; max-width: 100%; }
-  .conv-row .who .tags { flex-basis: 100%; order: 2; margin-top: 2px; }
+  .conv-row .who .tags { flex-basis: 100%; order: 2; margin-top: 2px; flex-wrap: wrap; }
   .conv-row .who .preview { flex-basis: 100%; order: 3; padding-right: 36px; }
   /* Tail is "time [dots]" at top-right — dots hug the stamp (no reserved
      slot) so the group's far edge always lands on the star's edge, and

@@ -113,8 +113,9 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   chips fit while leaving a usable preview; if not, `.tags-wrap` moves
   them to their own full-width line (name + preview keep line 1). Room
   math reads `.who` width — stable across the toggle, so no oscillation.
-  Fitting rows keep single-line density; mobile + split column already
-  stacked and are untouched. f7d3cc92.
+  Fitting rows keep single-line density. Follow-up: the split column +
+  mobile chip lines already owned a line but were still nowrap+clip —
+  both now flex-wrap so every chip renders. f7d3cc92 + follow-up.
 ## 2026-11-05h — Suggest-flow UX hardening round
 - storeSuggestion supersedes pending rows atomically — a refresh could
   race dismiss-all against the fresh insert and the draft vanished.
