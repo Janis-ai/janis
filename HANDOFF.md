@@ -93,6 +93,11 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06f — Operator-sent widgets render in the chat widget
+- buildMsgEl gated renderWidgets on direction 'out', so a form/cards an
+  operator sent (Contact Details, etc.) arrived with payload.widgets but
+  drew as an empty bubble for the visitor. Gate is now direction !== 'in',
+  matching the rest of the client. e6c388b8.
 ## 2026-11-06e — Error-alert cooldown claimed atomically
 - A deploy cutover RST'd every pooled Neon connection at once; eight
   concurrent 500s each read workspaces.config.error_alert_at before any
