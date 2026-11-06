@@ -529,6 +529,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       // as absent so they can't be "obscured" or squeeze siblings.
       const railOut = layout.classList.contains('rail-closed');
       const railW = railOut ? 0 : storedPanelWidth('conv.railw', 280, 240, 560);
+      const dockOpen = Boolean(layout.closest('.layout')?.classList.contains('dock-open'));
       const dragging = document.body.classList.contains('panel-resize');
       // avail = what's left for the two side panels once the conv holds
       // its 420 floor and the inter-pane gaps. Squeeze before hide, in
@@ -548,13 +549,18 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       if (!dragging && avail < colW + railW && avail >= 220 + railW) {
         colFit = avail - railW;
       }
-      const listNeed = dragging ? colW : 220 + railW;
+      // Copilot-open order: the inbox holds at its 220 floor while the
+      // rail yields first — under dock-open its need ignores the rail.
+      const listNeed = dragging ? colW : 220 + (dockOpen ? 0 : railW);
       const railNeed = dragging ? colW + railW : railW;
       // Deadband only matters while a drag can oscillate the measure —
       // resize readings are stable, so release almost immediately.
       const db = dragging ? 48 : 8;
       const nextList = listTight ? avail < listNeed + db : avail < listNeed;
       const nextTight = tight ? avail < railNeed + db : avail < railNeed;
+      // Rail out of flow → its space is the inbox's again — but only what
+      // actually fits: the column can never claim more than avail.
+      if (nextTight || railOut) colFit = Math.min(colW, Math.max(220, avail));
       if (nextTight !== tight) {
         tight = nextTight;
         layout.classList.toggle('rail-tight', tight);
@@ -567,10 +573,12 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         layout.classList.toggle('list-tight', listTight);
       }
       const dockEl = document.querySelector<HTMLElement>('.dock');
-      const dockOpen = Boolean(layout.closest('.layout')?.classList.contains('dock-open'));
       if (main && dockEl && dockOpen) {
-        const need =
-          (nextList ? 0 : colFit) + 420 + 32 + (nextTight || railOut ? 0 : railFit);
+        // The dock claims its full width and the cascade absorbs it:
+        // nav collapse → inbox to 220 → conv to its 420 floor →
+        // details drawers. Only below that total minimum does the
+        // margin shrink and the dock overlay instead.
+        const need = (nextList ? 0 : 220) + 420 + 32;
         const before = layout.clientWidth + (parseFloat(getComputedStyle(main).marginRight) || 0);
         main.style.marginRight = `${Math.min(
           Math.round(dockEl.getBoundingClientRect().width),
