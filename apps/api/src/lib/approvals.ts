@@ -418,12 +418,15 @@ export async function decidePendingAction(
   // deterministic one-liner.
   const p400 = (conv.userProfile ?? {}) as { external_id?: string };
   if (isConciergeAction(action.workspaceId, conv.userProfile) && p400.external_id === decidedBy.id) {
+    // Visitor sees only the outcome sentence — the result tail is
+    // model-facing instruction ("then call check_verification_code…").
+    const outcome = (s: string) => s.split(/(?<=\.)\s|\n/)[0].slice(0, 140);
     const failed = approve && result !== null && result.startsWith('error:');
     const confirm = !approve
       ? 'Dismissed — no changes made.'
       : failed
-        ? `The action failed — ${(cardResult ?? 'unknown error').replace(/^error:\s*/i, '')}`
-        : `Done — ${cardResult ?? 'the change was applied.'}`;
+        ? `The action failed — ${outcome((cardResult ?? 'unknown error').replace(/^error:\s*/i, ''))}`
+        : `Done — ${outcome(cardResult ?? 'the change was applied.')}`;
     const [out] = await db
       .insert(messages)
       .values({ conversationId: conv.id, direction: 'out', text: confirm })
