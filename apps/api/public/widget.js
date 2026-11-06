@@ -1182,7 +1182,7 @@
     }
     if (m.text) appendBlocks(d, m.text);
     (m.attachments || []).forEach(function (a) { addAttachmentNode(d, a); });
-    if (m.direction === 'out' && m.widgets && m.widgets.length) renderWidgets(d, m.widgets);
+    if (m.direction !== 'in' && m.widgets && m.widgets.length) renderWidgets(d, m.widgets);
     return d;
   }
 
