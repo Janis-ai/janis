@@ -1964,8 +1964,12 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    range or specificity). */
 @container convl (min-width: 681px) {
   .conv-side { width: var(--railfit, var(--rail-w, 280px)); }
+}
+@media (min-width: 721px) {
   /* The transcript column never squeezes below its controls' floor —
-     siblings clip/drawer before its buttons wrap away. */
+     siblings clip/drawer before its buttons wrap away. Applies at any
+     split width, not just ≥681 convl: below that the cascade is mid-
+     squeeze and needs the floor most. */
   .conv-main { min-width: 420px; }
 }
 .card.suggestion { border-color: var(--accent); }

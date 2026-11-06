@@ -617,8 +617,18 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       layout.style.setProperty('--railfit', `${railFit}px`);
     };
     measure();
-    const ro = new ResizeObserver(measure);
+    // A trailing settle pass — the RO fires mid-transition and its last
+    // reading can latch a state that no longer fits the settled width.
+    // One debounced re-measure after the dust clears fixes the end
+    // state without flickering through it.
+    let settleTimer = 0;
+    const ro = new ResizeObserver(() => {
+      measure();
+      window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(measure, 80);
+    });
     ro.observe(layout);
+    window.addEventListener('resize', measure);
     window.addEventListener('panel-resize', measure);
     // A drag's last set() fires before pointerup drops .panel-resize —
     // re-measure on release so the not-dragging cascade lands. Next
@@ -628,6 +638,8 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     window.addEventListener('pointerup', onUp);
     return () => {
       ro.disconnect();
+      window.clearTimeout(settleTimer);
+      window.removeEventListener('resize', measure);
       window.removeEventListener('panel-resize', measure);
       window.removeEventListener('pointerup', onUp);
       layout.classList.remove('rail-tight');
