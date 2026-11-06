@@ -552,7 +552,9 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       // Copilot-open order: the inbox holds at its 220 floor while the
       // rail yields first — under dock-open its need ignores the rail.
       const listNeed = dragging ? colW : 220 + (dockOpen ? 0 : railW);
-      const railNeed = dragging ? colW + railW : railW;
+      // Under dock-open the rail only docks when it fits beside the
+      // inbox's floor too — details yields before the list does.
+      const railNeed = dragging ? colW + railW : dockOpen ? 220 + railW : railW;
       // Deadband only matters while a drag can oscillate the measure —
       // resize readings are stable, so release almost immediately.
       const db = dragging ? 48 : 8;
@@ -567,6 +569,18 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         // Wide → narrow always hides the rail — no stale open drawer +
         // scrim can survive the transition.
         if (tight) window.dispatchEvent(new CustomEvent('conv-rail-hide'));
+      }
+      // Geometry is the final word: if the rail's right edge overruns
+      // the layout's edge it's clipped — drawer it regardless of what
+      // the width math said (mid-transition avails lie).
+      if (!tight && !railOut) {
+        const sideEl = layout.querySelector<HTMLElement>('.conv-side');
+        if (sideEl && getComputedStyle(sideEl).display !== 'none' &&
+            sideEl.getBoundingClientRect().right - layout.getBoundingClientRect().right > 1) {
+          tight = true;
+          layout.classList.add('rail-tight');
+          window.dispatchEvent(new CustomEvent('conv-rail-hide'));
+        }
       }
       if (nextList !== listTight) {
         listTight = nextList;
