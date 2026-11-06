@@ -1621,3 +1621,10 @@ Two follow-ups to the suggest/draft work (janis-api-01454-twl + next):
   by the thread's own verified visitor, decidePendingAction posts a
   deterministic Done/failed line because the resumed agent turn can be
   slow or silent — customer-thread decisions still take the resume path.
+- Draft action cards now keep their decision across browser refresh:
+  actionResults was page-local, so a decided card reset to its buttons and
+  a second click re-ran the side effect. Conversation GET hydrates
+  payload.proposed_actions[] with the latest matching pending_actions row
+  (tool name + canonical-args compare — same equality run-action dedupes
+  on); the card renders "ran — …", "declined", or "awaiting teammate
+  approval" instead of resetting.
