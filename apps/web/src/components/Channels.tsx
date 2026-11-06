@@ -265,8 +265,9 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
     },
   });
   const url = data?.urls[ch.kind as 'chatfuel' | 'manychat'];
-  // Bot-platform setup is gated on the Meta link: the Meta webhook is what
-  // gives the agent the whole thread, not just card-forwarded turns.
+  // Meta linking is optional — the Meta webhook gives the agent the whole
+  // thread, not just card-forwarded turns. The ingest URL itself is needed
+  // to configure the bot platform, so the setup steps are never gated on it.
   const metaConnected = Boolean(ch.meta.page_id || ch.meta.ig_page_id || ch.meta.phone_number_id);
   const { data: me } = useMe();
   // A surface bound to a sibling channel in THIS workspace — takeover info
@@ -417,22 +418,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
       ];
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
-      {!metaConnected && (
-        <div className="muted" style={{ marginTop: 10, fontSize: 13, lineHeight: 1.6 }}>
-          <strong style={{ fontSize: 14 }}>Connect Meta first</strong>
-          <div style={{ marginTop: 2 }}>
-            Link the Meta account (Facebook Page, Instagram, or WhatsApp) your{' '}
-            {ch.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} bot runs on. Janis needs
-            Meta's webhook to see the whole conversation — not just the messages the bot
-            forwards — so the agent answers with full context and handovers between the bot
-            and your team work both ways. The{' '}
-            {ch.kind === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} setup steps appear once it's
-            linked.
-          </div>
-        </div>
-      )}
-      {metaConnected && (
-      <div style={{ marginTop: 16, order: 2 }}>
+      <div style={{ marginTop: 16, order: 1 }}>
         <strong style={{ fontSize: 15 }}>
           {ch.kind === 'chatfuel' ? 'Chatfuel setup' : 'ManyChat setup'}
         </strong>
@@ -448,8 +434,7 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
         {ch.kind === 'manychat' && <ManyChatTokenField channel={ch} />}
         {ch.kind === 'chatfuel' ? <ChatfuelGuide /> : <ManyChatGuide />}
       </div>
-      )}
-      <div style={{ marginTop: 20, paddingTop: 8, order: 1 }}>
+      <div style={{ marginTop: 20, paddingTop: 8, order: 2 }}>
         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
           <strong style={{ fontSize: 15 }}>Connect to Meta</strong>
           {metaConnected && (
@@ -484,8 +469,9 @@ function BotIngestDetails({ ch }: { ch: Channel }) {
           </div>
         ) : (
           <div className="muted" style={{ fontSize: 13, marginTop: 2 }}>
-            Pick the Meta account your bot runs on — the setup steps unlock once it&rsquo;s
-            linked.
+            Optional, but recommended — link the Meta account your bot runs on so Janis
+            sees the whole conversation, not just the messages the bot forwards, and
+            handovers between the bot and your team work both ways.
           </div>
         )}
         {(!metaConnected || manageOpen) &&

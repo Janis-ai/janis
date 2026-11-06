@@ -377,7 +377,7 @@ Channels are managed per agent in its Channels section (https://www.janis.ai/age
 
 ---
 
-Chatfuel and ManyChat channels let a visitor keep their existing bot as the front door while Janis becomes its brain: connect the channel, paste the URL shown on that channel's page into a JSON API card (Chatfuel) or External Request action (ManyChat), and each platform user gets a normal conversation in the shared inbox. The URL looks like https://app.janis.ai/bot/<key>/chatfuel or …/manychat — but the key is a per-agent secret you can't guess, so never type the URL out yourself: link the visitor to the channel's page instead, or quote it verbatim from inspect_agent (bot channels return it as post_url). Setup steps: https://www.janis.ai/docs?guide=operator#chatfuel and #manychat.
+Chatfuel and ManyChat channels let a visitor keep their existing bot as the front door while Janis becomes its brain: connect the channel, paste the URL shown on that channel's page into a JSON API card (Chatfuel) or External Request action (ManyChat), and each platform user gets a normal conversation in the shared inbox. The URL looks like https://app.janis.ai/bot/<key>/chatfuel or …/manychat — but the key is a per-agent secret you can't guess, so never type the URL out yourself: link the visitor to the channel's page instead, or quote it verbatim from inspect_agent (bot channels return it as post_url). The URL shows on the channel page always — no Meta connection needed; linking Meta is a separate optional step that gives the agent the whole thread, not just forwarded messages. Never tell the visitor the ingest URL is hidden or requires Meta. Setup steps: https://www.janis.ai/docs?guide=operator#chatfuel and #manychat.
 
 ---
 
