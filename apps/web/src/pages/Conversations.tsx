@@ -520,6 +520,17 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     // not a flat .main minimum. Below that need the margin shrinks
     // and the dock overlays (the at-floor state where covering is OK).
     const main = layout.parentElement;
+    // The conv width the inbox protects before it starts yielding —
+    // comfortable bubble reading width, well above the 420 floor.
+    const CONV_COMFORT = 560;
+    // Trailing settle pass — the RO fires mid-transition and the
+    // geometry override can trip on a mount/transition frame; one
+    // debounced re-measure after the dust clears fixes the end state.
+    let settleTimer = 0;
+    const settle = () => {
+      window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(() => measure(), 80);
+    };
     const measure = () => {
       const w = layout.clientWidth;
       const colW = storedPanelWidth('conv.colw', 290, 220, 480);
@@ -541,14 +552,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       const avail = w - 420 - 32;
       let colFit = colW;
       const railFit = railW;
-      // Inbox absorbs the squeeze down to its 220 floor, then it's gone
-      // entirely — details outranks it and never narrows; once the rail
-      // can't fit at its set width it drawers instead (obscured = drawer,
-      // ⓘ button stays). Below list-floor + rail the list hides while
-      // the rail keeps its width beside the conv.
-      if (!dragging && avail < colW + railW && avail >= 220 + railW) {
-        colFit = avail - railW;
-      }
       // Copilot-open order: the inbox holds at its 220 floor while the
       // rail yields first — under dock-open its need ignores the rail.
       const listNeed = dragging ? colW : 220 + (dockOpen ? 0 : railW);
@@ -560,9 +563,17 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       const db = dragging ? 48 : 8;
       const nextList = listTight ? avail < listNeed + db : avail < listNeed;
       const nextTight = tight ? avail < railNeed + db : avail < railNeed;
-      // Rail out of flow → its space is the inbox's again — but only what
-      // actually fits: the column can never claim more than avail.
-      if (nextTight || railOut) colFit = Math.min(colW, Math.max(220, avail));
+      // Shrink order on resize: the INBOX yields first. The conv column
+      // is flex:1 so left alone it would absorb every pixel of shrink
+      // while the inbox sat at its set width — backwards. Instead the
+      // conv holds a comfortable reading width and the inbox gives up
+      // slack toward its 220 floor; only once the inbox is at its floor
+      // does the conv narrow toward 420; then the inbox hides; the rail
+      // (never narrows) drawers last. Rail out of flow → its space is
+      // the inbox's. A drag asserts widths and bypasses the squeeze.
+      const railInFlow = nextTight || railOut ? 0 : railW;
+      if (!dragging) colFit = Math.min(colW, Math.max(220, w - CONV_COMFORT - 32 - railInFlow));
+      else if (nextTight || railOut) colFit = Math.min(colW, Math.max(220, avail));
       if (nextTight !== tight) {
         tight = nextTight;
         layout.classList.toggle('rail-tight', tight);
@@ -580,6 +591,10 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           tight = true;
           layout.classList.add('rail-tight');
           window.dispatchEvent(new CustomEvent('conv-rail-hide'));
+          // Transient frames (mount, nav animating) can overrun for a
+          // tick with room to spare — re-check once things settle so
+          // a one-frame clip can't latch the rail hidden.
+          settle();
         }
       }
       if (nextList !== listTight) {
@@ -617,16 +632,8 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       layout.style.setProperty('--railfit', `${railFit}px`);
     };
     measure();
-    // A trailing settle pass — the RO fires mid-transition and its last
-    // reading can latch a state that no longer fits the settled width.
-    // One debounced re-measure after the dust clears fixes the end
-    // state without flickering through it.
-    let settleTimer = 0;
-    const ro = new ResizeObserver(() => {
-      measure();
-      window.clearTimeout(settleTimer);
-      settleTimer = window.setTimeout(measure, 80);
-    });
+    settle();
+    const ro = new ResizeObserver(() => { measure(); settle(); });
     ro.observe(layout);
     window.addEventListener('resize', measure);
     window.addEventListener('panel-resize', measure);
