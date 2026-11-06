@@ -29,7 +29,7 @@ if ('serviceWorker' in navigator) {
   });
   window.addEventListener('load', () => {
     navigator.serviceWorker
-      .register('/sw.js', { scope: '/' })
+      .register('/sw.js', { scope: '/', updateViaCache: 'none' })
       .then((reg) => {
         // register() only checks for a new sw.js on page load — a tab left
         // open for days runs the stale bundle forever (and re-reports bugs
