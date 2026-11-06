@@ -135,9 +135,10 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
 .nav-close { display: none; }
 @media (max-width: 720px) { .nav-collapse { display: none; } .nav-close { display: inline-flex; } }
 /* Manual collapse — the same 60px icon rail the conv-open/dock-open
-   squeezes use (kept in lockstep), at every desktop width. */
-@media (min-width: 721px) {
-  .sidebar.mini { width: 60px; }
+   squeezes use (kept in lockstep), at every width. It must apply at
+   ≤720 too: the closed rail slides off AS a rail — without these rules
+   it paints clipped full labels mid-slide (the uncollapse flash). */
+.sidebar.mini { width: 60px; }
   .sidebar.mini a, .sidebar.mini .ask-toggle { padding-left: 0; padding-right: 0; text-align: center; justify-content: center; }
   /* No logo in the icon rail — the top row is just the expand button. */
   .sidebar.mini .brand { display: none; }
@@ -164,7 +165,6 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
   .sidebar.mini .ctx-btn { padding: 6px; justify-content: center; }
   .sidebar.mini .ctx-stack, .sidebar.mini .ctx-btn .icon { display: none; }
   .sidebar.mini .ctx-switch { margin: 0 8px 6px; }
-}
 .sidebar .brand { font-size: 20px; font-weight: 700; padding: 0 20px 16px; color: var(--accent); }
 .sidebar .brand .brand-wide { height: 26px; display: block; }
 .sidebar .brand .brand-mark { display: none; height: 24px; }
@@ -2279,6 +2279,23 @@ details summary:hover { color: var(--text); }
      for its last frame on screen (uncollapse-then-hide). */
   .sidebar.mini { width: 60px; overflow: hidden; }
   .layout.nav-open .sidebar.mini { width: min(300px, 85vw); }
+  /* The drawer always shows the full nav even over a mini state —
+     restore every property the rail styling above hides/crops. */
+  .layout.nav-open .sidebar.mini a,
+  .layout.nav-open .sidebar.mini .ask-toggle { padding: 9px 20px; text-align: left; justify-content: flex-start; }
+  .layout.nav-open .sidebar.mini .brand { display: block; }
+  .layout.nav-open .sidebar.mini .sidebar-top { justify-content: space-between; padding-right: 10px; }
+  .layout.nav-open .sidebar.mini a .label, .layout.nav-open .sidebar.mini .ask-toggle .label { display: inline; }
+  .layout.nav-open .sidebar.mini .user { display: block; padding: 12px 20px; }
+  .layout.nav-open .sidebar.mini .user .user-text { display: block; }
+  .layout.nav-open .sidebar.mini .user .user-ic { display: none; }
+  .layout.nav-open .sidebar.mini a.nav-indent { padding-left: 40px; }
+  .layout.nav-open .sidebar.mini .nav-sec { display: flex; }
+  .layout.nav-open .sidebar.mini a .nav-badge { position: static; margin-left: 6px; font-size: 11px; line-height: normal; min-width: 18px; padding: 1px 7px; border-radius: 10px; }
+  .layout.nav-open .sidebar.mini a .step-mark { position: static; margin-left: auto; font-size: 11px; }
+  .layout.nav-open .sidebar.mini .ctx-btn { padding: 6px 8px; justify-content: flex-start; }
+  .layout.nav-open .sidebar.mini .ctx-stack { display: flex; }
+  .layout.nav-open .sidebar.mini .ctx-btn .icon { display: inline; }
   .nav-scrim {
     position: fixed; inset: 0; z-index: 65; border: 0; padding: 0;
     background: rgba(8,10,14,.45); cursor: default;
