@@ -90,8 +90,13 @@ html:has(.layout), body:has(.layout) { overflow: hidden; overscroll-behavior: no
   display: flex; flex-direction: column; overflow-y: auto;
   transition: width .18s ease;
 }
-/* Brand + collapse toggle share the sidebar's top row. */
-.sidebar-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 4px; padding-right: 10px; }
+/* Brand + collapse toggle share the sidebar's top row — sticky so the
+   collapse affordance never scrolls away with a long section list. */
+.sidebar-top {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 4px; padding-right: 10px;
+  position: sticky; top: 0; z-index: 6; background: var(--panel);
+}
 .nav-collapse {
   border: none; background: none; color: var(--muted); cursor: pointer;
   padding: 4px; border-radius: 6px; margin-top: 2px;
@@ -2132,21 +2137,7 @@ details summary:hover { color: var(--text); }
 
 /* Phone chrome (hidden on desktop): the sticky top bar carries ☰ + the
    dock icons, the conversation page renders its own back header. */
-.mobile-bar, .dock-back { display: none; }
-/* Rail top row — always rendered while the rail shows. Docked mode gets
-   a hide affordance (PanelRightClose); drawer modes get a plain × —
-   different meaning for the same slot, swapped by the same rules that
-   flip the rail itself. */
-.conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
-.conv-side-head .rail-x { display: none; }
-@container convl (max-width: 680px) {
-  .conv-side-head .rail-hide { display: none; }
-  .conv-side-head .rail-x { display: inline-flex; }
-}
-.conv-layout.rail-tight .conv-side-head .rail-hide,
-.layout.dock-open .conv-side-head .rail-hide { display: none; }
-.conv-layout.rail-tight .conv-side-head .rail-x,
-.layout.dock-open .conv-side-head .rail-x { display: inline-flex; }
+.mobile-bar, .dock-back, .conv-side-head { display: none; }
 /* The phone-style conversation header runs at every width — back, avatar,
    who, conditional ⓘ/✦. Desktop keeps it inset; ≤720 restyles it as the
    sticky edge-bleed top bar. */
@@ -2169,12 +2160,27 @@ details summary:hover { color: var(--text); }
   color: var(--muted); cursor: pointer;
 }
 .cmh-info:hover { background: var(--panel-2); color: var(--text); }
+/* Everything in the conv head sits on one axis — the -4px bleed margins
+   on the icon buttons pull them off the search field's centerline. */
+.conv-mobile-head .cmh-back, .conv-mobile-head .cmh-info, .conv-mobile-head .cmh-collapse { margin: 0; }
+/* The docked rail's collapse affordance lives in the same head slot the
+   ⓘ reopens from — same position, glyph swaps with the rail's state.
+   Its own class (not .cmh-info) so the ⓘ reveal rules can't light it up
+   in drawer/hidden modes — it's strictly the docked-rail control. */
+.cmh-collapse {
+  display: none; align-items: center; justify-content: center;
+  width: 36px; height: 36px; flex-shrink: 0;
+  background: none; border: 0; border-radius: 8px;
+  color: var(--muted); cursor: pointer;
+}
+.cmh-collapse:hover { background: var(--panel-2); color: var(--text); }
 @media (min-width: 721px) {
   /* The ⓘ only exists for the drawer — the details rail beside the
      transcript makes it redundant. ✦ hides whenever the right dock
      (strip or open panel) is there to open copilot. */
   .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: none; }
   .layout.dock-available .cmh-copilot, .layout.dock-open .cmh-copilot { display: none; }
+  .layout:not(.dock-open) .conv-layout:not(.rail-tight):not(.rail-closed) .conv-mobile-head .cmh-collapse { display: inline-flex; }
 }
 @container convl (max-width: 680px) {
   /* Drawer mode — no rail beside the transcript, the ⓘ earns its spot. */
@@ -2312,9 +2318,6 @@ details summary:hover { color: var(--text); }
     background: rgba(8,10,14,.45); cursor: default;
   }
   .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; order: -2; }
-  /* Drawer on phones — ×, not a panel glyph. */
-  .conv-side-head .rail-hide { display: none; }
-  .conv-side-head .rail-x { display: inline-flex; }
   /* Phone padding for the static foot block. */
   .conv-foot {
     margin: 0 -14px; padding: 6px 14px calc(10px + env(safe-area-inset-bottom));

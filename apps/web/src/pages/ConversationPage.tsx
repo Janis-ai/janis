@@ -1227,6 +1227,17 @@ export default function ConversationPage() {
           >
             <Info size={18} />
           </button>
+          {/* Same slot as the ⓘ — the two never coexist: docked rail
+              shows a collapse glyph (matching the nav's PanelLeftClose
+              size/treatment), hidden/drawered rail shows ⓘ instead. */}
+          <button
+            className="cmh-collapse"
+            aria-label="Hide details panel"
+            title="Hide details"
+            onClick={() => setSideClosed(true)}
+          >
+            <PanelRightClose size={16} />
+          </button>
         </div>
         <div className="row conv-actions">
           {/* Copilot trigger — the dock strip is hidden at these widths, so
@@ -2328,18 +2339,8 @@ export default function ConversationPage() {
         style={{ '--rail-w': `${railW}px` } as CSSProperties}
       >
         <div className="conv-side-head">
-          {/* Docked: hide the rail (ⓘ in the conv head brings it back).
-              Drawer: plain close — different affordance, same slot. */}
           <button
-            className="cmh-back rail-hide"
-            aria-label="Hide details panel"
-            title="Hide details"
-            onClick={() => setSideClosed(true)}
-          >
-            <PanelRightClose size={18} />
-          </button>
-          <button
-            className="cmh-back rail-x"
+            className="cmh-back"
             aria-label="Close details"
             title="Close details"
             onClick={() => setSideOpen(false)}
