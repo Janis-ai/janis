@@ -320,7 +320,7 @@ export interface AgentWidget {
 
 export function useAgentWidgets(agentId?: string) {
   return useQuery({
-    queryKey: ['agentWidgets', agentId ?? null],
+    queryKey: ['agent-widgets', agentId ?? null],
     queryFn: () => api<{ widgets: AgentWidget[] }>(`/api/agents/${agentId}/widgets`),
     enabled: !!agentId,
   });
