@@ -1935,6 +1935,10 @@ describe('inspect_agent builtin', () => {
       .insert(schema.channels)
       .values({ workspaceId: WS2, agentId: bot2.id, kind: 'webchat', name: 'Web widget' })
       .returning();
+    const [botChan] = await db
+      .insert(schema.channels)
+      .values({ workspaceId: WS2, agentId: bot2.id, kind: 'chatfuel', name: 'CF bot' })
+      .returning();
     await db.insert(schema.agentWidgets).values({
       agentId: bot2.id,
       name: 'Order card',
@@ -1986,6 +1990,22 @@ describe('inspect_agent builtin', () => {
     );
     // ids ride along — the model builds /agents/<id>/channels/<ch-id> from them
     expect((out.channels.find((c: { name: string }) => c.name === 'Web widget') as { id: string }).id).toBe(chan.id);
+    // bot channels carry the real post URL — minted on demand so the model
+    // never has to compose /bot/<key>/… itself (it guessed with the
+    // channel's uuid when the field was absent/null)
+    const cf = out.channels.find((c: { kind: string }) => c.kind === 'chatfuel') as {
+      id: string;
+      post_url: string;
+    };
+    expect(cf.id).toBe(botChan.id);
+    expect(cf.post_url).toMatch(/\/bot\/bk_[0-9a-f]{32}\/chatfuel$/);
+    const [remeta] = await db
+      .select({ metadata: agents.metadata })
+      .from(agents)
+      .where(eq(agents.id, bot2.id));
+    expect(
+      cf.post_url.endsWith(`/bot/${(remeta.metadata as { bot_key: string }).bot_key}/chatfuel`),
+    ).toBe(true);
     expect(out.agent_id).toBe(bot2.id);
     expect(out.url).toContain(`/agents/${bot2.id}`);
     // channel credentials never reach the transcript
@@ -2005,6 +2025,8 @@ describe('inspect_agent builtin', () => {
     await db.delete(schema.alertRules).where(eq(schema.alertRules.agentId, bot2.id));
     await db.delete(schema.agentWidgets).where(eq(schema.agentWidgets.agentId, bot2.id));
     await db.delete(schema.channels).where(eq(schema.channels.id, chan.id));
+    await db.delete(schema.channels).where(eq(schema.channels.id, botChan.id));
+    await db.update(agents).set({ metadata: {} }).where(eq(agents.id, bot2.id));
     await db.delete(schema.knowledgeFiles).where(eq(schema.knowledgeFiles.agentId, bot2.id));
     await db.update(agents).set({ config: {} }).where(eq(agents.id, bot2.id));
   });

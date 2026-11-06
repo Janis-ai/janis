@@ -38,6 +38,7 @@ import {
   type ChannelCredentials,
 } from '../lib/channels.js';
 import { sendOutbound } from '../lib/outbound.js';
+import { ensureBotKey } from '../lib/botKey.js';
 import { enqueueJob } from '../lib/jobs.js';
 import { dbRateLimit, takeDbAllowance } from '../lib/rateLimit.js';
 import { audit } from '../lib/audit.js';
@@ -415,11 +416,16 @@ export function channelApiRoutes(db: Db) {
     );
     if (!isAdminRole(role)) return c.json({ error: 'admin required' }, 403);
     const [agent] = await db
-      .select({ id: agents.id, name: agents.name })
+      .select({ id: agents.id, name: agents.name, metadata: agents.metadata })
       .from(agents)
       .where(and(eq(agents.id, body.agent_id), eq(agents.workspaceId, c.get('workspaceId'))))
       .limit(1);
     if (!agent) return c.json({ error: 'agent not found' }, 404);
+    // Bot-platform channels are addressed by the agent's bot_key — mint it
+    // alongside the channel so the ingest URL exists from the first render.
+    if (body.kind === 'chatfuel' || body.kind === 'manychat') {
+      await ensureBotKey(db, agent);
+    }
     if (body.kind === 'whatsapp' && !body.phone_number_id) {
       return c.json({ error: 'phone_number_id required for whatsapp' }, 400);
     }

@@ -35,6 +35,7 @@ import {
   recheckGaps,
 } from '../services/knowledgeGaps.js';
 import { encryptSecret, loadSecretsMap } from '../lib/secrets.js';
+import { ensureBotKey } from '../lib/botKey.js';
 import { legacyBotDoc } from '../lib/legacyMongo.js';
 import { resolveLegacyBotCreds } from '../lib/legacyDfCreds.js';
 import { connectionSecrets } from '../lib/connections.js';
@@ -56,7 +57,7 @@ import { agentNameTaken, groupNameTaken } from '../lib/names.js';
 import { recordLlmUsage } from '../lib/usage.js';
 import { enqueueJob, runJobs } from '../lib/jobs.js';
 import { applySuggestion, type SuggestionPatch } from '../lib/evalTriage.js';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { effectiveMeteredModel } from '../lib/llm.js';
 import { llmModelsResult } from '../lib/llmModels.js';
 import { mountEmailDomainRoutes, type EmailDomainBag } from '../lib/emailDomainRoutes.js';
@@ -972,15 +973,7 @@ export function agentRoutes(db: Db) {
       .where(and(eq(agents.id, c.req.param('id')), eq(agents.workspaceId, c.get('workspaceId'))))
       .limit(1);
     if (!row) return c.json({ error: 'not found' }, 404);
-    const meta = (row.metadata ?? {}) as Record<string, unknown>;
-    let key = (meta.bot_key ?? meta.legacy_client_key) as string | undefined;
-    if (!key) {
-      key = `bk_${randomBytes(16).toString('hex')}`;
-      await db
-        .update(agents)
-        .set({ metadata: { ...meta, bot_key: key } })
-        .where(eq(agents.id, c.req.param('id')));
-    }
+    const key = await ensureBotKey(db, { id: c.req.param('id'), metadata: row.metadata });
     return c.json({
       bot_key: key,
       urls: {

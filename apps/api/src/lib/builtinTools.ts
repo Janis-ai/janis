@@ -31,6 +31,7 @@ import { invalidateCapCache, messageCap, planFor, PLANS } from './plans.js';
 import { llmSpendOverCap } from './usage.js';
 import { ensureStripeCustomer, planForPrice, stripe } from './stripe.js';
 import { generateWebhookSecret } from './crypto.js';
+import { ensureBotKey } from './botKey.js';
 import { audit } from './audit.js';
 import { bus } from './bus.js';
 import { toMessage } from './serializers.js';
@@ -1685,15 +1686,18 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           enabled: f.enabled,
           source_url: f.sourceUrl,
         })),
-        channels: chans.map((ch) => {
-          if (ch.kind !== 'chatfuel' && ch.kind !== 'manychat') return ch;
-          // The URL the visitor pastes into the bot platform — shown on the
-          // channel's setup card, so it reads back verbatim here. Without it
-          // the model composes /bot/<key>/… itself and guesses the key.
-          const meta = (agent.metadata ?? {}) as { bot_key?: string; legacy_client_key?: string };
-          const key = meta.bot_key ?? meta.legacy_client_key;
-          return { ...ch, post_url: key ? `${env.apiOrigin}/bot/${key}/${ch.kind}` : null };
-        }),
+        channels: await Promise.all(
+          chans.map(async (ch) => {
+            if (ch.kind !== 'chatfuel' && ch.kind !== 'manychat') return ch;
+            // The URL the visitor pastes into the bot platform — shown on
+            // the channel's setup card, so it reads back verbatim here.
+            // ensureBotKey mints on demand: a null post_url is an open
+            // invitation for the model to compose /bot/<key>/… itself and
+            // guess the key (it filled the slot with the channel uuid).
+            const key = await ensureBotKey(ctx.db, agent);
+            return { ...ch, post_url: `${env.apiOrigin}/bot/${key}/${ch.kind}` };
+          }),
+        ),
         alert_rules: rules.map((r) => ({ kind: r.kind, config: r.config })),
         components: widgets,
       });
