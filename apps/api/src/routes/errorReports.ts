@@ -77,18 +77,25 @@ function alertOperatorError(db: Db, report: { source: string; message: string; u
   if (!env.operatorWorkspaceId) return;
   void (async () => {
     const wsId = env.operatorWorkspaceId;
-    const [ws] = await db
-      .select({ config: workspaces.config })
-      .from(workspaces)
-      .where(eq(workspaces.id, wsId))
-      .limit(1);
-    const cfg = ((ws?.config ?? {}) as Record<string, unknown>) ?? {};
-    const last = Date.parse(String(cfg.error_alert_at ?? '')) || 0;
-    if (Date.now() - last < ALERT_COOLDOWN_MS) return;
-    await db
+    // Claim the cooldown slot atomically — a burst of concurrent 500s all
+    // used to read error_alert_at before the first writer landed, so one
+    // network blip paged once per failure. The conditional UPDATE is the
+    // lock: only the caller that actually advances the watermark sends.
+    // error_alert_at is always an ISO string, so text compare orders it.
+    const cutoff = new Date(Date.now() - ALERT_COOLDOWN_MS).toISOString();
+    const claimed = await db
       .update(workspaces)
-      .set({ config: { ...cfg, error_alert_at: new Date().toISOString() } })
-      .where(eq(workspaces.id, wsId));
+      .set({
+        config: sql`jsonb_set(${workspaces.config}, '{error_alert_at}', to_jsonb(${new Date().toISOString()}::text))`,
+      })
+      .where(
+        and(
+          eq(workspaces.id, wsId),
+          sql`coalesce(${workspaces.config}->>'error_alert_at', '') < ${cutoff}`,
+        ),
+      )
+      .returning({ id: workspaces.id });
+    if (!claimed.length) return;
 
     const summary = `${report.source} error: ${report.message.slice(0, 300)}${
       report.url ? ` — ${report.url}` : ''
