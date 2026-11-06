@@ -119,6 +119,13 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   ("Preview page in Messenger ↗" etc. — the concierge itself told the
   user to click "Messenger ↗" thinking it was Connect), and corrected
   concierge-kb.txt to walk visitors to the page's Connect button.
+- Same thread exposed the foreign-bound dead end: her FB Page was already
+  bound to a chatfuel channel in her OLD account's workspace, so the
+  picker showed the bound note with no Connect button (cross-ws takeover
+  needs membership in the bound ws — deliberate: "nobody self-serves
+  somebody else's Page"). boundNote now tells the visitor what to do —
+  disconnect it in that workspace first, or join it for Take over — and
+  the KB explains the second-account case to the concierge.
 
 ## 2026-11-06g — /conversations/:id deep links render split view again
 - Conversations derived openConvId from inboxBase, which follows the

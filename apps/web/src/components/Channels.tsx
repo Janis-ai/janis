@@ -154,7 +154,13 @@ export function MetaAssetList({ rows }: { rows: AssetRow[] }) {
                 ) : null}
               </div>
             ) : s.state === 'bound' && s.bound ? (
-              <div className="asset-bound">{boundNote(s.bound)}</div>
+              <div className="asset-bound">
+                {boundNote(s.bound)}
+                <span className="muted asset-bound-note">
+                  Already connected in that workspace — disconnect it there first
+                  (or join that workspace to take it over).
+                </span>
+              </div>
             ) : (
               <button className="btn" disabled={s.busy} onClick={() => s.onConnect(false)}>
                 {s.connectLabel}
