@@ -28,7 +28,20 @@ if ('serviceWorker' in navigator) {
     window.location.reload();
   });
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+    navigator.serviceWorker
+      .register('/sw.js', { scope: '/' })
+      .then((reg) => {
+        // register() only checks for a new sw.js on page load — a tab left
+        // open for days runs the stale bundle forever (and re-reports bugs
+        // already fixed). Poll hourly + on tab-visible so a deploy's new
+        // worker installs → controllerchange → one reload → fresh code.
+        const update = () => reg.update().catch(() => {});
+        setInterval(update, 60 * 60 * 1000);
+        document.addEventListener('visibilitychange', () => {
+          if (!document.hidden) update();
+        });
+      })
+      .catch(() => {});
   });
 }
 

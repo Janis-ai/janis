@@ -93,6 +93,18 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06j — Stale tabs self-heal after deploys
+- Mike re-reported the 11-06g layout fix "still broken" on prod 12h after
+  it deployed — a tab open since before the rollout keeps the OLD bundle
+  in memory; client-side nav never reloads JS, and the SW only checks
+  for a new sw.js inside register() on page load. Verified the fix WAS
+  in the served bundle (routeBase ternary present) before blaming the
+  tab — always confirm the deploy's JS actually carries the change
+  first; "still broken" is usually "still undeployed" OR "stale tab."
+- main.tsx now polls reg.update() hourly + on visibilitychange, so an
+  open tab installs the new worker → controllerchange → one auto-reload
+  → matching bundle. Closed the last stale-bundle path: tabs no longer
+  need a manual refresh to pick up deploys.
 ## 2026-11-06h — Open conversations stay read; flag toggles paint instantly
 - Ingest flagged every inbound message isUnread unconditionally — a new
   customer message re-lit the unread dot on the thread the operator was
