@@ -107,6 +107,14 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   the agent's real mailbox (gmail channel existed since Sep 30); delete
   it and sends fall back to alerts@inbound.janis.ai.
   e278f164 / janis-api-pending.
+## 2026-11-05i — Inbox rows grow a second line when chips would clip
+- Desktop conv rows were strictly single-line; several tags meant chips
+  silently clipped at the column edge. ConvRow now measures whether the
+  chips fit while leaving a usable preview; if not, `.tags-wrap` moves
+  them to their own full-width line (name + preview keep line 1). Room
+  math reads `.who` width — stable across the toggle, so no oscillation.
+  Fitting rows keep single-line density; mobile + split column already
+  stacked and are untouched. f7d3cc92.
 ## 2026-11-05h — Suggest-flow UX hardening round
 - storeSuggestion supersedes pending rows atomically — a refresh could
   race dismiss-all against the fresh insert and the draft vanished.
