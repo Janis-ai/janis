@@ -159,6 +159,36 @@ export function ConvRow({
   useEffect(() => {
     if (focused) rowRef.current?.scrollIntoView({ block: 'nearest' });
   }, [focused]);
+  const tagsRef = useRef<HTMLSpanElement>(null);
+  const [tagsWrap, setTagsWrap] = useState(false);
+  // Chips that can't fit inline (while leaving a usable preview) get their own
+  // line instead of clipping — measured per row, so plain rows keep the
+  // single-line density. The math reads .who's width, which doesn't change
+  // when the class toggles, so the decision can't oscillate. The split column
+  // (.conv-inbox) already stacks every row — skip it there.
+  const checkTags = () => {
+    const el = tagsRef.current;
+    const who = el?.parentElement;
+    if (!el || !who || el.closest('.conv-inbox')) return;
+    const name = who.querySelector<HTMLElement>('.name');
+    const chips = Array.from(el.children) as HTMLElement[];
+    const need =
+      chips.reduce((s, n) => s + n.offsetWidth, 0) + Math.max(0, chips.length - 1) * 4;
+    const room = who.clientWidth - (name?.offsetWidth ?? 0) - 20 - 80;
+    setTagsWrap(need > room);
+  };
+  // Chip content can change on any render — tag edit, intent classified,
+  // snooze set — so re-measure after every commit; the observer catches
+  // resizes (window, panel drag, checkbox column appearing).
+  useLayoutEffect(checkTags);
+  useEffect(() => {
+    const who = tagsRef.current?.parentElement;
+    if (!who) return;
+    const ro = new ResizeObserver(checkTags);
+    ro.observe(who);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reads refs/DOM only
+  }, []);
   // Row actions live inside the <a> — every click must not navigate.
   const act = (action: string) => (e: MouseEvent) => {
     e.preventDefault();
@@ -172,7 +202,7 @@ export function ConvRow({
   return (
     <Link
       to={`${base}/${c.id}`}
-      className={`conv-row${c.is_unread ? ' unread' : ''}${selected ? ' sel' : ''}${focused ? ' kbd-focus' : ''}`}
+      className={`conv-row${c.is_unread ? ' unread' : ''}${selected ? ' sel' : ''}${focused ? ' kbd-focus' : ''}${tagsWrap ? ' tags-wrap' : ''}`}
       ref={rowRef}
       onTouchStart={() => {
         lp.current.fired = false;
@@ -233,7 +263,7 @@ export function ConvRow({
         <div className="name">
           <span className="n">{displayName(c)}</span>
         </div>
-        <span className="tags">
+        <span className="tags" ref={tagsRef}>
           {agentName && <span className="agent-tag">{agentName}</span>}
           {c.is_test && (
             <span className="channel-tag" title="Internal test channel — excluded from the Inbox badge">

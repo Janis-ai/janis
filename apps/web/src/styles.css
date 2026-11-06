@@ -1081,6 +1081,16 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .conv-row.unread .who .preview { color: var(--text); font-weight: 700; }
+/* A row whose chips can't fit inline grows a second line instead of clipping
+   them: name + preview keep line 1, the chips wrap on a full-width line
+   beneath (ConvRow sets .tags-wrap from measured overflow, so untouched rows
+   keep the single-line density). Desktop-only — ≤720 and the split column
+   already stack every row. */
+@media (min-width: 721px) {
+  .conv-row.tags-wrap .who { flex-wrap: wrap; row-gap: 2px; }
+  .conv-row.tags-wrap .who .preview { order: 2; }
+  .conv-row.tags-wrap .who .tags { order: 3; flex-basis: 100%; margin-top: 2px; flex-wrap: wrap; }
+}
 .conv-row .tail { position: relative; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .conv-row .meta { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .conv-row.unread .meta { color: var(--text); font-weight: 700; }
