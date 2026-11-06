@@ -612,7 +612,12 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       // (and anything left of the layout) doesn't leave a bright gap.
       const layR = layout.getBoundingClientRect();
       layout.style.setProperty('--lay-l', `${Math.round(layR.left)}px`);
-      layout.style.setProperty('--lay-r', `${Math.max(0, Math.round(window.innerWidth - layR.right))}px`);
+      // Under an open dock the overhang stops at the dock's left edge —
+      // past it the drawer would slide *under* the dock.
+      const rightEdge = dockOpen
+        ? document.querySelector<HTMLElement>('.dock')?.getBoundingClientRect().left ?? layR.right
+        : window.innerWidth;
+      layout.style.setProperty('--lay-r', `${Math.max(0, Math.round(rightEdge - layR.right))}px`);
       const dockEl = document.querySelector<HTMLElement>('.dock');
       if (main && dockEl && dockOpen) {
         // The dock claims its full width and the cascade absorbs it:

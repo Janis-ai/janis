@@ -577,6 +577,13 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
    away, so the width cost is never paid twice. */
 .layout.dock-available:not(.dock-open) .main { margin-right: 48px; }
 .layout.dock-open .dock-strip { display: none; }
+/* An open details drawer is modal and runs to the window edge — the
+   strip (root stacking context) would otherwise paint over its right
+   48px, since the drawer's z-index is trapped inside .main. */
+.layout:has(.conv-layout.rail-tight .conv-side.open) .dock-strip { visibility: hidden; }
+/* .main clips (overflow:hidden) — release it while the drawer is open so
+   the drawer's overhang across the strip's reserve actually paints. */
+.layout.conv-open:has(.conv-layout.rail-tight .conv-side.open) .main { overflow: visible; }
 .layout.dock-testable .main { max-width: 880px; }
 /* With room to spare, push the column instead — reflow beats overlay.
    The margin is clamped to what leaves .main its ~468 floor (100% of
@@ -1799,7 +1806,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .conv-side {
     position: absolute; top: 0; right: calc(-1 * var(--lay-r, 0px)); bottom: 0; z-index: 75;
     width: min(88vw, 340px);
-    padding-left: 12px;
+    padding-left: 12px; padding-right: 12px;
     padding-top: 0;
     background: var(--bg); border-left: 1px solid var(--border);
     transform: translateX(105%);
@@ -1815,7 +1822,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   }
   .conv-side-scrim {
     display: block;
-    position: fixed; z-index: 72; border: 0; padding: 0;
+    position: absolute; z-index: 72; border: 0; padding: 0;
     top: 0; bottom: 0;
     left: calc(-1 * var(--lay-l, 0px)); right: calc(-1 * var(--lay-r, 0px));
     background: rgba(8,10,14,.45); cursor: default;
@@ -1838,7 +1845,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-layout.rail-tight .conv-side {
   position: absolute; top: 0; right: calc(-1 * var(--lay-r, 0px)); bottom: 0; z-index: 75;
   width: min(88vw, 340px);
-  padding-left: 12px;
+  padding-left: 12px; padding-right: 12px;
   padding-top: 0;
   background: var(--bg); border-left: 1px solid var(--border);
   transform: translateX(105%);
@@ -1852,7 +1859,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   box-shadow: -12px 0 32px rgba(0,0,0,.4);
 }
 .conv-layout.rail-tight .conv-side-scrim {
-  display: block; position: fixed; z-index: 72; border: 0; padding: 0;
+  display: block; position: absolute; z-index: 72; border: 0; padding: 0;
   top: 0; bottom: 0;
   left: calc(-1 * var(--lay-l, 0px)); right: calc(-1 * var(--lay-r, 0px));
   background: rgba(8,10,14,.45); cursor: default;
@@ -2028,7 +2035,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .layout.dock-open .conv-layout.rail-tight .conv-side {
     position: absolute; top: 0; right: calc(-1 * var(--lay-r, 0px)); bottom: 0; z-index: 75;
     width: min(340px, 88vw);
-    padding-left: 12px;
+    padding-left: 12px; padding-right: 12px;
     padding-top: 0;
     background: var(--bg); border-left: 1px solid var(--border);
     transform: translateX(105%); transition: transform .18s ease;
@@ -2036,7 +2043,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   }
   .layout.dock-open .conv-layout.rail-tight .conv-side.open { transform: none; box-shadow: -12px 0 32px rgba(0,0,0,.4); }
   .layout.dock-open .conv-layout.rail-tight { overflow-x: visible; }
-  .layout.dock-open .conv-layout.rail-tight .conv-side-scrim { display: block; position: fixed; z-index: 72; border: 0; padding: 0; top: 0; bottom: 0; left: calc(-1 * var(--lay-l, 0px)); right: calc(-1 * var(--lay-r, 0px)); background: rgba(8,10,14,.45); cursor: default; }
+  .layout.dock-open .conv-layout.rail-tight .conv-side-scrim { display: block; position: absolute; z-index: 72; border: 0; padding: 0; top: 0; bottom: 0; left: calc(-1 * var(--lay-l, 0px)); right: calc(-1 * var(--lay-r, 0px)); background: rgba(8,10,14,.45); cursor: default; }
   .layout.dock-open .conv-layout.rail-tight .conv-side-head { display: flex; justify-content: flex-end; align-items: center; height: 43px; padding: 6px 0; }
   .layout.dock-open .conv-layout.rail-tight .conv-side-head .cmh-collapse { display: inline-flex; }
   .layout.dock-open .conv-actions .copilot-btn { display: inline-flex; }
