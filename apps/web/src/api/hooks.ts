@@ -1,5 +1,12 @@
 import { useEffect } from 'react';
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type InfiniteData,
+  type QueryClient,
+} from '@tanstack/react-query';
 import type {
   Agent,
   Alert,
@@ -150,6 +157,32 @@ export function useConversationsPage(filter: ConvFilter, cursor?: string, enable
     placeholderData: (prev) => prev,
     enabled,
   });
+}
+
+/** Optimistic field patch across every cached conversation list — the
+ *  infinite inbox queries (any filter), the paged variant, and search
+ *  hits — so flag toggles paint before the request round-trips. The
+ *  invalidate that follows still reconciles with the server. */
+export function patchConversationCaches(
+  qc: QueryClient,
+  id: string,
+  fields: Partial<Conversation>,
+) {
+  const apply = (c: Conversation) => (c.id === id ? { ...c, ...fields } : c);
+  qc.setQueriesData<InfiniteData<ConversationsPage>>({ queryKey: ['conversations'] }, (old) =>
+    old
+      ? {
+          ...old,
+          pages: old.pages.map((p) => ({ ...p, conversations: p.conversations.map(apply) })),
+        }
+      : old,
+  );
+  qc.setQueriesData<ConversationsPage>({ queryKey: ['conversations-page'] }, (old) =>
+    old ? { ...old, conversations: old.conversations.map(apply) } : old,
+  );
+  qc.setQueriesData<{ conversations?: Conversation[] }>({ queryKey: ['search'] }, (old) =>
+    old?.conversations ? { ...old, conversations: old.conversations.map(apply) } : old,
+  );
 }
 
 /** Per-operator saved filter presets for the conversations list. */

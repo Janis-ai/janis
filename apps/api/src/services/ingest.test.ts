@@ -6,7 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import type { IngestEvent } from '@janis/shared';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, alertRules, alerts, conversations, memberships, messages, users, workspaces } from '../db/schema.js';
+import { agents, alertRules, alerts, conversations, memberships, messages, users, viewers, workspaces } from '../db/schema.js';
 import { generateApiKey, hashPassword } from '../lib/crypto.js';
 import { processEvents } from './ingest.js';
 import { takeover, humanReply, resume } from './takeover.js';
@@ -143,6 +143,60 @@ describe('processEvents', () => {
     expect(conv.state).toBe('active');
     expect(conv.archivedAt).toBeNull();
     expect(conv.isUnread).toBe(true);
+  });
+
+  it('inbound on a thread an operator is viewing does not flag it unread', async () => {
+    await processEvents(db, agent, [{ type: 'message_in', conversation_id: 'c-view', text: 'hi' }]);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c-view'));
+    await db.update(conversations).set({ isUnread: false }).where(eq(conversations.id, conv.id));
+    // Live heartbeat ≈ the thread is on an operator's screen right now.
+    await db.insert(viewers).values({
+      conversationId: conv.id,
+      userId: admin.id,
+      userName: 'A',
+      expiresAt: new Date(Date.now() + 20_000),
+    });
+
+    await processEvents(db, agent, [
+      { type: 'message_in', conversation_id: 'c-view', text: 'you there?' },
+    ]);
+    const [viewed] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(viewed.isUnread).toBe(false);
+
+    // An expired heartbeat is nobody watching — unread flags again.
+    await db
+      .update(viewers)
+      .set({ expiresAt: new Date(Date.now() - 1_000) })
+      .where(eq(viewers.conversationId, conv.id));
+    await db.update(conversations).set({ isUnread: false }).where(eq(conversations.id, conv.id));
+    await processEvents(db, agent, [
+      { type: 'message_in', conversation_id: 'c-view', text: 'hello?' },
+    ]);
+    const [unwatched] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(unwatched.isUnread).toBe(true);
+  });
+
+  it('inbound on a viewed thread never clears a manual mark-unread', async () => {
+    await processEvents(db, agent, [{ type: 'message_in', conversation_id: 'c-pin', text: 'hi' }]);
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.externalId, 'c-pin'));
+    await db.insert(viewers).values({
+      conversationId: conv.id,
+      userId: admin.id,
+      userName: 'A',
+      expiresAt: new Date(Date.now() + 20_000),
+    });
+
+    await processEvents(db, agent, [
+      { type: 'message_in', conversation_id: 'c-pin', text: 'still here' },
+    ]);
+    const [after] = await db.select().from(conversations).where(eq(conversations.id, conv.id));
+    expect(after.isUnread).toBe(true);
   });
 
   it('a reply while a CSAT prompt is pending stays archived at ingest', async () => {

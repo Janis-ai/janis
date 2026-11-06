@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent } from 'r
 import { Link, Navigate, useLocation, useNavigate, useOutlet, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import type { Conversation, SavedView } from '@janis/shared';
-import { useConversations, useAgents, useMe, useSearch, useViews } from '../api/hooks';
+import { useConversations, useAgents, useMe, useSearch, useViews, patchConversationCaches } from '../api/hooks';
 import { api } from '../api/client';
 import { Avatar, displayName, Empty, Md, SearchInput } from '../components/bits';
 import Onboarding from '../components/Onboarding';
@@ -82,6 +82,17 @@ export const SNOOZE_OPTIONS: [label: string, minutes: number][] = [
   ['Tomorrow 9am', -1], // resolved below
   ['Next week', 10_080],
 ];
+
+/** Bulk actions that reduce to a plain field patch — used for the
+ *  optimistic list update so flag toggles repaint before the request
+ *  lands. Archive/snooze move rows between filtered views, so those
+ *  wait on the invalidate. */
+const BULK_ROW_FIELDS: Record<string, Partial<Conversation>> = {
+  mark_read: { is_unread: false },
+  mark_unread: { is_unread: true },
+  star: { is_starred: true },
+  unstar: { is_starred: false },
+};
 
 export function snoozeMinutes(minutes: number): number {
   if (minutes !== -1) return minutes;
@@ -757,6 +768,10 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const bulk = async (action: string, extra: Record<string, unknown> = {}) => {
     if (!selected.size) return;
     setBusy(true);
+    // In-place flag flips repaint instantly — archive/snooze move rows
+    // between filtered views, so those wait on the invalidate anyway.
+    const fields = BULK_ROW_FIELDS[action];
+    if (fields) for (const id of selected) patchConversationCaches(qc, id, fields);
     try {
       await api('/api/conversations/bulk', {
         method: 'POST',
@@ -775,6 +790,8 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   // Single-row verbs — the hover rail and the j/k/x keyboard triage share
   // these; bulk() above is only for the checked-set bar.
   const actOne = async (id: string, action: string, extra: Record<string, unknown> = {}) => {
+    const fields = BULK_ROW_FIELDS[action];
+    if (fields) patchConversationCaches(qc, id, fields);
     await api('/api/conversations/bulk', {
       method: 'POST',
       body: JSON.stringify({ ids: [id], action, ...extra }),
@@ -782,7 +799,8 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     void qc.invalidateQueries({ queryKey: ['conversations'] });
     void qc.invalidateQueries({ queryKey: ['attention-count'] });
   };
-  const patchOne = async (id: string, fields: Record<string, unknown>) => {
+  const patchOne = async (id: string, fields: Partial<Conversation>) => {
+    patchConversationCaches(qc, id, fields);
     await api(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(fields) });
     void qc.invalidateQueries({ queryKey: ['conversations'] });
   };

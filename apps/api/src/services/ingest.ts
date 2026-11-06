@@ -1,5 +1,5 @@
 import type { IngestEvent, IngestResult, QuickReply } from '@janis/shared';
-import { and, eq, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, eq, gt, inArray, sql, type SQL } from 'drizzle-orm';
 import type { Db } from '../db/client.js';
 import {
   agents,
@@ -7,6 +7,7 @@ import {
   alerts,
   conversations,
   messages,
+  viewers,
   workspaces,
 } from '../db/schema.js';
 import { bus } from '../lib/bus.js';
@@ -382,6 +383,18 @@ export async function processEvents(
       : conv.tags;
 
     const preview = eventText(event);
+    // Inbound traffic flags the thread unread — unless an operator has it
+    // on screen right now (live heartbeat in `viewers`, ~20s TTL). A manual
+    // mark-unread survives either way; this only suppresses the auto-flag.
+    const beingViewed =
+      directionFor(event) === 'in' &&
+      (
+        await db
+          .select({ userId: viewers.userId })
+          .from(viewers)
+          .where(and(eq(viewers.conversationId, conv.id), gt(viewers.expiresAt, new Date())))
+          .limit(1)
+      ).length > 0;
     // Per-key merge, never stale-snapshot replace — verification and ingress
     // writes elsewhere land on this row between the conv read and here.
     const profileDefined = event.user
@@ -405,8 +418,10 @@ export async function processEvents(
         lastMessageAt: event.timestamp ? new Date(event.timestamp) : new Date(),
         lastMessagePreview: preview?.slice(0, 140) ?? conv.lastMessagePreview,
         lastMessageDirection: directionFor(event),
-        // new inbound traffic marks the conversation unread for operators
-        isUnread: directionFor(event) === 'in' ? true : conv.isUnread,
+        // new inbound traffic marks the conversation unread for operators —
+        // except while someone's viewing the thread (they've seen it) or it
+        // was already flagged (a manual mark-unread is never cleared here)
+        isUnread: directionFor(event) === 'in' ? conv.isUnread || !beingViewed : conv.isUnread,
         // a customer reply wakes a snoozed conversation — snooze means
         // "remind me later", not "ignore the customer"
         snoozedUntil: directionFor(event) === 'in' ? null : conv.snoozedUntil,

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Alert, Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
-import { useAgents, useConversation, useConversationBrief, useInvalidateConversations, useMe, useUsers } from '../api/hooks';
+import { useAgents, useConversation, useConversationBrief, useInvalidateConversations, useMe, useUsers, patchConversationCaches } from '../api/hooks';
 import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, surfaceLabel } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
@@ -550,11 +550,11 @@ export default function ConversationPage() {
       intent?: string | null;
     }) =>
       api(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
-    onSuccess: (_d, body) => {
-      // Viewing a conversation auto-marks it read server-side on every
-      // fetch — refetching after "mark unread" would instantly undo it.
-      // Patch the cache instead; the list still invalidates for the dot.
+    onMutate: (body) => {
+      // The inbox row + this page's icon repaint before the round-trip —
+      // the invalidate in onSuccess still reconciles with the server.
       if (body.is_unread !== undefined) {
+        patchConversationCaches(qc, id, { is_unread: body.is_unread });
         qc.setQueryData(
           ['conversation', id],
           (old: { conversation?: { is_unread?: boolean } } | undefined) =>
@@ -562,10 +562,14 @@ export default function ConversationPage() {
               ? { ...old, conversation: { ...old.conversation, is_unread: body.is_unread } }
               : old,
         );
-        invalidate();
-      } else {
-        refresh();
       }
+    },
+    onSuccess: (_d, body) => {
+      // is_unread already patched every cache in onMutate — refetches
+      // can't undo a manual "mark unread" (the mark-read-on-open effect
+      // only fires on first load), they just reconcile the rest.
+      if (body.is_unread !== undefined) invalidate();
+      else refresh();
     },
     onError: (e) => setError(e.message),
   });
