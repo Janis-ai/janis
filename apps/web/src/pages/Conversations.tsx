@@ -518,11 +518,14 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     const measure = () => {
       const w = layout.clientWidth;
       const colW = storedPanelWidth('conv.colw', 290, 220, 480);
-      // A user-hidden rail frees its space entirely — zero width in the
-      // cascade, so it can never be "obscured" while it's not shown.
-      const railW = layout.classList.contains('rail-closed')
-        ? 0
-        : storedPanelWidth('conv.railw', 280, 240, 560);
+      // A rail that isn't in flow frees its space entirely — zero width
+      // in the cascade: the user-hidden rail (.rail-closed) and the
+      // dock-open rail, which is already an overlay drawer, both count
+      // as absent so they can't be "obscured" or squeeze siblings.
+      const railOut =
+        layout.classList.contains('rail-closed') ||
+        Boolean(layout.closest('.layout')?.classList.contains('dock-open'));
+      const railW = railOut ? 0 : storedPanelWidth('conv.railw', 280, 240, 560);
       const dragging = document.body.classList.contains('panel-resize');
       // avail = what's left for the two side panels once the conv holds
       // its 420 floor and the inter-pane gaps. Squeeze before hide, in

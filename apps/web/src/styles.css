@@ -1850,6 +1850,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-layout.rail-closed .conv-side { display: none; }
 .conv-layout.rail-closed .conv-rail-grip { display: none; }
 .conv-layout.rail-closed .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: inline-flex; }
+/* Copilot dock open — the details rail is an overlay drawer, so its
+   trigger stays reachable or the rail vanishes with no way back. */
+.layout.dock-open .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: inline-flex; }
 .conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; container-name: conv; }
 /* Anchored conversation: .main never scrolls — the transcript is the
    only scroller, head stays up top, foot is a static block at the
