@@ -578,18 +578,15 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
 .layout.dock-open .dock-strip { display: none; }
 .layout.dock-testable .main { max-width: 880px; }
 /* With room to spare, push the column instead — reflow beats overlay.
-   The push must never drop the conv below its 420 floor: each dock size
-   gets its own breakpoint, and below it the dock stays an overlay
-   drawer (dim + click-outside/Esc/nav close) instead of crushing. */
-@media (min-width: 1200px) {
-  .layout.dock-open:not(.dock-wide):not(.dock-split) .test-dock-dim { display: none; }
-  .layout.dock-open:not(.dock-wide):not(.dock-split) .main { margin-right: 360px; }
-}
-@media (min-width: 1560px) {
-  .layout.dock-wide.dock-open .test-dock-dim,
-  .layout.dock-split.dock-open .test-dock-dim { display: none; }
-  .layout.dock-split.dock-open .main { margin-right: 840px; }
-  .layout.dock-wide.dock-open .main { margin-right: 780px; }
+   The margin is clamped to what leaves .main its ~468 floor (100% of
+   the containing block, so it's nav-width aware): while there's room
+   the head and ⓘ stay fully clear of the dock; once the conv floor is
+   hit the dock overlays instead of crushing further. */
+@media (min-width: 721px) {
+  .test-dock-dim { display: none; }
+  .layout.dock-open .main { margin-right: min(360px, max(0px, calc(100% - 468px))); }
+  .layout.dock-split.dock-open .main { margin-right: min(840px, max(0px, calc(100% - 468px))); }
+  .layout.dock-wide.dock-open .main { margin-right: min(780px, max(0px, calc(100% - 468px))); }
 }
 /* A squeezed conversation column (dock open at mid widths) stacks the
    details rail under the transcript instead of crushing it — same move
