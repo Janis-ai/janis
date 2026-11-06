@@ -93,6 +93,14 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06c — bot_key mints wherever a bot URL is needed
+- Follow-up to 11-05h: inspect_agent's post_url was still null when the
+  agent's key hadn't been lazily minted (channel created via API, card
+  never opened) — a null slot is the same "model guesses the key" trap.
+  New lib/botKey.ts ensureBotKey mints on demand, shared by the
+  /api/agents/:id/bot GET, POST /api/channels (chatfuel/manychat kinds),
+  and inspect_agent — post_url is now always a real URL. Test asserts the
+  minted key persists to agent.metadata.
 ## 2026-11-06b — Row tag chips capped: overflow collapses to "+N"
 - Follow-up to 11-05i's wrap feature: the wrapped chip line was unbounded —
   20 tags = 3 chip lines in the wide list and ~14 in the 290px split column
