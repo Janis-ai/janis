@@ -1718,7 +1718,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 /* The split column reuses the full inbox's .filters row — icon-only
    funnel at the shared height. */
 .conv-inbox-head .filters { margin-bottom: 0; flex-wrap: nowrap; gap: 6px; }
-.conv-inbox-head .filters .btn, .conv-inbox-head .filters .search-box { height: 32px; }
+/* Same 38px row as the conv head — the two search bars share a
+   centerline across the split. */
+.conv-inbox-head .filters .btn, .conv-inbox-head .filters .search-box { height: 38px; }
 .conv-inbox-head .btn-label { display: none; }
 
 .conv-layout { display: flex; gap: 16px; height: 100%; min-height: 100%; container-type: inline-size; container-name: convl; position: relative; overflow-x: hidden; overflow-x: clip; }
@@ -1726,13 +1728,13 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    a slim stacked list reusing conv-row, current conversation tinted. */
 .conv-inbox { display: none; }
 .conv-inbox-head {
-  display: flex; gap: 6px; padding: 12px 10px 8px;
+  display: flex; gap: 6px; padding: 6px 10px;
   position: sticky; top: 0; z-index: 5; background: var(--bg);
 }
 .conv-inbox-head .src-menu-wrap { position: relative; flex-shrink: 0; }
 .conv-inbox-head .search-wrap { flex: 1 1 0; min-width: 0; }
-.conv-inbox-head .search-box { height: 32px; font-size: 13px; min-width: 0; }
-.conv-inbox-head .btn { height: 32px; padding: 6px 9px; }
+.conv-inbox-head .search-box { height: 38px; font-size: 13px; min-width: 0; }
+.conv-inbox-head .btn { height: 38px; padding: 6px 9px; }
 /* Popover height tracks the window — tall screens get the full filter
    list; a small margin keeps it off the bottom edge. */
 .conv-inbox-head .menu-pop { left: 0; right: auto; max-height: calc(100dvh - 80px); overflow-y: auto; }
@@ -1753,7 +1755,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 .conv-inbox .tail .meta { font-size: 11px; }
 /* Selected row pins just under the sticky head when the column scrolls
    it into view on split (scrollIntoView block:'start'). */
-.conv-inbox .conv-row { scroll-margin-top: 52px; }
+.conv-inbox .conv-row { scroll-margin-top: 50px; }
 .conv-inbox .tail-dots { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; }
 .conv-inbox .tail-dots:empty { display: none; }
 .conv-inbox .tail-dots .alert-dot, .conv-inbox .tail-dots .unread-dot { width: 7px; height: 7px; }
@@ -2163,6 +2165,9 @@ details summary:hover { color: var(--text); }
 /* Everything in the conv head sits on one axis — the -4px bleed margins
    on the icon buttons pull them off the search field's centerline. */
 .conv-mobile-head .cmh-back, .conv-mobile-head .cmh-info, .conv-mobile-head .cmh-collapse { margin: 0; }
+/* Match the inbox search bar's 38px row — both search fields share a
+   centerline across the split. */
+.conv-mobile-head .conv-search { height: 38px; box-sizing: border-box; }
 /* The docked rail's collapse affordance lives in the same head slot the
    ⓘ reopens from — same position, glyph swaps with the rail's state.
    Its own class (not .cmh-info) so the ⓘ reveal rules can't light it up
