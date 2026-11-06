@@ -1852,7 +1852,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 /* User-hidden rail — same affordance grammar as rail-tight: freed space
    goes to conv/inbox (the cascade counts it as zero width), the ⓘ in
    the conv head brings it back. */
-.conv-layout.rail-closed .conv-side { display: none; }
+.conv-layout.rail-closed .conv-side, .conv-layout.rail-closed .conv-side-scrim { display: none; }
 .conv-layout.rail-closed .conv-rail-grip { display: none; }
 .conv-layout.rail-closed .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: inline-flex; }
 /* Copilot dock open — under the drawer the ⓘ stays reachable (the

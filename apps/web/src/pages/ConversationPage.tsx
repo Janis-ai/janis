@@ -1241,7 +1241,7 @@ export default function ConversationPage() {
             className="cmh-collapse"
             aria-label="Hide details panel"
             title="Hide details"
-            onClick={() => setSideClosed(true)}
+            onClick={() => { setSideClosed(true); setSideOpen(false); }}
           >
             <PanelRightClose size={16} />
           </button>
