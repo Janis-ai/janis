@@ -1,0 +1,17 @@
+import { launch, login } from './lib.mjs';
+const { browser, page } = await launch();
+await login(page);
+await page.setViewportSize({ width: 500, height: 900 });
+await page.goto('http://localhost:5173/conversations', { waitUntil: 'domcontentloaded' });
+await page.waitForSelector('.conv-row', { timeout: 15000 });
+await page.waitForTimeout(500);
+await page.evaluate(() => { const l = document.querySelector('.conv-list'); l.scrollTop = 400; l.dispatchEvent(new Event('scroll')); });
+console.log('before nav:', await page.evaluate(() => document.querySelector('.conv-list').scrollTop));
+await page.locator('.conv-row').nth(8).click();
+await page.waitForSelector('.conv-mobile-head', { timeout: 10000 });
+await page.waitForTimeout(400);
+await page.goBack();
+await page.waitForSelector('.conv-list', { timeout: 10000 });
+await page.waitForTimeout(800);
+console.log('after back:', await page.evaluate(() => Math.round(document.querySelector('.conv-list').scrollTop)));
+await browser.close();

@@ -347,6 +347,16 @@ export function createApp(db: Db) {
     // The static middleware serves index.html from disk for `/` — return the
     // mutated copy (GA injection happens in-memory, above).
     app.get('/', (c) => c.html(indexHtml));
+    // sw.js must never sit in an edge cache: browsers honor HTTP cache
+    // for SW update checks, so a stale cached sw.js keeps serving the
+    // old precache bundle after every deploy — the app looks "not
+    // updated" until the CDN entry expires.
+    app.get('/sw.js', (c) =>
+      c.body(readFileSync(join(webDist, 'sw.js')), 200, {
+        'content-type': 'application/javascript; charset=utf-8',
+        'cache-control': 'no-cache, must-revalidate',
+      }),
+    );
     app.use('/*', serveStatic({ root: webDist }));
     app.get('*', async (c) => {
       // Unknown API-ish paths should 404, not render the SPA

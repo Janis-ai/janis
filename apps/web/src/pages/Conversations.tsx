@@ -125,6 +125,10 @@ export function useSticky<T>(key: string, initial: T | (() => T)): [T, (v: T) =>
 }
 
 /** Gmail-style list stamp — clock time today, "Nov 2" this year, "11/2/25" older. */
+// Inbox scroll survives navigation away + back — the list unmounts on
+// mobile (separate route), so a ref can't hold it.
+let savedConvListScroll = 0;
+
 function listTime(iso: string | null): string {
   if (!iso) return '';
   const d = new Date(iso);
@@ -673,6 +677,20 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   }, [openConvId]);
   const listRef = useRef<HTMLDivElement>(null);
   const sentRef = useRef<HTMLDivElement>(null);
+  // Route-away → back restores the list scroll (mobile: the inbox is a
+  // separate page, so the remount loses it). Module scope survives the
+  // unmount (refs are null by cleanup time, so save on scroll instead);
+  // restore waits until the re-rendered rows actually overflow.
+  const onListScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    savedConvListScroll = e.currentTarget.scrollTop;
+  };
+  useLayoutEffect(() => {
+    const el = listRef.current;
+    if (savedConvListScroll && el && el.scrollHeight > el.clientHeight) {
+      el.scrollTop = savedConvListScroll;
+      savedConvListScroll = 0;
+    }
+  });
   // Full mode scrolls the .conv-list; split mode the .conv-inbox column —
   // on the class flip keep the clicked row at the SAME screen position:
   // mini rows are a different height, so copying scrollTop verbatim shows
@@ -681,12 +699,20 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
   const openListScroll = useRef(0);
   const openColScroll = useRef(0);
   const selDelta = useRef<number | null>(null);
+  const lastOpened = useRef<string | null>(null);
   if (openConvId) {
-    openListScroll.current = listRef.current?.scrollTop ?? 0;
-    const row = colRef.current?.querySelector<HTMLElement>(`a[href$="/${openConvId}"]`);
-    selDelta.current = row ? row.getBoundingClientRect().top : null;
+    // Capture once per open — while open the list is display:none and
+    // its scrollTop reads 0, so re-reading on later renders would wipe
+    // the saved position before close can restore it.
+    if (lastOpened.current !== openConvId) {
+      openListScroll.current = listRef.current?.scrollTop ?? 0;
+      const row = colRef.current?.querySelector<HTMLElement>(`a[href$="/${openConvId}"]`);
+      selDelta.current = row ? row.getBoundingClientRect().top : null;
+      lastOpened.current = openConvId;
+    }
   } else {
     openColScroll.current = colRef.current?.scrollTop ?? 0;
+    lastOpened.current = null;
   }
   const wasOpen = useRef<boolean | null>(null);
   useLayoutEffect(() => {
@@ -706,7 +732,10 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           col.scrollTop = openListScroll.current;
         }
       } else {
-        list.scrollTop = openColScroll.current;
+        // Column scroll when the split inbox was visible (it tracked the
+        // list position onward); the list's own saved scroll when the
+        // column never existed (mobile conv view hides it → always 0).
+        list.scrollTop = openColScroll.current || openListScroll.current;
       }
     }
     wasOpen.current = open;
@@ -1237,7 +1266,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
 
       {/* The list is the scroll region — .main locks when .inbox-head is
           present, so only rows move. */}
-      <div className={`conv-list${selected.size && !openConvId ? ' sel' : ''}`} ref={listRef}>
+      <div className={`conv-list${selected.size && !openConvId ? ' sel' : ''}`} ref={listRef} onScroll={onListScroll}>
       {searching ? (
         searchPending ? (
           <div className="row" style={{ justifyContent: 'center', marginTop: 24 }}>
