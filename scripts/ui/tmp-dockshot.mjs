@@ -1,0 +1,20 @@
+import { launch, login } from './lib.mjs';
+const { browser, page } = await launch();
+await login(page);
+await page.goto('http://localhost:5173/conversations', { waitUntil: 'domcontentloaded' });
+await page.waitForSelector('.conv-row', { timeout: 15000 });
+await page.locator('.conv-row').nth(2).click();
+await page.waitForSelector('.conv-main', { timeout: 10000 });
+await page.setViewportSize({ width: 1100, height: 900 });
+await page.waitForTimeout(400);
+await page.evaluate(() => window.dispatchEvent(new CustomEvent('janis:open-copilot')));
+await page.waitForTimeout(700);
+console.log(await page.evaluate(() => {
+  const q = (s) => document.querySelector(s);
+  const r = (el) => el ? Math.round(el.getBoundingClientRect().width) : null;
+  const vis = (el) => el && getComputedStyle(el).display !== 'none';
+  const main = q('.main');
+  return JSON.stringify({ mainW: r(main), mainMR: getComputedStyle(main).marginRight, convW: r(q('.conv-main')), inbox: vis(q('.conv-inbox')) ? r(q('.conv-inbox')) : 'X', rail: vis(q('.conv-side')) ? 'drawer' : 'X' });
+}));
+await page.screenshot({ path: 'scripts/ui/out/dock-1100.png' });
+await browser.close();
