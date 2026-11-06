@@ -2196,11 +2196,11 @@ details summary:hover { color: var(--text); }
      field spans the details rail so the ⓘ/collapse slot lands at the
      window's right edge whether the rail is open or hidden. Rail
      content starts below the head's bottom border. */
-  .conv-layout:not(.rail-tight):not(.rail-closed) .conv-mobile-head {
+  .layout:not(.dock-open) .conv-layout:not(.rail-tight):not(.rail-closed) .conv-mobile-head {
     position: relative; z-index: 6;
     width: calc(100% + 16px + var(--railfit, var(--rail-w, 280px)));
   }
-  .conv-layout:not(.rail-tight):not(.rail-closed) .conv-side { margin-top: 52px; padding-top: 0; }
+  .layout:not(.dock-open) .conv-layout:not(.rail-tight):not(.rail-closed) .conv-side { margin-top: 52px; padding-top: 0; }
 }
 @container convl (max-width: 680px) {
   /* Drawer mode — no rail beside the transcript, the ⓘ earns its spot. */

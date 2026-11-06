@@ -560,6 +560,22 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         listTight = nextList;
         layout.classList.toggle('list-tight', listTight);
       }
+      // The copilot dock's push margin must leave room for everything
+      // actually in flow — conv floor plus the panels currently shown —
+      // not a flat .main minimum. Below that need the margin shrinks
+      // and the dock overlays (the at-floor state where covering is OK).
+      const main = layout.parentElement;
+      const dockEl = document.querySelector<HTMLElement>('.dock');
+      const dockOpen = Boolean(layout.closest('.layout')?.classList.contains('dock-open'));
+      if (main && dockEl && dockOpen) {
+        const need =
+          (nextList ? 0 : colFit) + 420 + 32 + (nextTight || railOut ? 0 : railFit);
+        const before = layout.clientWidth + (parseFloat(getComputedStyle(main).marginRight) || 0);
+        main.style.marginRight = `${Math.min(
+          Math.round(dockEl.getBoundingClientRect().width),
+          Math.max(0, before - need),
+        )}px`;
+      }
       // Effective widths live on the DOM (not state): React re-renders
       // restore the stored width on drags, which is what we want anyway.
       const colEl = layout.querySelector<HTMLElement>('.conv-inbox');
