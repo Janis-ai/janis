@@ -515,6 +515,11 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     if (!layout || !openConvId) return;
     let tight = false;
     let listTight = false;
+    // The copilot dock's push margin must leave room for everything
+    // actually in flow — conv floor plus the panels currently shown —
+    // not a flat .main minimum. Below that need the margin shrinks
+    // and the dock overlays (the at-floor state where covering is OK).
+    const main = layout.parentElement;
     const measure = () => {
       const w = layout.clientWidth;
       const colW = storedPanelWidth('conv.colw', 290, 220, 480);
@@ -560,11 +565,6 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         listTight = nextList;
         layout.classList.toggle('list-tight', listTight);
       }
-      // The copilot dock's push margin must leave room for everything
-      // actually in flow — conv floor plus the panels currently shown —
-      // not a flat .main minimum. Below that need the margin shrinks
-      // and the dock overlays (the at-floor state where covering is OK).
-      const main = layout.parentElement;
       const dockEl = document.querySelector<HTMLElement>('.dock');
       const dockOpen = Boolean(layout.closest('.layout')?.classList.contains('dock-open'));
       if (main && dockEl && dockOpen) {
@@ -575,6 +575,8 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
           Math.round(dockEl.getBoundingClientRect().width),
           Math.max(0, before - need),
         )}px`;
+      } else if (main) {
+        main.style.marginRight = '';
       }
       // Effective widths live on the DOM (not state): React re-renders
       // restore the stored width on drags, which is what we want anyway.
@@ -602,6 +604,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       window.removeEventListener('pointerup', onUp);
       layout.classList.remove('rail-tight');
       layout.classList.remove('list-tight');
+      if (main) main.style.marginRight = '';
     };
   }, [openConvId]);
   const listRef = useRef<HTMLDivElement>(null);
