@@ -519,7 +519,7 @@ export default function Layout() {
   // Starts true: the rail is revealed collapsed and only expands once
   // the measure proves the four panes fit — never the reverse flash.
   const [navTight, setNavTight] = useState(true);
-  const [dockOpen, setDockOpen] = useState(false);
+  const dockWasOpen = useRef(false);
   useEffect(() => {
     if (!isConvPage) return;
     const measure = () => {
@@ -537,7 +537,15 @@ export default function Layout() {
           : storedPanelWidth('conv.railw', 280, 240, 560)) +
         32;
       setNavTight(convlIfExpanded < need);
-      setDockOpen(Boolean(layout.closest('.layout')?.classList.contains('dock-open')));
+      // On the dock-open edge a stored expand pref is released once —
+      // the cascade collapses the nav, then the user's toggles own it
+      // again (it is never locked).
+      const dockOpen = Boolean(layout.closest('.layout')?.classList.contains('dock-open'));
+      if (dockOpen && !dockWasOpen.current) {
+        localStorage.removeItem('nav.collapse');
+        setNavPrefState(null);
+      }
+      dockWasOpen.current = dockOpen;
       const p = readNavPref();
       setNavPrefState((cur) => (cur === p ? cur : p));
     };
@@ -555,11 +563,8 @@ export default function Layout() {
       window.removeEventListener('panel-resize', measure);
     };
   }, [isConvPage, navW]);
-  // A stored "expanded" pref still yields to the squeeze itself — under
-  // copilot pressure the cascade's first move is the nav, pinned or not.
   const navCollapsed =
-    navPref === 'collapsed' ||
-    (isConvPage && navTight && (navPref === null || dockOpen));
+    navPref === 'collapsed' || (navPref === null && isConvPage && navTight);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'b' && !isEditableTarget(e.target)) {
