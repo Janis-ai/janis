@@ -106,15 +106,20 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   ['search']) up front — single-row verbs, bulk mark_read/star, and the
   detail page's Mail toggle all repaint before the round-trip; the
   invalidate still reconciles. 127cd4bb.
-## 2026-11-06i — Bot-platform ingest URL no longer gated on Meta
-- The Chatfuel/ManyChat channel card hid its whole setup block — the
-  ingest URL the user must paste into the bot platform — behind a Meta
-  connection, but Meta linking is optional (full-thread visibility), not a
-  prerequisite. A Chatfuel user burned hours in the concierge thread
-  unable to see the URL (console card + concierge guesses both failed
-  pre-e2a22cfe). BotIngestDetails now renders the URL + guides
-  unconditionally and Meta connect sits below framed as recommended;
-  concierge-kb.txt states the URL is always visible. 58061e78.
+## 2026-11-06i — Bot-platform Meta gate stays; preview links can't be
+##   mistaken for the connect action
+- A Chatfuel user burned ~2.5h in the concierge thread chasing their
+  ingest URL (console hid it behind the Meta gate; concierge fabricated
+  /bot/<channel-uuid> URLs the link guard stripped — e2a22cfe fixed the
+  tool side). Briefly un-gated the card (58061e78), then Mike's call:
+  standalone ingest is a dead end — without Meta's webhook the card's
+  sync response is the only delivery path, so teammate replies never
+  reach the customer. Re-gated with stronger "why" copy (that exact
+  takeaway), renamed the MetaAssetList preview links
+  ("Preview page in Messenger ↗" etc. — the concierge itself told the
+  user to click "Messenger ↗" thinking it was Connect), and corrected
+  concierge-kb.txt to walk visitors to the page's Connect button.
+
 ## 2026-11-06g — /conversations/:id deep links render split view again
 - Conversations derived openConvId from inboxBase, which follows the
   PERSISTED context agent (ctxAgent) — with a last-visited agent stored,
