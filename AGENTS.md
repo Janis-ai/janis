@@ -701,7 +701,8 @@ drizzle-kit/workbox-build, nothing to drop directly).
     Stripe tools". Positive: "explicit human request escalates".
 44. DONE — `janis-zapier-logo.png` deleted intentionally (bad version);
    Mike made his own logo (janis-big-j.png).
-45. Three `big-j*.png` untracked in apps/web/public/img/ — commit or gitignore?
+45. DONE — `big-j*.png` brand marks committed in 5235088e (landing page
+   work); nothing untracked left in apps/web/public/img/.
 46. DONE — zapier-platform-core is on 19.2.1 (1.0.2 promoted 2026-10-28).
 
 **Infra / reliability**
