@@ -19,7 +19,7 @@ import { typingBus, presenceBus } from '../lib/typingBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
-import { BookmarkPlus, Bot, Brain, ChevronLeft, Headset, Info, Lock, Mail, MailOpen, Moon, Paperclip, RefreshCw, ScrollText, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
+import { BookmarkPlus, Bot, Brain, ChevronLeft, Headset, Info, Lock, Mail, MailOpen, Moon, PanelRightClose, Paperclip, RefreshCw, ScrollText, Sparkles, Star, ThumbsDown, ThumbsUp, Trash2, X } from 'lucide-react';
 
 const WHO: Record<Message['direction'], string> = {
   in: 'Customer',
@@ -662,6 +662,20 @@ export default function ConversationPage() {
   // Mobile details slide-over — the right column is a drawer on phones,
   // opened from the header's ⓘ. The page never scrolls; transcript only.
   const [sideOpen, setSideOpen] = useState(false);
+  // User-hidden details rail (docked mode) — same grammar as rail-tight:
+  // the ⓘ in the conv head reopens. Not persisted: a collapsed rail is a
+  // "for this view" gesture, not a layout pref.
+  const [sideClosed, setSideClosed] = useState(false);
+  const sideRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const layout = sideRef.current?.parentElement;
+    if (!layout) return;
+    layout.classList.toggle('rail-closed', sideClosed);
+    // The fit cascade counts the rail's stored width — re-measure so a
+    // closed rail frees its space for conv/inbox immediately.
+    window.dispatchEvent(new Event('panel-resize'));
+    return () => layout.classList.remove('rail-closed');
+  }, [sideClosed]);
   useEffect(() => {
     if (!sideOpen) return;
     const onKey = (e: KeyboardEvent) => {
@@ -1206,22 +1220,15 @@ export default function ConversationPage() {
             className="cmh-info"
             aria-label="Conversation details"
             title="Details — status, assignee, intent, tags"
-            onClick={() => setSideOpen(true)}
+            onClick={() => {
+              setSideClosed(false);
+              setSideOpen(true);
+            }}
           >
             <Info size={18} />
           </button>
         </div>
         <div className="row conv-actions">
-          {/* Details drawer trigger — only visible when the rail can't fit
-              beside the transcript (container query reveals it). */}
-          <button
-            className="btn info-btn"
-            title="Conversation details"
-            aria-label="Conversation details"
-            onClick={() => setSideOpen(true)}
-          >
-            <Info size={15} />
-          </button>
           {/* Copilot trigger — the dock strip is hidden at these widths, so
               the button rides with ⓘ when the rail collapses. */}
           <button
@@ -2316,12 +2323,23 @@ export default function ConversationPage() {
         />
       )}
       <aside
+        ref={sideRef}
         className={`conv-side${sideOpen ? ' open' : ''}`}
         style={{ '--rail-w': `${railW}px` } as CSSProperties}
       >
         <div className="conv-side-head">
+          {/* Docked: hide the rail (ⓘ in the conv head brings it back).
+              Drawer: plain close — different affordance, same slot. */}
           <button
-            className="cmh-back"
+            className="cmh-back rail-hide"
+            aria-label="Hide details panel"
+            title="Hide details"
+            onClick={() => setSideClosed(true)}
+          >
+            <PanelRightClose size={18} />
+          </button>
+          <button
+            className="cmh-back rail-x"
             aria-label="Close details"
             title="Close details"
             onClick={() => setSideOpen(false)}

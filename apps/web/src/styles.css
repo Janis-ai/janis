@@ -1772,7 +1772,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 }
 /* Details rail: beside the transcript when the column is wide enough,
    otherwise the ⓘ slide-over — never stacked below the footer. */
-.info-btn, .conv-actions .copilot-btn { display: none; }
+.conv-actions .copilot-btn { display: none; }
 /* The right dock (strip or open panel) already opens copilot — the in-row
    ✦ is just the fallback for when it can't show. */
 .layout.dock-available .conv-actions .copilot-btn,
@@ -1802,7 +1802,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
     background: rgba(8,10,14,.45); cursor: default;
   }
   .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; order: -2; }
-  .info-btn, .conv-actions .copilot-btn { display: inline-flex; }
+  .conv-actions .copilot-btn { display: inline-flex; }
 }
 /* rail-tight — the JS-measured version of the ≤680 drawer flip: fires
    when col + 420 conv floor + rail genuinely don't fit, at whatever
@@ -1832,8 +1832,14 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   background: rgba(8,10,14,.45); cursor: default;
 }
 .conv-layout.rail-tight .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; order: -2; }
-.conv-layout.rail-tight .info-btn, .conv-layout.rail-tight .conv-actions .copilot-btn { display: inline-flex; }
+.conv-layout.rail-tight .conv-actions .copilot-btn { display: inline-flex; }
 .conv-layout.rail-tight .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: inline-flex; }
+/* User-hidden rail — same affordance grammar as rail-tight: freed space
+   goes to conv/inbox (the cascade counts it as zero width), the ⓘ in
+   the conv head brings it back. */
+.conv-layout.rail-closed .conv-side { display: none; }
+.conv-layout.rail-closed .conv-rail-grip { display: none; }
+.conv-layout.rail-closed .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: inline-flex; }
 .conv-main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; container-type: inline-size; container-name: conv; }
 /* Anchored conversation: .main never scrolls — the transcript is the
    only scroller, head stays up top, foot is a static block at the
@@ -1992,7 +1998,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .layout.dock-open .conv-side.open { transform: none; box-shadow: -12px 0 32px rgba(0,0,0,.4); }
   .layout.dock-open .conv-side-scrim { display: block; position: absolute; inset: 0; z-index: 72; border: 0; padding: 0; background: rgba(8,10,14,.45); cursor: default; }
   .layout.dock-open .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
-  .layout.dock-open .conv-actions .info-btn, .layout.dock-open .conv-actions .copilot-btn { display: inline-flex; }
+  .layout.dock-open .conv-actions .copilot-btn { display: inline-flex; }
   /* stacked mode: keep the transcript internally scrollable so the composer
      stays adjacent instead of dropping below a page-length of messages */
   /* No inner cap: .main scrolls naturally at ≤900 — a capped transcript
@@ -2126,7 +2132,21 @@ details summary:hover { color: var(--text); }
 
 /* Phone chrome (hidden on desktop): the sticky top bar carries ☰ + the
    dock icons, the conversation page renders its own back header. */
-.mobile-bar, .dock-back, .conv-side-head { display: none; }
+.mobile-bar, .dock-back { display: none; }
+/* Rail top row — always rendered while the rail shows. Docked mode gets
+   a hide affordance (PanelRightClose); drawer modes get a plain × —
+   different meaning for the same slot, swapped by the same rules that
+   flip the rail itself. */
+.conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; }
+.conv-side-head .rail-x { display: none; }
+@container convl (max-width: 680px) {
+  .conv-side-head .rail-hide { display: none; }
+  .conv-side-head .rail-x { display: inline-flex; }
+}
+.conv-layout.rail-tight .conv-side-head .rail-hide,
+.layout.dock-open .conv-side-head .rail-hide { display: none; }
+.conv-layout.rail-tight .conv-side-head .rail-x,
+.layout.dock-open .conv-side-head .rail-x { display: inline-flex; }
 /* The phone-style conversation header runs at every width — back, avatar,
    who, conditional ⓘ/✦. Desktop keeps it inset; ≤720 restyles it as the
    sticky edge-bleed top bar. */
@@ -2161,10 +2181,7 @@ details summary:hover { color: var(--text); }
   .conv-mobile-head .cmh-info:not(.cmh-copilot) { display: inline-flex; }
 }
 /* Icon + label operator buttons align everywhere; the label drops at ≤720. */
-.conv-actions button.btn:not(.info-btn), .conv-ops.btn, .filters button.btn { display: inline-flex; align-items: center; gap: 6px; }
-/* ⓘ only exists for the drawer — and it lives at the right edge the
-   drawer slides out from. */
-.conv-actions .info-btn { order: 9; margin-left: auto; }
+.conv-actions button.btn, .conv-ops.btn, .filters button.btn { display: inline-flex; align-items: center; gap: 6px; }
 /* Filter button's active count — a pill at every width; the label doesn't
    carry it anywhere. (The ≤1100/dock-open copies are same-style redeclares.) */
 .filter-badge {
@@ -2295,6 +2312,9 @@ details summary:hover { color: var(--text); }
     background: rgba(8,10,14,.45); cursor: default;
   }
   .conv-side-head { display: flex; justify-content: flex-end; padding: 4px 0; order: -2; }
+  /* Drawer on phones — ×, not a panel glyph. */
+  .conv-side-head .rail-hide { display: none; }
+  .conv-side-head .rail-x { display: inline-flex; }
   /* Phone padding for the static foot block. */
   .conv-foot {
     margin: 0 -14px; padding: 6px 14px calc(10px + env(safe-area-inset-bottom));
@@ -2316,7 +2336,7 @@ details summary:hover { color: var(--text); }
   .conv-search, .composer-inner textarea { font-size: 16px; }
   /* The mobile head already carries ⓘ and ✦ — the actions-row copies
      stay hidden. Wins over the container-query reveal at ≤680px. */
-  .conv-actions .btn.info-btn, .conv-actions .btn.copilot-btn { display: none !important; }
+  .conv-actions .btn.copilot-btn { display: none !important; }
   .conv-actions .btn { padding: 7px 10px; }
   .conv-actions .btn-label, .conv-ops .btn-label, .filters .btn-label { display: none; }
   .filters button.btn { padding: 7px 10px; }

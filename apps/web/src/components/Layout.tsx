@@ -531,7 +531,9 @@ export default function Layout() {
       const need =
         storedPanelWidth('conv.colw', 290, 220, 480) +
         420 +
-        storedPanelWidth('conv.railw', 280, 240, 560) +
+        (layout.classList.contains('rail-closed')
+          ? 0
+          : storedPanelWidth('conv.railw', 280, 240, 560)) +
         32;
       setNavTight(convlIfExpanded < need);
       const p = readNavPref();
