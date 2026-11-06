@@ -6,7 +6,7 @@ import { desc, eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, agentWidgets, alerts, conversations, memberships, messages, sessions, users, workspaces } from '../db/schema.js';
+import { agents, agentWidgets, alerts, conversations, memberships, messages, pendingActions, sessions, suggestions, users, workspaces } from '../db/schema.js';
 import { generateApiKey, generateSessionToken, hashPassword } from '../lib/crypto.js';
 import { conversationRoutes } from './conversations.js';
 import { viewRoutes } from './views.js';
@@ -1030,5 +1030,44 @@ describe('run-action', () => {
     } finally {
       await db.update(agents).set({ config: {} }).where(eq(agents.id, agent.id));
     }
+  });
+
+  it('reloaded suggestions hydrate the action decision from pending_actions', async () => {
+    const conv = await makeConversation('ra-hydrate');
+    const args = { code: '053329' };
+    await db.insert(suggestions).values({
+      conversationId: conv.id,
+      text: 'Thanks! Submitting your code now.',
+      source: 'agent',
+      payload: {
+        proposed_actions: [
+          {
+            name: 'check_verification_code',
+            tool: { builtin: 'check_verification_code' },
+            args,
+          },
+        ],
+      },
+    });
+    // Key order differs from the proposal — jsonb equality (and the
+    // canonical compare) must still match.
+    await db.insert(pendingActions).values({
+      workspaceId: wsId,
+      agentId: agent.id,
+      conversationId: conv.id,
+      toolName: 'check_verification_code',
+      tool: { name: 'check_verification_code' },
+      args: { code: '053329' },
+      status: 'approved',
+      result: 'verified — michael@x.co is confirmed',
+    });
+    const res = await app.request(`/api/conversations/${conv.id}`, {
+      headers: { cookie: adminCookie },
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    const action = body.suggestions[0].payload.proposed_actions[0];
+    expect(action.status).toBe('approved');
+    expect(action.result).toContain('verified');
   });
 });

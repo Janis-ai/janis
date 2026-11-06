@@ -1997,14 +1997,27 @@ export default function ConversationPage() {
                     ))}
                   </div>
                 )}
-                {suggestions[0].payload?.proposed_actions?.map((a, ai) => (
+                {suggestions[0].payload?.proposed_actions?.map((a, ai) => {
+                  // Local runAction state wins; a.status is the persisted
+                  // decision hydrated on load so a refresh keeps the card
+                  // resolved instead of resetting to the buttons.
+                  const decided =
+                    actionResults[ai] ??
+                    (a.status === 'approved'
+                      ? `ran — ${actionResultLine(a.result)}`
+                      : a.status === 'denied'
+                        ? 'declined'
+                        : a.status === 'pending'
+                          ? 'awaiting teammate approval'
+                          : undefined);
+                  return (
                   <div key={ai} className="action-card" style={{ marginTop: 8 }}>
                     <div className="mono" style={{ fontSize: 12 }}>
                       {a.name}
                     </div>
-                    {actionResults[ai] ? (
+                    {decided ? (
                       <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                        {actionResults[ai]}
+                        {decided}
                       </div>
                     ) : editAction === ai ? (
                       <>
@@ -2101,7 +2114,8 @@ export default function ConversationPage() {
                       </>
                     )}
                   </div>
-                ))}
+                  );
+                })}
               </>
             ) : (
               <div className="muted">Thinking…</div>
@@ -2123,7 +2137,7 @@ export default function ConversationPage() {
                     ...(s.payload?.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
                   });
                   const undecided = (s.payload?.proposed_actions ?? []).some(
-                    (_, i) => !actionResults[i],
+                    (a, i) => !actionResults[i] && !a.status,
                   );
                   if (undecided) {
                     // Actions decide in place — the suggestion stays open

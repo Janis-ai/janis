@@ -878,6 +878,10 @@ export const Suggestion = z.object({
             name: z.string(),
             tool: z.unknown(),
             args: z.record(z.unknown()),
+            // Hydrated on read from the pending_actions row the decision
+            // created — a reload shows the outcome, not reset buttons.
+            status: z.enum(['pending', 'approved', 'denied']).optional(),
+            result: z.string().nullable().optional(),
           }),
         )
         .optional(),

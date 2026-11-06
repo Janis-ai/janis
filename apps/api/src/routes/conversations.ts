@@ -435,6 +435,58 @@ export function conversationRoutes(db: Db) {
         .sort((a, b) => (RANK[b] ?? 0) - (RANK[a] ?? 0))[0];
     }
 
+    // Proposed actions decide through pending_actions rows — hydrate the
+    // latest decision per (tool, args) so a reload shows the outcome, not
+    // reset buttons. Canonical JSON compare matches the run-action dedupe
+    // without depending on key order.
+    const canon = (v: unknown): string => {
+      if (Array.isArray(v)) return `[${v.map(canon).join(',')}]`;
+      if (v && typeof v === 'object') {
+        return `{${Object.keys(v as Record<string, unknown>)
+          .sort()
+          .map((k) => `${JSON.stringify(k)}:${canon((v as Record<string, unknown>)[k])}`)
+          .join(',')}}`;
+      }
+      return JSON.stringify(v) ?? 'null';
+    };
+    const proposedTools = new Set<string>();
+    for (const s of convSuggestions) {
+      const p = s.payload as { proposed_actions?: { name?: string }[] } | null;
+      for (const a of p?.proposed_actions ?? []) if (a.name) proposedTools.add(a.name);
+    }
+    const actedRows = proposedTools.size
+      ? await db
+          .select()
+          .from(pendingActions)
+          .where(
+            and(
+              eq(pendingActions.conversationId, row.conversation.id),
+              inArray(pendingActions.toolName, [...proposedTools]),
+            ),
+          )
+          .orderBy(desc(pendingActions.createdAt))
+      : [];
+    const hydratedSuggestions = actedRows.length
+      ? convSuggestions.map((s) => {
+          const p = s.payload as
+            | { proposed_actions?: { name: string; args: unknown }[] }
+            | null;
+          if (!p?.proposed_actions?.length) return s;
+          return {
+            ...s,
+            payload: {
+              ...p,
+              proposed_actions: p.proposed_actions.map((a) => {
+                const hit = actedRows.find(
+                  (r) => r.toolName === a.name && canon(r.args) === canon(a.args),
+                );
+                return hit ? { ...a, status: hit.status, result: hit.result } : a;
+              }),
+            },
+          };
+        })
+      : convSuggestions;
+
     return c.json({
       member_plan: memberPlan,
       conversation: toConversation(
@@ -444,7 +496,7 @@ export function conversationRoutes(db: Db) {
       messages: msgs.map(toMessage),
       messages_has_more: msgRows.length > PAGE,
       alerts: convAlerts.map(toAlert),
-      suggestions: convSuggestions.map(toSuggestion),
+      suggestions: hydratedSuggestions.map(toSuggestion),
       // Set when the requested id was a merge tombstone — the caller's
       // stale link resolved to this surviving conversation.
       ...(convId !== c.req.param('id') ? { merged_from: c.req.param('id') } : {}),
