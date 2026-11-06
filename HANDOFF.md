@@ -1600,3 +1600,24 @@ Three chatfuel-delivery fixes shipped + deployed (janis-api-01405-jzl+):
   ./scripts/deploy-gcp.sh` if that quota ever trips again. All manual
   gcloud commands (logging read, builds describe, run services) need
   `--project=janis-prod-mn` or they silently query jottogame.
+
+## 2026-11-06 — Verification email honesty + concierge confirm trim
+
+Two follow-ups to the suggest/draft work (janis-api-01454-twl + next):
+- `send_verification_email` claimed "sent" unconditionally:
+  sendVerificationMail swallowed every channel/domain failure into a
+  sendEmail fallback that only console.error'd Resend rejections. An
+  approved action could report sent with nothing delivered (Mike's
+  "approve → no email" after deleting the Gmail channel). sendEmail now
+  returns whether Resend accepted; sendVerificationMail returns real
+  success per path; the tool returns an explicit error when all senders
+  fail. Live probe of the prod Resend path (janis@inbound.janis.ai) = 200.
+- Concierge self-decided confirmations posted the FULL tool result to the
+  visitor — "Done — sent — … then call check_verification_code with it"
+  leaked model instructions into the customer thread. Confirm lines now
+  trim to the outcome sentence (same rule as the console's
+  actionResultLine).
+- Why the confirm exists at all: on concierge (Ask Janis) threads decided
+  by the thread's own verified visitor, decidePendingAction posts a
+  deterministic Done/failed line because the resumed agent turn can be
+  slow or silent — customer-thread decisions still take the resume path.
