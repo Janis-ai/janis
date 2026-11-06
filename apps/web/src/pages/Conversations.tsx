@@ -523,6 +523,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
     // The conv width the inbox protects before it starts yielding —
     // comfortable bubble reading width, well above the 420 floor.
     const CONV_COMFORT = 560;
+    let wasRailOut = layout.classList.contains('rail-closed');
     // Trailing settle pass — the RO fires mid-transition and the
     // geometry override can trip on a mount/transition frame; one
     // debounced re-measure after the dust clears fixes the end state.
@@ -539,6 +540,11 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
       // dock-open rail, which is already an overlay drawer, both count
       // as absent so they can't be "obscured" or squeeze siblings.
       const railOut = layout.classList.contains('rail-closed');
+      // Rail just un-closed by the user (ⓘ press): the flip to tight
+      // that follows is their *open* request meeting a narrow layout,
+      // not a resize — don't fire the hide that would eat it.
+      const railReopened = wasRailOut && !railOut;
+      wasRailOut = railOut;
       const railW = railOut ? 0 : storedPanelWidth('conv.railw', 280, 240, 560);
       const dockOpen = Boolean(layout.closest('.layout')?.classList.contains('dock-open'));
       const dragging = document.body.classList.contains('panel-resize');
@@ -579,7 +585,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
         layout.classList.toggle('rail-tight', tight);
         // Wide → narrow always hides the rail — no stale open drawer +
         // scrim can survive the transition.
-        if (tight) window.dispatchEvent(new CustomEvent('conv-rail-hide'));
+        if (tight && !railReopened) window.dispatchEvent(new CustomEvent('conv-rail-hide'));
       }
       // Geometry is the final word: if the rail's right edge overruns
       // the layout's edge it's clipped — drawer it regardless of what
@@ -590,7 +596,7 @@ export default function Conversations({ agentId: scopeAgent }: { agentId?: strin
             sideEl.getBoundingClientRect().right - layout.getBoundingClientRect().right > 1) {
           tight = true;
           layout.classList.add('rail-tight');
-          window.dispatchEvent(new CustomEvent('conv-rail-hide'));
+          if (!railReopened) window.dispatchEvent(new CustomEvent('conv-rail-hide'));
           // Transient frames (mount, nav animating) can overrun for a
           // tick with room to spare — re-check once things settle so
           // a one-frame clip can't latch the rail hidden.
