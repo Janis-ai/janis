@@ -110,6 +110,41 @@ async function signedInUser(ctx: BuiltinCtx) {
   return user ?? null;
 }
 
+/** A fabricated resource id passes every syntactic check — verify *_id
+ *  args against the tool family's *_list sibling when the agent has one
+ *  (gsheets_append → gsheets_list). Fail only when the list ran and the
+ *  id isn't in it; a list-tool error can't prove the id is fake, and
+ *  {field} placeholders resolve at submit time so they skip the check. */
+async function verifyBindingIds(
+  ctx: BuiltinCtx,
+  agent: typeof agents.$inferSelect,
+  defs: ReturnType<typeof toolsFor>,
+  toolName: string,
+  argMap: Record<string, string> | undefined,
+): Promise<string | null> {
+  const prefix = toolName.split('_')[0];
+  const listDef = defs.find((t) => t.name === `${prefix}_list`);
+  if (!listDef || listDef.approval) return null;
+  const idArgs = Object.entries(argMap ?? {}).filter(
+    ([k, v]) => /_id$/i.test(k) && v && !v.includes('{'),
+  );
+  if (!idArgs.length) return null;
+  const { loadSecretsMap } = await import('./secrets.js');
+  const { connectionSecrets } = await import('./connections.js');
+  const { callTool } = await import('./toolExec.js');
+  const secrets = {
+    ...(await loadSecretsMap(ctx.db, agent.id)),
+    ...(await connectionSecrets(ctx.db, agent.id)),
+  };
+  const listing = await callTool(listDef, {}, secrets).catch(() => 'error: unreachable');
+  if (listing.startsWith('error')) return null;
+  const missing = idArgs.filter(([, v]) => !listing.includes(String(v)));
+  if (!missing.length) return null;
+  return `${prefix}_list doesn't know ${missing
+    .map(([k, v]) => `${k}="${v}"`)
+    .join(', ')} — call ${prefix}_list and use a real id from its result, not an invented one`;
+}
+
 type WorkspaceRow = typeof workspaces.$inferSelect;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -3530,6 +3565,12 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const toolBind = toolBindingOrNull(toolParsed.data);
       if (toolBind) {
         const defs = toolsFor(agent);
+        const fakeId =
+          (await verifyBindingIds(ctx, agent, defs, toolBind.name ?? '', toolBind.args)) ??
+          (toolBind.submit
+            ? await verifyBindingIds(ctx, agent, defs, toolBind.submit.name, toolBind.submit.args)
+            : null);
+        if (fakeId) return JSON.stringify({ error: fakeId });
         const def = toolBind.name ? defs.find((t) => t.name === toolBind.name) : undefined;
         if (toolBind.name && !def)
           return JSON.stringify({ error: `no tool named "${toolBind.name}" on ${agent.name}` });
@@ -3841,6 +3882,12 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         const def = tool.name ? defs.find((t) => t.name === tool.name) : undefined;
         if ((tool.name && !def) || def?.approval)
           return `error: bound tool "${tool.name}" is missing or approval-gated on ${agent.name}`;
+        const fakeId =
+          (await verifyBindingIds(ctx, agent, defs, tool.name ?? '', tool.args)) ??
+          (tool.submit
+            ? await verifyBindingIds(ctx, agent, defs, tool.submit.name, tool.submit.args)
+            : null);
+        if (fakeId) return `error: ${fakeId}`;
         if (tool.submit) {
           const subDef = defs.find((t) => t.name === tool.submit!.name);
           if (!subDef || subDef.approval)
