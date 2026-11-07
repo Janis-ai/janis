@@ -1076,11 +1076,15 @@ export function conversationRoutes(db: Db) {
   // Ask for a suggested reply: agent webhook if configured, else Janis-side LLM.
   // `instruction` is optional operator guidance that shapes the draft —
   // forwarded to the agent on suggestion.request (external agents may
-  // ignore it; hosted agents draft to it).
+  // ignore it; hosted agents draft to it). Body is optional — stale
+  // console bundles and other callers POST bare; a strict json validator
+  // would 400 them.
   const suggestBody = z.object({
     instruction: z.string().trim().min(1).max(500).optional(),
   });
-  app.post('/:id/suggest', zValidator('json', suggestBody), async (c) => {
+  app.post('/:id/suggest', async (c) => {
+    const parsed = suggestBody.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: 'invalid suggest body' }, 400);
     try {
       const { conversation, agent } = await getConversationForWorkspace(
         db,
@@ -1096,7 +1100,7 @@ export function conversationRoutes(db: Db) {
         db,
         conversation,
         agent,
-        c.req.valid('json').instruction,
+        parsed.data.instruction,
       );
       return c.json(
         result.mode === 'llm'

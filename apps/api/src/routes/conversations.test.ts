@@ -1129,4 +1129,22 @@ describe('suggest', () => {
     const res = await post(`/${conv.id}/suggest`, adminCookie, { instruction: '   ' });
     expect(res.status).toBe(400);
   });
+
+  it('accepts a body-less POST — stale bundles and bare callers still draft', async () => {
+    const conv = await makeConversation('suggest-nobody');
+    await db
+      .update(agents)
+      .set({ webhookUrl: 'http://127.0.0.1:9/hook' })
+      .where(eq(agents.id, agent.id));
+    try {
+      const res = await app.request(`/api/conversations/${conv.id}/suggest`, {
+        method: 'POST',
+        headers: { cookie: adminCookie },
+      });
+      expect(res.status).toBe(200);
+      expect((await res.json()).mode).toBe('agent');
+    } finally {
+      await db.update(agents).set({ webhookUrl: null }).where(eq(agents.id, agent.id));
+    }
+  });
 });
