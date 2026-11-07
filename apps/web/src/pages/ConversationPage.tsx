@@ -645,15 +645,29 @@ export default function ConversationPage() {
   // row lands via refetch. Track the row being replaced — while it still
   // tops the list the card stays on Thinking.
   const [replacedSid, setReplacedSid] = useState<string | null>(null);
+  // Inline draft editing — Preview/Edit tabs on the card. Edits apply to
+  // the card itself (never pushed into the reply composer).
+  const [draftEditing, setDraftEditing] = useState(false);
+  const [editText, setEditText] = useState('');
+  const [editWidgets, setEditWidgets] = useState<Record<number, string>>({});
+  const [editErr, setEditErr] = useState('');
+  const [draftEdits, setDraftEdits] = useState<{
+    text: string;
+    widgets: Record<number, unknown>;
+  } | null>(null);
   useEffect(() => {
     if (!replacedSid) return;
     const t = setTimeout(() => setReplacedSid(null), 30_000);
     return () => clearTimeout(t);
   }, [replacedSid]);
   // A fresh suggestion row IS the concierge's staged draft landing —
-  // drop the receipt line once it's here.
+  // drop the receipt line once it's here, and drop any edits aimed at
+  // the replaced draft.
   const topSuggestionId = data?.suggestions?.[0]?.id;
   useEffect(() => {
+    setDraftEditing(false);
+    setDraftEdits(null);
+    setEditErr('');
     if (topSuggestionId) setRoutedToCopilot(false);
   }, [topSuggestionId]);
   // Conversation switch — the page stays mounted, so every piece of
@@ -670,6 +684,9 @@ export default function ConversationPage() {
     setSuggestOpen(false);
     setRoutedToCopilot(false);
     setLastInstruction(null);
+    setDraftEditing(false);
+    setDraftEdits(null);
+    setEditErr('');
     setOb(() => []);
     setError('');
     receiptFor.current = null;
@@ -2036,6 +2053,54 @@ export default function ConversationPage() {
                       {suggestions[0].notes}
                     </div>
                   )}
+                  {!suggestions[0].payload?.empty_draft && !draftSent && (
+                    <div className="row" style={{ gap: 4, marginBottom: 8 }}>
+                      <button
+                        type="button"
+                        className={`btn sm${draftEditing ? '' : ' primary'}`}
+                        onClick={() => {
+                          // Leaving Edit validates each component's JSON and
+                          // applies it to the card; a bad parse stays open.
+                          if (!draftEditing) return;
+                          const parsed: Record<number, unknown> = {};
+                          for (const [k, v] of Object.entries(editWidgets)) {
+                            if (!v.trim()) continue;
+                            try {
+                              parsed[Number(k)] = JSON.parse(v);
+                            } catch {
+                              setEditErr(`component ${Number(k) + 1}: invalid JSON — fix or clear it`);
+                              return;
+                            }
+                          }
+                          setDraftEdits({ text: editText, widgets: parsed });
+                          setEditErr('');
+                          setDraftEditing(false);
+                        }}
+                      >
+                        Preview
+                      </button>
+                      <button
+                        type="button"
+                        className={`btn sm${draftEditing ? ' primary' : ''}`}
+                        onClick={() => {
+                          const s = suggestions[0];
+                          setEditText(draftEdits?.text ?? s.text);
+                          setEditWidgets(
+                            Object.fromEntries(
+                              (s.payload?.widgets ?? []).map((w, i) => [
+                                i,
+                                JSON.stringify(draftEdits?.widgets?.[i] ?? w, null, 1),
+                              ]),
+                            ),
+                          );
+                          setEditErr('');
+                          setDraftEditing(true);
+                        }}
+                      >
+                        Edit
+                      </button>
+                    </div>
+                  )}
                   {suggestions[0].payload?.empty_draft ? (
                     <div className="muted" style={{ fontStyle: 'italic' }}>
                       The agent couldn't draft a reply this time — nothing usable came
@@ -2045,13 +2110,59 @@ export default function ConversationPage() {
                     <div className="muted" style={{ fontStyle: 'italic' }}>
                       reply sent — the actions below still need a decision
                     </div>
+                  ) : draftEditing ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      <textarea
+                        rows={4}
+                        value={editText}
+                        onChange={(e) => setEditText(e.target.value)}
+                        style={{ width: '100%', resize: 'vertical' }}
+                      />
+                      {(suggestions[0].payload?.widgets ?? []).map((w, wi) => {
+                        const ref = (
+                          suggestions[0].payload as { widget_refs?: (string | null)[] }
+                        )?.widget_refs?.[wi];
+                        return (
+                          <label
+                            key={wi}
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 2,
+                              fontSize: 11.5,
+                              color: 'var(--muted)',
+                            }}
+                          >
+                            {ref ?? `component ${wi + 1}`}
+                            <textarea
+                              rows={6}
+                              value={editWidgets[wi] ?? ''}
+                              onChange={(e) =>
+                                setEditWidgets({ ...editWidgets, [wi]: e.target.value })
+                              }
+                              style={{
+                                width: '100%',
+                                resize: 'vertical',
+                                fontFamily: 'monospace',
+                                fontSize: 11.5,
+                              }}
+                            />
+                          </label>
+                        );
+                      })}
+                      {editErr && (
+                        <div className="muted" style={{ fontSize: 11.5 }}>{editErr}</div>
+                      )}
+                    </div>
                   ) : (
-                    <div>{suggestions[0].text}</div>
+                    <div>{draftEdits?.text ?? suggestions[0].text}</div>
                   )}
-                  {!draftSent && (suggestions[0].payload?.widgets?.length ?? 0) > 0 && (
+                  {!draftSent && !draftEditing && (suggestions[0].payload?.widgets?.length ?? 0) > 0 && (
                     <div style={{ marginTop: 6 }}>
                       <Widgets
-                        widgets={suggestions[0].payload!.widgets as ChatWidget[]}
+                        widgets={(suggestions[0].payload!.widgets as ChatWidget[]).map(
+                          (w, wi) => (draftEdits?.widgets?.[wi] as ChatWidget | undefined) ?? w,
+                        )}
                         onSend={() => {}}
                       />
                       {/* Wiring check — what each staged component actually
@@ -2060,7 +2171,13 @@ export default function ConversationPage() {
                       {suggestions[0].payload!.widgets!.map((_w, wi) => {
                         const ref = (suggestions[0].payload as { widget_refs?: (string | null)[] })
                           ?.widget_refs?.[wi];
-                        if (!ref) return null;
+                        if (!ref) {
+                          return (_w as { type?: string }).type === 'form' ? (
+                            <div key={wi} className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                              inline form — answers arrive as a message, nothing saves them
+                            </div>
+                          ) : null;
+                        }
                         const saved = agentWidgets?.widgets.find(
                           (x) => x.name.toLowerCase().replace(/[\s_-]+/g, '-') === ref,
                         );
@@ -2213,7 +2330,7 @@ export default function ConversationPage() {
               )}
               <div className="draft-foot">
               <div className="row" style={{ marginTop: 10 }}>
-                {!draftSent && (
+                {!draftSent && !draftEditing && (
                 <button
                   className="btn primary"
                   disabled={
@@ -2224,8 +2341,10 @@ export default function ConversationPage() {
                   onClick={() => {
                     const s = suggestions[0];
                     send([], undefined, {
-                      text: s.text,
-                      ...(s.payload?.widgets?.length ? { widgets: s.payload.widgets } : {}),
+                      text: draftEdits?.text ?? s.text,
+                      ...(s.payload?.widgets?.length
+                        ? { widgets: s.payload.widgets.map((w, i) => draftEdits?.widgets?.[i] ?? w) }
+                        : {}),
                       ...(s.payload?.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
                     });
                     const undecided = (s.payload?.proposed_actions ?? []).some(
@@ -2245,25 +2364,49 @@ export default function ConversationPage() {
                   Send
                 </button>
                 )}
-                {!draftSent && (
+                {!draftSent && draftEditing && (
                 <button
-                  className="btn"
-                  disabled={!(suggestions?.length > 0) || !!suggestions[0].payload?.empty_draft}
-                  title="Edit the text in the composer before sending — components stay attached"
+                  className="btn primary"
+                  disabled={
+                    !(suggestions?.length > 0) ||
+                    !!suggestions[0].payload?.empty_draft ||
+                    outbox.some((o) => o.status === 'pending')
+                  }
                   onClick={() => {
                     const s = suggestions[0];
-                    setDraft(s.text);
-                    if (s.payload?.widgets?.length || s.payload?.buttons?.length) {
-                      setPendingComponents({
-                        ...(s.payload.widgets?.length ? { widgets: s.payload.widgets } : {}),
-                        ...(s.payload.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
-                      });
+                    const parsed: Record<number, unknown> = {};
+                    for (const [k, v] of Object.entries(editWidgets)) {
+                      if (!v.trim()) continue;
+                      try {
+                        parsed[Number(k)] = JSON.parse(v);
+                      } catch {
+                        setEditErr(`component ${Number(k) + 1}: invalid JSON — fix or clear it`);
+                        return;
+                      }
                     }
-                    suggestionStatus.mutate({ sid: s.id, status: 'used' });
-                    setSuggestOpen(false);
+                    send([], undefined, {
+                      text: editText,
+                      ...(s.payload?.widgets?.length
+                        ? { widgets: s.payload.widgets.map((w, i) => parsed[i] ?? w) }
+                        : {}),
+                      ...(s.payload?.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
+                    });
+                    setDraftEdits(null);
+                    setDraftEditing(false);
+                    setEditErr('');
+                    const undecided = (s.payload?.proposed_actions ?? []).some(
+                      (a, i) => !actionResults[i] && !a.status,
+                    );
+                    if (undecided) {
+                      setDraftSent(true);
+                    } else {
+                      suggestionStatus.mutate({ sid: s.id, status: 'used' });
+                      setSuggestOpen(false);
+                      setDraftSent(false);
+                    }
                   }}
                 >
-                  Edit
+                  Send edits
                 </button>
                 )}
                 {!draftSent && (
