@@ -16,6 +16,7 @@ import { usePanelWidth, storedPanelWidth } from '../lib/panelLayout';
 import { ALERT_LABELS } from '../components/Layout';
 import { janisBrain } from '../lib/agentContext';
 import { typingBus, presenceBus } from '../lib/typingBus';
+import { railBus } from '../lib/railBus';
 import { splitBlocks } from '../lib/richText';
 import { usePageTitle } from '../lib/title';
 import { useConfirm } from '../components/Prompt';
@@ -750,16 +751,22 @@ export default function ConversationPage() {
     suggest.mutate(undefined);
   };
 
-  // Guided draft — the guide input's submit. Replaces whatever suggestion
-  // tops the card; while the stale row still leads the list the card stays
-  // on Thinking (replacedSid).
+  // Guided draft — the guide input's submit. A real instruction goes to
+  // the concierge, which builds the procedure conversationally (inline
+  // components, tool wiring, chained asks) and stages the result back
+  // onto this card via stage_reply. No guide = fast one-shot /suggest.
   const guidedSuggest = () => {
     const instruction = guide.trim();
-    if (suggest.isPending) return;
-    setReplacedSid(data?.suggestions?.[0]?.id ?? null);
-    setDraftSent(false);
-    setActionResults({});
-    suggest.mutate(instruction || undefined);
+    if (!instruction) {
+      if (suggest.isPending) return;
+      setReplacedSid(data?.suggestions?.[0]?.id ?? null);
+      setDraftSent(false);
+      setActionResults({});
+      suggest.mutate(undefined);
+      return;
+    }
+    railBus.publish({ channelId: '', label: 'Copilot', seed: instruction });
+    window.dispatchEvent(new CustomEvent('janis:open-copilot'));
   };
 
   const saveTest = useMutation({
