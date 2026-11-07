@@ -1917,14 +1917,24 @@ export function extractWidgets(text: string): {
     let m = ref ? null : tail.match(WIDGET_LINE);
     let end = i;
     // Pretty-printed directive — keep absorbing lines while the JSON
-    // payload is unterminated (a blank line, a fresh directive or the cap
-    // ends an abandoned block). Runs even when m matched "WIDGET: {" alone.
+    // payload is unterminated or hasn't started ("WIDGET:" alone, then a
+    // ```json fence or the { on the next line). A blank line only ends the
+    // block when no { has appeared — inside the payload it's legal
+    // formatting, not the end of the spec.
     while (
       !ref &&
-      jsonOpen(tail) &&
+      (jsonOpen(tail) || (m != null && !m[1].includes('{'))) &&
       end + 1 < lines.length &&
       end - i < 50 &&
-      lines[end + 1].trim() !== '' &&
+      // A blank line only keeps the block open when we're inside a payload
+      // ({ seen) AND the next non-blank line still looks like JSON —
+      // a blank followed by prose ends an abandoned block and the prose
+      // must survive as draft text.
+      (lines[end + 1].trim() !== '' ||
+        (tail.includes('{') &&
+          /^["'{\][,\d-]/.test(
+            lines.slice(end + 2).find((l) => l.trim())?.trim() ?? '',
+          ))) &&
       !/\bWIDGET(?:_REF)?:/i.test(lines[end + 1])
     ) {
       end++;
