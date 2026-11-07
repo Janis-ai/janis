@@ -916,7 +916,15 @@ function SpecEditor({ spec, onChange }: { spec: ChatWidget; onChange: (s: ChatWi
                 <Field label="label"><input className="input" style={inputStyle} value={f.label} onChange={(e) => set({ ...f, label: e.target.value })} placeholder="Email" /></Field>
                 <Field label="type">
                   <select className="input" style={inputStyle} value={f.type} onChange={(e) => set({ ...f, type: e.target.value as typeof f.type })}>
-                    {['text', 'email', 'tel', 'textarea', 'select', 'radio', 'multiselect'].map((t) => <option key={t} value={t}>{t}</option>)}
+                    {[
+                      ['text', 'text'],
+                      ['email', 'email'],
+                      ['tel', 'phone'],
+                      ['textarea', 'long text'],
+                      ['select', 'dropdown — one pick'],
+                      ['radio', 'radio buttons — one pick'],
+                      ['multiselect', 'checkboxes — multiple picks'],
+                    ].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                   </select>
                 </Field>
                 {(f.type === 'select' || f.type === 'multiselect' || f.type === 'radio') && (
