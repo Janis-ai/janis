@@ -1761,8 +1761,16 @@ export function CollectSection({
                   value={fd.type ?? 'text'}
                   onChange={(e) => setField(fi, i, { type: e.target.value as CollectField['type'] })}
                 >
-                  {(['text', 'email', 'tel', 'textarea', 'select'] as const).map((t) => (
-                    <option key={t} value={t}>{t}</option>
+                  {([
+                    ['text', 'text'],
+                    ['email', 'email'],
+                    ['tel', 'phone'],
+                    ['textarea', 'long text'],
+                    ['select', 'dropdown — one pick'],
+                    ['radio', 'radio buttons — one pick'],
+                    ['multiselect', 'checkboxes — multiple picks'],
+                  ] as const).map(([v, l]) => (
+                    <option key={v} value={v}>{l}</option>
                   ))}
                 </select>
                 <label className="check-label" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
@@ -1783,9 +1791,9 @@ export function CollectSection({
                 </button>
               </div>
             ))}
-            {f.fields.some((fd) => fd.type === 'select') &&
+            {f.fields.some((fd) => fd.type === 'select' || fd.type === 'multiselect' || fd.type === 'radio') &&
               f.fields.map((fd, i) =>
-                fd.type === 'select' ? (
+                fd.type === 'select' || fd.type === 'multiselect' || fd.type === 'radio' ? (
                   <input
                     key={`opts-${i}`}
                     placeholder={`Options for "${fd.name || 'select'}" — comma separated`}
