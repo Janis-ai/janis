@@ -649,6 +649,9 @@ export default function ConversationPage() {
   // the card itself (never pushed into the reply composer).
   const [draftEditing, setDraftEditing] = useState(false);
   const [editText, setEditText] = useState('');
+  // The draft's instruction — editable inline on the card; refresh drafts
+  // from it (blank falls back to the prompt that produced this draft).
+  const [instr, setInstr] = useState<string | null>(null);
   const [editWidgets, setEditWidgets] = useState<Record<number, string>>({});
   const [editErr, setEditErr] = useState('');
   const [draftEdits, setDraftEdits] = useState<{
@@ -672,6 +675,7 @@ export default function ConversationPage() {
     setDraftEditing(false);
     setDraftEdits(null);
     setEditErr('');
+    setInstr(null);
     if (topSuggestionId) setRoutedToCopilot(false);
   }, [topSuggestionId]);
   // Conversation switch — the page stays mounted, so every piece of
@@ -2095,12 +2099,38 @@ export default function ConversationPage() {
                 <div className="muted">Drafting…</div>
               ) : suggestions?.length > 0 ? (
                 <>
-                  <div className="muted" style={{ marginBottom: 6 }}>
-                    <span className="draft-tag">draft</span> Suggested (
-                    {suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
-                    {suggestions[0].payload?.instruction
-                      ? ` — “${suggestions[0].payload.instruction}”`
-                      : ''}
+                  <div className="muted" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                    <span>
+                      <span className="draft-tag">draft</span> Suggested (
+                      {suggestions[0].source === 'agent' ? 'your agent' : 'AI'}) —
+                    </span>
+                    <input
+                      value={instr ?? (suggestions[0].payload?.instruction as string | undefined) ?? ''}
+                      onChange={(e) => setInstr(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          setReplacedSid(suggestions?.[0]?.id ?? null);
+                          setDraftSent(false);
+                          setActionResults({});
+                          setLastInstruction((instr ?? '').trim() || null);
+                          suggest.mutate((instr ?? '').trim() || undefined);
+                        }
+                      }}
+                      placeholder="no prompt — drafted from context"
+                      title="The prompt behind this draft — edit it and hit Enter (or ↻) to redraft"
+                      style={{
+                        flex: 1,
+                        minWidth: 120,
+                        border: 'none',
+                        background: 'transparent',
+                        color: 'inherit',
+                        font: 'inherit',
+                        fontStyle: 'italic',
+                        borderBottom: '1px dashed var(--border)',
+                        padding: '0 2px',
+                      }}
+                    />
                   </div>
                   {suggestions[0].notes && (
                     <div className="muted" style={{ fontStyle: 'italic', marginBottom: 6 }}>
@@ -2474,12 +2504,15 @@ export default function ConversationPage() {
                   aria-label="Try another suggestion"
                   disabled={suggest.isPending}
                   onClick={() => {
-                    // Re-draft blind from context — guidance goes through the
-                    // composer's "Draft a reply with AI" popover now.
+                    // Re-draft with the same prompt — the instruction input
+                    // on the card may have been edited; fall back to the one
+                    // that produced this draft.
+                    const g = (instr ?? (suggestions[0].payload?.instruction as string | undefined) ?? '').trim();
                     setReplacedSid(suggestions?.[0]?.id ?? null);
                     setDraftSent(false);
                     setActionResults({});
-                    suggest.mutate(undefined);
+                    setLastInstruction(g || null);
+                    suggest.mutate(g || undefined);
                   }}
                 >
                   <RefreshCw size={13} />
