@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { BrandImg, SiteFooter } from '../components/bits';
 
-const PRIVACY = `Last updated: September 2026
+const PRIVACY = `Last updated: November 2026
 
 Janis ("we", "us") provides tools that let businesses monitor AI agents and hand conversations to human operators. This policy describes what we collect and how it's used.
 
