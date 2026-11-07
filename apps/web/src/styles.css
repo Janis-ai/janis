@@ -1495,7 +1495,8 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    it reads as editable without clicking; grows with content (JS sets the
    height), scrolls past the cap. */
 .draft-inst {
-  width: 100%; box-sizing: border-box; resize: none;
+  flex: 1 1 0%; min-width: 0; width: 100%;
+  box-sizing: border-box; resize: none;
   font-size: 12.5px; line-height: 1.4; padding: 7px 10px;
   background: var(--panel-2); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px;

@@ -2116,29 +2116,49 @@ export default function ConversationPage() {
                     <span className="draft-tag">draft</span> Suggested (
                     {suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
                   </div>
-                  <textarea
-                    ref={instrRef}
-                    className="draft-inst"
-                    rows={1}
-                    value={instrValue}
-                    onChange={(e) => setInstr(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        const g = instrValue.trim();
-                        setReplacedSid(suggestions?.[0]?.id ?? null);
-                        setDraftSent(false);
-                        setActionResults({});
-                        setLastInstruction(g || null);
-                        suggest.mutate(g || undefined);
-                      }
-                    }}
-                    placeholder="blank — drafted from conversation context"
-                    title="The prompt behind this draft — edit it, then Enter or ↻ to redraft (Shift+Enter for a new line)"
-                    aria-label="Draft prompt"
-                  />
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
+                    <textarea
+                      ref={instrRef}
+                      className="draft-inst"
+                      rows={1}
+                      value={instrValue}
+                      onChange={(e) => setInstr(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          const g = instrValue.trim();
+                          setReplacedSid(suggestions?.[0]?.id ?? null);
+                          setDraftSent(false);
+                          setActionResults({});
+                          setLastInstruction(g || null);
+                          suggest.mutate(g || undefined);
+                        }
+                      }}
+                      placeholder="blank — drafted from conversation context"
+                      title="The prompt behind this draft — edit it, then Enter or ↻ to redraft (Shift+Enter for a new line)"
+                      aria-label="Draft prompt"
+                    />
+                    {!draftSent && (
+                      <button
+                        className="btn icon"
+                        title="Redraft with this prompt"
+                        aria-label="Redraft with this prompt"
+                        disabled={suggest.isPending}
+                        onClick={() => {
+                          const g = instrValue.trim();
+                          setReplacedSid(suggestions?.[0]?.id ?? null);
+                          setDraftSent(false);
+                          setActionResults({});
+                          setLastInstruction(g || null);
+                          suggest.mutate(g || undefined);
+                        }}
+                      >
+                        <RefreshCw size={13} />
+                      </button>
+                    )}
+                  </div>
                   <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
-                    prompt — edit, then Enter or ↻ to redraft (Shift+Enter for a new line)
+                    draft prompt — Enter or ↻ to redraft · Shift+Enter for a new line
                   </div>
                   {suggestions[0].notes && (
                     <div className="muted" style={{ fontStyle: 'italic', marginBottom: 6 }}>
@@ -2503,27 +2523,6 @@ export default function ConversationPage() {
                   }}
                 >
                   Send edits
-                </button>
-                )}
-                {!draftSent && (
-                <button
-                  className="btn icon"
-                  title="Try another suggestion"
-                  aria-label="Try another suggestion"
-                  disabled={suggest.isPending}
-                  onClick={() => {
-                    // Re-draft with the same prompt — the instruction field
-                    // on the card may have been edited; fall back to the one
-                    // that produced this draft.
-                    const g = instrValue.trim();
-                    setReplacedSid(suggestions?.[0]?.id ?? null);
-                    setDraftSent(false);
-                    setActionResults({});
-                    setLastInstruction(g || null);
-                    suggest.mutate(g || undefined);
-                  }}
-                >
-                  <RefreshCw size={13} />
                 </button>
                 )}
                 <button
