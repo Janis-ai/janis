@@ -364,6 +364,16 @@ function Composer({
   const [submitArgs, setSubmitArgs] = useState<Record<string, string>>(() => ({
     ...(initSubmit?.args ?? {}),
   }));
+  // Read-side arg mapping per param — tool.args maps a ref-data KEY to
+  // the param it feeds, so the UI inverts it: value = the key the agent
+  // passes. Blank = "supplied by its own name" (identity, omitted).
+  const [readArgs, setReadArgs] = useState<Record<string, string>>(() => {
+    const inv: Record<string, string> = {};
+    if (!boundIsWrite)
+      for (const [k, p] of Object.entries(initial?.tool?.args ?? {}))
+        if (k !== p) inv[p] = k;
+    return inv;
+  });
   // "Browse…" pick list for an id param (spreadsheet_id ← gsheets_list
   // and friends) — {rows, param} while open.
   const [browse, setBrowse] = useState<{ rows: { id: string; label: string }[]; param: string } | null>(null);
@@ -407,6 +417,14 @@ function Composer({
       } catch {
         return { tool: null, err: 'tool mapping is not valid JSON' };
       }
+      // Per-param arg inputs win over the JSON's args key — a typed key
+      // renames that param's ref data; blanks keep whatever JSON says.
+      const argMap = { ...(extra.args as Record<string, string> | undefined) };
+      for (const [param, key] of Object.entries(readArgs)) {
+        const k = key.trim();
+        if (k && k !== param) argMap[k] = param;
+      }
+      if (Object.keys(argMap).length) extra.args = argMap;
     }
     // Blank arg values drop out — a `values` arg left empty is what makes
     // the submit write the form's fields in order.
@@ -628,67 +646,91 @@ function Composer({
                 ))}
               </select>
             </Field>
-            {toolName && (
-              <Field label="mapping JSON">
-                <textarea
-                  className="input"
-                  style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
-                  rows={3}
-                  value={toolCfg}
-                  onChange={(e) => setToolCfg(e.target.value)}
-                  placeholder={mappingExample(spec.type)}
-                />
-              </Field>
-            )}
           </div>
-          {toolName && (
-            <div className="muted mono" style={{ fontSize: 11 }}>
-              {'{"args":{},"props":{},"items":"rows.path","item_map":{}}'}
-              {LIST_FIELD_LABEL[spec.type] ? ` — rows fill ${LIST_FIELD_LABEL[spec.type]}` : ' — scalar props only'}
-            </div>
-          )}
           {toolName &&
             (() => {
-              const params = Object.keys(tools.find((t) => t.name === toolName)?.params ?? {});
-              return params.length ? (
-                <div className="muted" style={{ fontSize: 11.5 }}>
-                  takes args: <span className="mono">{params.join(', ')}</span> — the agent
-                  supplies them in the ref data (rename via {'"args"'} in the mapping)
+              // Per-param arg inputs — Zapier-style inferred-but-editable:
+              // blank means "the agent supplies <param> by that name"; a
+              // typed key renames the ref data feeding it. props/items/
+              // item_map stay in the collapsed mapping JSON.
+              const params = tools.find((t) => t.name === toolName)?.params ?? {};
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {Object.keys(params).map((k) => (
+                    <Field key={k} label={k}>
+                      <input
+                        className="input"
+                        style={inputStyle}
+                        value={readArgs[k] ?? ''}
+                        onChange={(e) => setReadArgs({ ...readArgs, [k]: e.target.value })}
+                        placeholder={`agent supplies "${k}"`}
+                      />
+                    </Field>
+                  ))}
+                  {Object.keys(params).length > 0 && (
+                    <div className="muted" style={{ fontSize: 11.5 }}>
+                      blank — the agent supplies each arg by name; type a key to rename what feeds it
+                    </div>
+                  )}
+                  <details>
+                    <summary className="muted" style={{ fontSize: 11.5, cursor: 'pointer' }}>
+                      advanced — result mapping (JSON): props, rows path, row fields
+                    </summary>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                      <Field label="mapping JSON">
+                        <textarea
+                          className="input"
+                          style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
+                          rows={3}
+                          value={toolCfg}
+                          onChange={(e) => setToolCfg(e.target.value)}
+                          placeholder={mappingExample(spec.type)}
+                        />
+                      </Field>
+                      <div className="muted mono" style={{ fontSize: 11 }}>
+                        {'{"args":{},"props":{},"items":"rows.path","item_map":{}}'}
+                        {LIST_FIELD_LABEL[spec.type] ? ` — rows fill ${LIST_FIELD_LABEL[spec.type]}` : ' — scalar props only'}
+                      </div>
+                    </div>
+                  </details>
+                  <details>
+                    <summary className="muted" style={{ fontSize: 11.5, cursor: 'pointer' }}>
+                      test — run the bound tool once to see what it fills
+                    </summary>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                      <div className="row" style={{ alignItems: 'flex-end' }}>
+                        <Field label="sample values — the JSON the agent passes in the ref">
+                          <input
+                            className="input"
+                            style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
+                            value={testData}
+                            onChange={(e) => setTestData(e.target.value)}
+                            placeholder='{"order_id":"#1234"}'
+                          />
+                        </Field>
+                        <button className="btn" disabled={testBusy} onClick={runTest}>
+                          {testBusy ? 'Running…' : 'Run with real data'}
+                        </button>
+                      </div>
+                      {testOut?.error && <div className="error">{testOut.error}</div>}
+                      {testOut && !testOut.error && !testOut.widget && (
+                        <div className="error">resolved to nothing — check the mapping and required props</div>
+                      )}
+                      {testOut?.tool_result !== undefined && (
+                        <details>
+                          <summary className="muted" style={{ fontSize: 11.5, cursor: 'pointer' }}>
+                            raw tool result{testOut.tool_args ? ` — args ${JSON.stringify(testOut.tool_args)}` : ''}
+                          </summary>
+                          <pre className="card" style={{ padding: 8, fontSize: 11, overflow: 'auto', maxHeight: 220, whiteSpace: 'pre-wrap' }}>
+                            {prettyJson(testOut.tool_result)}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
+                  </details>
                 </div>
-              ) : null;
+              );
             })()}
-          {toolName && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div className="row" style={{ alignItems: 'flex-end' }}>
-                <Field label="test data — the ref JSON the agent would pass">
-                  <input
-                    className="input"
-                    style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
-                    value={testData}
-                    onChange={(e) => setTestData(e.target.value)}
-                    placeholder='{"order_id":"#1234"}'
-                  />
-                </Field>
-                <button className="btn" disabled={testBusy} onClick={runTest}>
-                  {testBusy ? 'Running…' : 'Run with real data'}
-                </button>
-              </div>
-              {testOut?.error && <div className="error">{testOut.error}</div>}
-              {testOut && !testOut.error && !testOut.widget && (
-                <div className="error">resolved to nothing — check the mapping and required props</div>
-              )}
-              {testOut?.tool_result !== undefined && (
-                <details>
-                  <summary className="muted" style={{ fontSize: 11.5, cursor: 'pointer' }}>
-                    raw tool result{testOut.tool_args ? ` — args ${JSON.stringify(testOut.tool_args)}` : ''}
-                  </summary>
-                  <pre className="card" style={{ padding: 8, fontSize: 11, overflow: 'auto', maxHeight: 220, whiteSpace: 'pre-wrap' }}>
-                    {prettyJson(testOut.tool_result)}
-                  </pre>
-                </details>
-              )}
-            </div>
-          )}
         </div>
   );
   const submitSection = spec.type === 'form' && tools.length > 0 && (
@@ -735,7 +777,11 @@ function Composer({
                           value={submitArgs[k] ?? ''}
                           onChange={(e) => setSubmitArgs({ ...submitArgs, [k]: e.target.value })}
                           placeholder={
-                            k === 'values' ? '[["{name}","{email}"]] — only to reorder columns' : params[k]
+                            k === 'values'
+                              ? `[["${(spec.fields ?? [])
+                                  .map((f) => `{${f.name || '?'}}`)
+                                  .join('","')}"]] — blank appends these fields`
+                              : params[k]
                           }
                         />
                       </Field>
@@ -753,7 +799,7 @@ function Composer({
                   ))}
                   <div className="muted" style={{ fontSize: 11.5 }}>
                     <span className="mono">{'{field_name}'}</span> inserts the visitor's answer for
-                    that field — blank args are dropped
+                    that field — blank args use defaults (range → A1, values → your fields in order)
                   </div>
                 </div>
               );

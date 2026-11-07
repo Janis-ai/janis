@@ -90,6 +90,11 @@ export function submitToolArgs(
       }
     }
   }
+  // A blank/missing range anchors at A1 — Sheets finds the table there
+  // and appends after its last row. It sits in the URL path, so empty
+  // would 404 rather than mean "anywhere".
+  if (toolParams && 'range' in toolParams && !String(args.range ?? '').trim())
+    args.range = 'A1';
   return args;
 }
 type ConvRow = typeof conversations.$inferSelect;
