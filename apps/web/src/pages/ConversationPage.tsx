@@ -1118,6 +1118,18 @@ export default function ConversationPage() {
       let bind = spec.tool && typeof spec.tool === 'object' ? (spec.tool as Record<string, unknown>) : undefined;
       if (!bind && spec.submit) bind = { submit: spec.submit };
       if (bind && (bind.submit || bind.name)) {
+        // Blank args are "fill me" — saving now would wire a tool that
+        // fails on every submit. Block until the operator fills them.
+        const empties = [
+          ...Object.entries((bind.args ?? {}) as Record<string, string>),
+          ...Object.entries(((bind.submit as { args?: Record<string, string> } | undefined)?.args ?? {}) as Record<string, string>),
+        ]
+          .filter(([, v]) => !String(v).trim())
+          .map(([k]) => k);
+        if (empties.length) {
+          setEditErr(`component ${i + 1}: fill in ${empties.join(', ')} — a blank arg can't save`);
+          return null;
+        }
         const { tool: _tool, submit: _sub, ...clean } = spec;
         const base = String(
           refs?.[i] ?? (clean.title as string | undefined) ?? (clean.type as string | undefined) ?? 'component',
@@ -2211,10 +2223,27 @@ export default function ConversationPage() {
                           setEditText(draftEdits?.text ?? s.text);
                           setEditWidgets(
                             Object.fromEntries(
-                              (s.payload?.widgets ?? []).map((w, i) => [
-                                i,
-                                JSON.stringify(draftEdits?.widgets?.[i] ?? w, null, 1),
-                              ]),
+                              (s.payload?.widgets ?? []).map((w, i) => {
+                                // A pending binding (model emitted blank
+                                // args) rides back into the editor inside
+                                // the spec — the operator fills the blanks
+                                // and Send edits saves it as a real bound
+                                // component.
+                                const bind = (
+                                  s.payload as {
+                                    widget_binds?: ({ binding?: unknown } | null)[];
+                                  }
+                                )?.widget_binds?.[i]?.binding;
+                                const spec = draftEdits?.widgets?.[i] ?? w;
+                                return [
+                                  i,
+                                  JSON.stringify(
+                                    bind ? { ...(spec as object), tool: bind } : spec,
+                                    null,
+                                    1,
+                                  ),
+                                ];
+                              }),
                             ),
                           );
                           setEditErr('');
@@ -2300,6 +2329,18 @@ export default function ConversationPage() {
                         const ref = (suggestions[0].payload as { widget_refs?: (string | null)[] })
                           ?.widget_refs?.[wi];
                         if (!ref) {
+                          const pending = (
+                            suggestions[0].payload as {
+                              widget_binds?: ({ missing?: string[] } | null)[];
+                            }
+                          )?.widget_binds?.[wi];
+                          if (pending?.missing?.length) {
+                            return (
+                              <div key={wi} className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                                saves submissions — needs {pending.missing.join(', ')} (fill in Edit)
+                              </div>
+                            );
+                          }
                           const lifted = agentWidgets?.widgets.find(
                             (x) => x.name === (_w as { collect?: string }).collect,
                           );
