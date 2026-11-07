@@ -622,6 +622,16 @@ export default function ConversationPage() {
   // return form". Rides /suggest as `instruction`; the landed suggestion
   // echoes it back via payload.instruction.
   const [guide, setGuide] = useState('');
+  const guideRef = useRef<HTMLTextAreaElement>(null);
+  // Autosize like the composer — a pasted multi-line brief shouldn't
+  // collapse into a one-line scroll.
+  useEffect(() => {
+    const t = guideRef.current;
+    if (!t) return;
+    t.style.height = 'auto';
+    t.style.height = Math.min(t.scrollHeight, 120) + 'px';
+    t.style.overflowY = t.scrollHeight > 120 ? 'auto' : 'hidden';
+  }, [guide]);
   // Components a used suggestion carries — ride along on the next reply
   // send, dismissed with ✕ or consumed on success.
   const [pendingComponents, setPendingComponents] = useState<{
@@ -2174,18 +2184,20 @@ export default function ConversationPage() {
               <div className="muted">Thinking…</div>
             )}
             {!draftSent && (
-              <div className="row" style={{ marginTop: 10, gap: 6 }}>
-                <input
+              <div className="row" style={{ marginTop: 10, gap: 6, alignItems: 'flex-end' }}>
+                <textarea
+                  ref={guideRef}
+                  rows={1}
                   value={guide}
                   onChange={(e) => setGuide(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
+                    if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
                       guidedSuggest();
                     }
                   }}
                   placeholder="Guide the draft — e.g. “offer 10% off and include the return form”"
-                  style={{ flex: 1 }}
+                  style={{ flex: 1, resize: 'none' }}
                 />
                 <button
                   className="btn sm"
