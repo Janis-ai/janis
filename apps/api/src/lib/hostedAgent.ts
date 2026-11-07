@@ -922,6 +922,17 @@ export function systemPrompt(
       `\nThis visitor is NOT signed in to Janis — workspace-bound tools (create_agent, change_plan, inspect_agent, account/plan lookups) fail for them. Do not offer to create or change agents, channels, plans or workspaces, and do not ask which workspace to use — point them to sign up or sign in at ${env.webOrigin}/login first (the free plan takes a minute); you can do the setup for them once they are signed in. Escalating to a human is not workspace-bound — flag the conversation normally.`,
     );
   }
+  // The concierge's tool docs carry machine syntax it keeps quoting back at
+  // the operator — replies must read like a person, not the protocol.
+  if (
+    env.operatorWorkspaceId &&
+    agent.workspaceId === env.operatorWorkspaceId &&
+    !opts.forSuggestion
+  ) {
+    parts.push(
+      '\nNever narrate machine syntax in your replies — no tool names, WIDGET_REF, WIDGET:, BUTTON:, [END_CHAT], or JSON args. Refer to things in plain language ("the survey form", "the order-lookup tool is called when I look one up" → just "I can look up orders"). Tool results are private notes to you — relay their substance, not their wording.',
+    );
+  }
   // Mirror-image for signed-in operators: their plan is verified context,
   // so plan/billing questions answer from it instead of being asked.
   if (

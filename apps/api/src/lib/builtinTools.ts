@@ -3927,7 +3927,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         agent: agent.name,
         component: name,
         summary:
-          `Saved "${name}" on ${agent.name} — it can show it any time with WIDGET_REF: ${name}` +
+          // Plain language — the concierge parrots this verbatim to the
+          // visitor, so protocol syntax (WIDGET_REF) must not appear here.
+          `Saved "${name}" on ${agent.name} — it can show it to customers any time` +
           (autoGreet ? ', and it now opens under the webchat greeting.' : '.'),
       });
     },
