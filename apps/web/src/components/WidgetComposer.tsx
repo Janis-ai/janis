@@ -322,10 +322,12 @@ function Composer({
     return Object.keys(rest).length ? JSON.stringify(rest) : '';
   });
   const [submitName, setSubmitName] = useState(initSubmit?.name ?? '');
-  const [submitCfg, setSubmitCfg] = useState(() => {
-    const a = initSubmit?.args;
-    return a && Object.keys(a).length ? JSON.stringify(a) : '';
-  });
+  // Submit args as a plain record — one input per tool param, no JSON for
+  // the builder to get wrong (a hand-edited blob is how stray quotes and
+  // brackets used to leak into sheet cells).
+  const [submitArgs, setSubmitArgs] = useState<Record<string, string>>(() => ({
+    ...(initSubmit?.args ?? {}),
+  }));
   // "Browse…" pick list for an id param (spreadsheet_id ← gsheets_list
   // and friends) — {rows, param} while open.
   const [browse, setBrowse] = useState<{ rows: { id: string; label: string }[]; param: string } | null>(null);
@@ -370,16 +372,11 @@ function Composer({
         return { tool: null, err: 'tool mapping is not valid JSON' };
       }
     }
-    let submitArgs: Record<string, string> | undefined;
-    if (submitCfg.trim()) {
-      try {
-        const parsed: unknown = JSON.parse(submitCfg);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
-        submitArgs = parsed as Record<string, string>;
-      } catch {
-        return { tool: null, err: 'submit args are not valid JSON' };
-      }
-    }
+    // Blank arg values drop out — a `values` arg left empty is what makes
+    // the submit write the form's fields in order.
+    const cleanArgs = Object.fromEntries(
+      Object.entries(submitArgs).filter(([k, v]) => k.trim() && v.trim()),
+    );
     if (!toolName && toolCfg.trim())
       return { tool: null, err: 'mapping JSON needs a bound tool — pick one or clear the box' };
     if (!toolName && !submitName) return { tool: null };
@@ -390,7 +387,12 @@ function Composer({
         ...(toolName ? { name: toolName } : {}),
         ...(extra as Omit<WidgetToolBinding, 'name' | 'submit'>),
         ...(submitName
-          ? { submit: { name: submitName, ...(submitArgs ? { args: submitArgs } : {}) } }
+          ? {
+              submit: {
+                name: submitName,
+                ...(Object.keys(cleanArgs).length ? { args: cleanArgs } : {}),
+              },
+            }
           : {}),
       },
     };
@@ -442,11 +444,7 @@ function Composer({
 
   const pickBrowse = (id: string) => {
     if (!browse) return;
-    let cur: Record<string, unknown> = {};
-    try {
-      cur = JSON.parse(submitCfg || '{}');
-    } catch {}
-    setSubmitCfg(JSON.stringify({ ...cur, [browse.param]: id }));
+    setSubmitArgs({ ...submitArgs, [browse.param]: id });
     setBrowse(null);
   };
 
@@ -676,46 +674,51 @@ function Composer({
                 ))}
               </select>
             </Field>
-            {submitName && (
-              <Field label="submit args JSON — {field_name} interpolates the posted value">
-                <textarea
-                  className="input"
-                  style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
-                  rows={3}
-                  value={submitCfg}
-                  onChange={(e) => setSubmitCfg(e.target.value)}
-                  placeholder='{"spreadsheet_id":"…","range":"Sheet1!A1"}'
-                />
-              </Field>
-            )}
           </div>
+          {/* One input per declared arg — no JSON to get wrong. `values`
+              stays blank: the submit then writes the form's fields in
+              order, which IS the 1:1 append. */}
           {submitName &&
             (() => {
-              const params = Object.keys(
-                tools.find((t) => t.name === submitName)?.params ?? {},
-              );
-              const idParams = params.filter((p) => /(^id$|_id$)/.test(p));
+              const params = tools.find((t) => t.name === submitName)?.params ?? {};
+              const argKeys = [...new Set([...Object.keys(params), ...Object.keys(submitArgs)])];
               const listTool = listToolFor(submitName);
               return (
-                <div className="muted" style={{ fontSize: 11.5 }}>
-                  {params.length > 0 && (
-                    <>
-                      takes args: <span className="mono">{params.join(', ')}</span>
-                      {params.includes('values') &&
-                        ' — a "values" arg left unset defaults to a row of the fields in order'}
-                    </>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {!argKeys.length && (
+                    <div className="muted" style={{ fontSize: 11.5 }}>
+                      this tool takes no args — it runs as-is
+                    </div>
                   )}
-                  {listTool &&
-                    idParams.map((p) => (
-                      <button
-                        key={p}
-                        className="btn"
-                        style={{ fontSize: 11, padding: '1px 8px', marginLeft: 6 }}
-                        onClick={() => void openBrowse(p)}
-                      >
-                        {p}…
-                      </button>
-                    ))}
+                  {argKeys.map((k) => (
+                    <div className="row" style={{ alignItems: 'flex-end' }} key={k}>
+                      <Field label={k === 'values' ? 'values — blank appends your fields in order' : k}>
+                        <input
+                          className="input"
+                          style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
+                          value={submitArgs[k] ?? ''}
+                          onChange={(e) => setSubmitArgs({ ...submitArgs, [k]: e.target.value })}
+                          placeholder={
+                            k === 'values' ? '[["{name}","{email}"]] — only to reorder columns' : params[k]
+                          }
+                        />
+                      </Field>
+                      {listTool && /(^id$|_id$)/.test(k) && (
+                        <button
+                          className="btn"
+                          style={{ fontSize: 11.5 }}
+                          title={`Pick a value for ${k}`}
+                          onClick={() => void openBrowse(k)}
+                        >
+                          browse…
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                  <div className="muted" style={{ fontSize: 11.5 }}>
+                    <span className="mono">{'{field_name}'}</span> inserts the visitor's answer for
+                    that field — blank args are dropped
+                  </div>
                 </div>
               );
             })()}

@@ -57,6 +57,29 @@ describe('submitToolArgs', () => {
     expect(JSON.parse(String(args.values))).toEqual([['Brie', 'soft']]);
   });
 
+  it('a single-quoted cell-list template fills each cell', () => {
+    // Prod bug: the concierge saved "[['{a}','{b}']]" — filled to
+    // "[['\"5\"','\"black\"']]", not JSON, and the comma-split fallback
+    // wrote the literal cells "[['5'" and "black']]" into the sheet.
+    const args = submitToolArgs(
+      { name: 'gsheets_append', args: { values: "[['{cheese}','{notes}']]", spreadsheet_id: 'sid' } },
+      formSpec,
+      { cheese: '5', notes: 'black' },
+      { values: 'x' },
+    );
+    expect(JSON.parse(String(args.values))).toEqual([['5', 'black']]);
+  });
+
+  it('a quoted one-row template fills each cell', () => {
+    const args = submitToolArgs(
+      { name: 'gsheets_append', args: { values: '["{cheese}","{notes}"]' } },
+      formSpec,
+      { cheese: 'Brie', notes: 'soft' },
+      { values: 'x' },
+    );
+    expect(JSON.parse(String(args.values))).toEqual([['Brie', 'soft']]);
+  });
+
   it('leaves {{secrets.X}} args untouched', () => {
     const args = submitToolArgs(
       { name: 'api_call', args: { token: '{{secrets.TOKEN}}' } },

@@ -93,6 +93,21 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06p — Submit args are inputs, not JSON; values-template rescue
+- The concierge's save_widget wrote
+  `values: "[['{age}','{hair_color}']]"` — single-quoted cells failed the
+  JSON check, the comma-split fallback wrote the literal cells `[['5'`
+  and `black']]` into the sheet. submitToolArgs now tries parsing the
+  raw template as JSON (then with ' → "), fills the parsed cells, and
+  wraps flat cell lists into one row — malformed templates resolve to
+  the intended cells instead of leaking bracket junk. Comma-split stays
+  the last resort.
+- The composer's submit args are no longer a JSON textarea: one input
+  per declared tool param, placeholders from the tool's own param docs,
+  `browse…` on *_id params, and `values` labeled "blank appends your
+  fields in order" — the 1:1 sheet append needs only spreadsheet_id.
+  save_widget's tool doc now says leave values UNSET unless reordering
+  columns.
 ## 2026-11-06o — Form components: submit wiring up front, parked-name bug
 - The Chat components composer parked a submit-only form's write tool on
   the binding's `name` slot (the schema required it), so reopening the

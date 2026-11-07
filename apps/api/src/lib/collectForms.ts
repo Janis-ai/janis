@@ -48,15 +48,45 @@ export function submitToolArgs(
       // "Pizza,x" — invalid JSON there, so every submit failed. Rebuild
       // the template as one row of plain cell values.
       let isArray = false;
+      let filledRows: unknown[] | undefined;
       try {
-        isArray = Array.isArray(JSON.parse(String(args.values)));
+        const p: unknown = JSON.parse(String(args.values));
+        isArray = Array.isArray(p);
+        filledRows = isArray ? (p as unknown[]) : undefined;
       } catch {
         /* not JSON */
       }
-      if (!isArray) {
+      if (isArray) {
+        // `values` must be an array of ROW arrays — a flat cell list
+        // (["{a}","{b}"]) means the writer forgot the row wrapper.
+        if (filledRows!.length && !filledRows!.some(Array.isArray))
+          args.values = JSON.stringify([filledRows]);
+      } else {
         const template = String(sub.args!.values);
-        const cells = template.split(',').map((cell) => fill(cell.trim(), false).trim());
-        args.values = JSON.stringify([cells]);
+        // Parse the raw TEMPLATE as a cell list — a model-written array is
+        // often single-quoted ([['{a}','{b}']]), which JSON rejects but a
+        // quote-swap rescues. Parsed cells fill plainly and re-encode, so
+        // stray brackets/quotes can't leak into the cells (a comma-split
+        // turned [['{a}','{b}']] into the literal cells "[['5'" / "b']]").
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(template);
+        } catch {
+          try {
+            parsed = JSON.parse(template.replace(/'/g, '"'));
+          } catch {
+            /* not an array template at all */
+          }
+        }
+        if (Array.isArray(parsed)) {
+          const fillLeaf = (x: unknown): unknown =>
+            typeof x === 'string' ? fill(x, false) : Array.isArray(x) ? x.map(fillLeaf) : x;
+          const rows = parsed.length && Array.isArray(parsed[0]) ? parsed : [parsed];
+          args.values = JSON.stringify(rows.map((r) => (r as unknown[]).map(fillLeaf)));
+        } else {
+          const cells = template.split(',').map((cell) => fill(cell.trim(), false).trim());
+          args.values = JSON.stringify([cells]);
+        }
       }
     }
   }
