@@ -842,7 +842,7 @@ function Composer({
                 k === 'range'
                   ? 'which tab or area to write — blank writes to A1 (appends after the last row)'
                   : k === 'values'
-                    ? 'the columns the answers land in — {name} writes that answer there · blank = one column per field, in order'
+                    ? '{name} puts that answer in a column · blank = one column per field, in order'
                     : /(^id$|_id$)/.test(k) && listTool
                       ? `the ${k.replace(/_id$/, '').replace(/_/g, ' ')} to write to — pick it by name`
                       : params[k] ?? null;
@@ -866,7 +866,7 @@ function Composer({
                           <Field
                             label={
                               k === 'values'
-                                ? 'values — which columns the answers land in'
+                                ? "values — the sheet's columns"
                                 : k === 'spreadsheet_id'
                                   ? 'spreadsheet — the file to write to'
                                   : k === 'range'
@@ -936,7 +936,7 @@ function Composer({
                                   k === 'values'
                                     ? `[["${(spec.fields ?? [])
                                         .map((f) => `{${f.name || '?'}}`)
-                                        .join('","')}"]] — blank appends these fields`
+                                        .join('","')}"]]`
                                     : params[k]
                                 }
                               />
