@@ -7,7 +7,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { createHmac } from 'node:crypto';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agentMembers, agents, channelBindings, channels, contacts, conversations, formSubmissions, helpArticles, memberships, messages, rateLimits, sessions, slackInstallations, slackThreads, usageEvents, users, workspaces } from '../db/schema.js';
+import { agentMembers, agents, agentWidgets, channelBindings, channels, contacts, conversations, formSubmissions, helpArticles, memberships, messages, rateLimits, sessions, slackInstallations, slackThreads, usageEvents, users, workspaces } from '../db/schema.js';
 import { generateApiKey, sha256 } from '../lib/crypto.js';
 import { markOperatorTyping } from '../lib/typingState.js';
 import { takeover, humanReply } from '../services/takeover.js';
@@ -273,6 +273,76 @@ describe('webchat widget endpoints', () => {
     expect(body.messages[1].direction).toBe('in');
     // internal payloads must never leak to the widget
     expect(body.messages[1].payload).toBeUndefined();
+  });
+
+  it('component-bound form submit runs the submit-side tool and notes it', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const [agent] = await db.select().from(agents).limit(1);
+    const prevConfig = agent.config;
+    // A write tool the form's submit binding calls — a stub endpoint.
+    await db
+      .update(agents)
+      .set({
+        config: {
+          tools: [
+            {
+              name: 'record_answer',
+              method: 'POST',
+              url: 'https://record.test/append',
+              params: { values: 'row values', sheet: 'sheet id' },
+            },
+          ],
+        } as never,
+      })
+      .where(eq(agents.id, agent.id));
+    const formSpec = {
+      type: 'form',
+      title: 'Survey',
+      fields: [{ name: 'pick', label: 'Pick one', type: 'text', required: true }],
+    };
+    await db.insert(agentWidgets).values({
+      agentId: agent.id,
+      name: 'test-survey',
+      spec: formSpec,
+      tool: {
+        name: 'record_answer',
+        submit: { name: 'record_answer', args: { sheet: 'sheet-1' } },
+      },
+    });
+    const VISITOR = 'vis_formsubmit00001';
+    const res = await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        visitor_id: VISITOR,
+        text: 'Form "Survey" — Pick one: Brie',
+        form: { name: 'test-survey', values: { pick: 'Brie' } },
+      }),
+    });
+    expect(res.status).toBe(200);
+    // The submit runner is fire-and-forget — poll for its tool call + note.
+    const deadline = Date.now() + 4000;
+    let note: { text: string } | undefined;
+    while (Date.now() < deadline) {
+      const calls = fetchMock.mock.calls.filter(([u]) => String(u).includes('record.test'));
+      const [n] = await db
+        .select({ text: messages.text })
+        .from(messages)
+        .where(sql`${messages.text} like 'form "test-survey" submitted%'`)
+        .limit(1);
+      note = n;
+      if (calls.length && note) break;
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    const toolCall = fetchMock.mock.calls.find(([u]) => String(u).includes('record.test'));
+    expect(toolCall).toBeTruthy();
+    const sentBody = JSON.parse(String((toolCall![1] as RequestInit).body));
+    // unset `values` defaulted to a row of the fields in order
+    expect(sentBody.values).toEqual([['Brie']]);
+    expect(note?.text).toContain('record_answer recorded it');
+    // restore the agent's config for other tests
+    await db.update(agents).set({ config: prevConfig as never }).where(eq(agents.id, agent.id));
   });
 
   it('dedupes a retried POST by client_id — one stored message, echo carries the key', async () => {

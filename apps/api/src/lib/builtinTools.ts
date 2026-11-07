@@ -3254,7 +3254,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       states:
         'optional JSON array of named spec variants — [{"name":"in_transit","spec":{…full spec…}},{"name":"not_found","spec":{…}}]. The model picks one with {"state":"<name>"} in the ref data.',
       tool:
-        'optional JSON object binding the component to one of the agent\'s tools — {"name":"<tool>","args":{"<prop>":"<tool param>"},"props":{"<prop>":"<dotpath into result>"},"items":"<dotpath to rows array>","item_map":{"<item field>":"<row dotpath>"}}. When the agent emits WIDGET_REF: name {"arg":…}, the tool runs and its result fills the component (a READ binding — use GET tools). A form component also takes "submit":{"name":"<tool>","args":{"<tool param>":"<static value or {field} placeholder>"}} — the WRITE side: on visitor submit the tool runs with the posted values; a "values" arg left unset defaults to a row of the fields in order (the natural fit for sheets-style appends). Only non-approval tools can bind.',
+        'optional JSON object binding the component to one of the agent\'s tools — {"name":"<tool>","args":{"<prop>":"<tool param>"},"props":{"<prop>":"<dotpath into result>"},"items":"<dotpath to rows array>","item_map":{"<item field>":"<row dotpath>"}}. When the agent emits WIDGET_REF: name {"arg":…}, the tool runs and its result fills the component (a READ binding — use GET tools). A form component also takes "submit":{"name":"<tool>","args":{"<tool param>":"<static value or {field} placeholder>"}} — the WRITE side: on visitor submit the tool runs with the posted values; a "values" arg left unset defaults to a row of the fields in order (the natural fit for sheets-style appends). Args that are resource ids (a spreadsheet_id, list id) must come from a real lookup — call the agent\'s list tool (e.g. gsheets_list) or get the value from the visitor; never invent or placeholder one. Only non-approval tools can bind. A renamed component handle is a different component — its card stacks instead of revising.',
       auto_greet: 'true/false — also pin this component under the webchat greeting',
       workspace: 'workspace name — only needed when ambiguous',
     },
@@ -3308,14 +3308,17 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         if (!def) return JSON.stringify({ error: `no tool named "${toolBind.name}" on ${agent.name}` });
         if (def.approval)
           return JSON.stringify({ error: `"${toolBind.name}" is approval-gated — a component can only bind a read tool` });
-        // A placeholder arg ("[YOUR_SPREADSHEET_ID]") saves a component
-        // that can never run — the ref resolves nothing at emit and the
-        // visitor gets promise text with no component. Fail the call so
-        // the model fills a real value or drops the binding.
+        // Placeholder args save a component that can never run — both the
+        // bracketed kind ("[YOUR_SPREADSHEET_ID]") and the template-y kind
+        // ("YOUR_SPREADSHEET_ID_HERE", "INSERT_ID", "TBD"). Fail the call
+        // so the model fills a real value or drops the binding — invented
+        // ids (404'd sheets) are exactly what the list tools are for.
+        const PLACEHOLDER =
+          /^\s*(\[[^\]]*\]|<[^>]*>|(YOUR|INSERT|ENTER|PUT|SET|CHOOSE|PICK|REPLACE)[_A-Z0-9]*|TBD|TODO|XXX+|[A-Z][A-Z0-9_]*_(HERE|PLACEHOLDER|REQUIRED|TODO))[\s.]*$/i;
         const placeholderArg = Object.entries({
           ...(toolBind.args ?? {}),
           ...(toolBind.submit?.args ?? {}),
-        }).find(([, v]) => typeof v === 'string' && /^\s*\[[^\]]*\]\s*$/.test(v));
+        }).find(([, v]) => typeof v === 'string' && PLACEHOLDER.test(v));
         if (placeholderArg) {
           return JSON.stringify({
             error: `"${toolBind.name}" arg "${placeholderArg[0]}" is a placeholder (${placeholderArg[1]}) — pass a real value or drop the binding; a component bound to it can never run`,
