@@ -1891,10 +1891,14 @@ export function extractWidgets(text: string): {
   widgets: WidgetComponent[];
   refs: WidgetRef[];
   dropped: number;
+  /** First parse failure per dropped spec — surfaced to the operator and
+   *  fed back on a retry so the model can self-correct. */
+  dropReasons: string[];
 } {
   const widgets: WidgetComponent[] = [];
   const refs: WidgetRef[] = [];
   let dropped = 0;
+  const dropReasons: string[] = [];
   const lines = text.split('\n');
   const out: string[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -1936,6 +1940,7 @@ export function extractWidgets(text: string): {
       }
       // An unterminated/mangled directive block — drop it whole.
       dropped++;
+      dropReasons.push('unterminated/mangled directive');
       i = end;
       if (before) out.push(before);
       continue;
@@ -1963,15 +1968,22 @@ export function extractWidgets(text: string): {
         if (parsed.success) {
           widgets.push(parsed.data);
           ok = true;
+        } else {
+          const issue = parsed.error.issues[0];
+          dropReasons.push(
+            issue
+              ? `${issue.path.join('.') || 'spec'}: ${issue.message}`
+              : 'invalid component spec',
+          );
         }
       } catch {
-        // malformed JSON — drop the block
+        dropReasons.push('malformed JSON');
       }
     }
     if (!ok) dropped++;
     if (before) out.push(before);
   }
-  return { text: out.join('\n').trim(), widgets, refs, dropped };
+  return { text: out.join('\n').trim(), widgets, refs, dropped, dropReasons };
 }
 
 /** Per-item identity — what the component actually shows the customer. */

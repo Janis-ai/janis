@@ -5704,16 +5704,23 @@ export async function runHostedEvent(
       // this it renders to the operator as raw spec text. WIDGET_REF: names
       // resolve against the saved-component catalog after the draft text
       // settles (a retry can re-emit different refs).
-      const { text: noWidgets, widgets, refs, dropped } = extractWidgets(noButtons);
+      const { text: noWidgets, widgets, refs, dropped, dropReasons } = extractWidgets(noButtons);
       // Unparseable leftovers (truncated JSON, malformed refs) are still
       // directive markup — never show them as draft text either.
       const text = noWidgets
         .split('\n')
         .filter((l) => !/^\s*WIDGET(?:_REF)?:/i.test(l))
         .join('\n');
-      return { text: unwrapInlineLists(text) || undefined, buttons, widgets, refs, dropped };
+      return {
+        text: unwrapInlineLists(text) || undefined,
+        buttons,
+        widgets,
+        refs,
+        dropped,
+        dropReasons,
+      };
     };
-    let { text: draft, buttons, widgets, refs, dropped } = stripLabel(result?.text);
+    let { text: draft, buttons, widgets, refs, dropped, dropReasons } = stripLabel(result?.text);
     if (draft && CONTROL_TAG.test(draft)) draft = undefined;
 
     if (!draft) {
@@ -5757,6 +5764,7 @@ export async function runHostedEvent(
       if (retryStrip.widgets.length) widgets = retryStrip.widgets;
       if (retryStrip.refs.length) refs = retryStrip.refs;
       dropped = (dropped ?? 0) + (retryStrip.dropped ?? 0);
+      dropReasons = [...(dropReasons ?? []), ...(retryStrip.dropReasons ?? [])];
       if (draft && CONTROL_TAG.test(draft)) draft = undefined;
     }
 
@@ -5778,6 +5786,54 @@ export async function runHostedEvent(
         .replace(/\s+([.,!?])/g, '$1')
         .trim();
       draft = salvaged || undefined;
+    }
+
+    // Every emitted component failed to parse — one self-heal shot: feed
+    // the parse error back so the model corrects the spec instead of the
+    // draft silently dropping the component the operator asked for.
+    if (
+      instruction &&
+      widgets.length === 0 &&
+      refs.length === 0 &&
+      (dropped ?? 0) > 0
+    ) {
+      const retry = await complete(
+        llm,
+        prompt,
+        [
+          {
+            role: 'user',
+            content:
+              `Your component failed to parse (${(dropReasons ?? []).join('; ').slice(0, 300)}). ` +
+              `Emit the corrected WIDGET: line — a single valid JSON object; fields use "multiselect" for checkbox lists; ` +
+              `field names are lowercase letters/digits/underscores only. The operator asked: ${instruction}.`,
+          },
+        ],
+        [],
+        secrets,
+        ctx,
+      ).catch(() => null);
+      if (retry && (retry.promptTokens || retry.completionTokens)) {
+        await recordLlmUsage(db, {
+          workspaceId: agent.workspaceId,
+          agentId: agent.id,
+          conversationId: convId,
+          model: retry.model,
+          capModel: llm.model,
+          promptTokens: retry.promptTokens,
+          completionTokens: retry.completionTokens,
+          byok: llm.byok,
+        });
+      }
+      const retryStrip = stripLabel(retry?.text);
+      if (retryStrip.widgets.length || retryStrip.refs.length) {
+        widgets = retryStrip.widgets;
+        refs = retryStrip.refs;
+        dropped = retryStrip.dropped ?? 0;
+        dropReasons = retryStrip.dropReasons ?? [];
+        if (retryStrip.text) draft = retryStrip.text;
+        if (retryStrip.buttons.length) buttons = retryStrip.buttons;
+      }
     }
 
     // Emitted WIDGET_REF: lines resolve against the catalog — the bound
@@ -5838,7 +5894,9 @@ export async function runHostedEvent(
       // surface it so a failed emit doesn't look like the model ignored
       // the instruction.
       dropped
-        ? `${dropped} component${dropped === 1 ? '' : 's'} was emitted but didn't parse — dropped`
+        ? `${dropped} component${dropped === 1 ? '' : 's'} was emitted but didn't parse — dropped${
+            dropReasons?.[0] ? ` (${dropReasons[0].slice(0, 120)})` : ''
+          }`
         : undefined,
       {
         // An empty run stores the placeholder text for transparency but is
