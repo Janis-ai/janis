@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Attachment } from '@janis/shared';
 import { useAgentWidgets, useSavedReplies } from '../api/hooks';
+import { specPropNames } from './WidgetComposer';
 import { Bot, Brain, Check, FileText, Headset, Image, Lock, Paperclip, Plus, Shapes, Smile, Sparkles, X } from 'lucide-react';
 import { EmojiPicker } from './EmojiPicker';
 
@@ -58,7 +59,10 @@ export default function Composer({
   const [sendasOpen, setSendasOpen] = useState(false);
   const [compOpen, setCompOpen] = useState(false);
   const [compArgsFor, setCompArgsFor] = useState<string | null>(null);
-  const [compArgs, setCompArgs] = useState('');
+  // Per-key ref data for the expanded component — named inputs built from
+  // the spec's {prop}s and the bound tool's params, not a JSON blob.
+  const [compData, setCompData] = useState<Record<string, string>>({});
+  const [compState, setCompState] = useState('');
   const [plusOpen, setPlusOpen] = useState(false);
 
   /** One popover at a time — opening one closes its siblings (two stacked
@@ -425,15 +429,34 @@ export default function Composer({
               <X size={13} />
             </button>
           </div>
-          {agentWidgets?.widgets.map((w) => (
+          {agentWidgets?.widgets.map((w) => {
+            // A non-GET tool in the read slot is the form's WRITE side —
+            // it needs nothing to render; only a GET binding takes ref
+            // data (as do {prop} placeholders and named states).
+            const isWrite = !!w.tool?.name && !!w.tool_method && w.tool_method !== 'GET';
+            const argKeys = Object.keys(w.tool?.args ?? {});
+            const toolKeys =
+              w.tool?.name && !isWrite
+                ? argKeys.length
+                  ? argKeys
+                  : Object.keys(w.tool_params ?? {})
+                : [];
+            const dataKeys = [...new Set([...specPropNames(w.spec), ...toolKeys])];
+            const stateNames = (w.states ?? []).map((s) => s.name);
+            const expandable = dataKeys.length > 0 || stateNames.length > 0;
+            // args map renames ref-data keys → tool params; show the param's
+            // own doc text as the input placeholder.
+            const paramFor = (k: string) => w.tool?.args?.[k] ?? k;
+            return (
             <div key={w.id}>
               <button
                 type="button"
                 className="reply-item"
                 onClick={() => {
-                  if (w.tool) {
+                  if (expandable) {
                     setCompArgsFor((cur) => (cur === w.name ? null : w.name));
-                    setCompArgs('');
+                    setCompData({});
+                    setCompState('');
                   } else {
                     onSendComponent(w.name);
                     setCompOpen(false);
@@ -442,40 +465,66 @@ export default function Composer({
               >
                 <strong>{w.name}</strong>
                 <span className="muted">
-                  {w.tool ? `needs ${w.tool.name} — tap to fill` : (w.description ?? 'send as-is')}
+                  {isWrite
+                    ? `saves via ${w.tool?.submit?.name ?? w.tool?.name}`
+                    : dataKeys.length
+                      ? `needs ${dataKeys.join(', ')} — tap to fill`
+                      : w.tool?.name
+                        ? `bound to ${w.tool.name} — resolves on send`
+                        : (w.description ?? 'send as-is')}
                 </span>
               </button>
               {compArgsFor === w.name && (
-                <div className="row" style={{ padding: '2px 8px 8px' }}>
-                  <input
-                    className="grow"
-                    placeholder='data as JSON (optional) — {"order_id":"#1234"}'
-                    value={compArgs}
-                    onChange={(e) => setCompArgs(e.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="btn sm primary"
-                    onClick={() => {
-                      let data: Record<string, unknown> | undefined;
-                      if (compArgs.trim()) {
-                        try {
-                          data = JSON.parse(compArgs) as Record<string, unknown>;
-                        } catch {
-                          return; // malformed JSON — leave the popover open
-                        }
-                      }
-                      onSendComponent(w.name, data);
-                      setCompOpen(false);
-                      setCompArgsFor(null);
-                    }}
-                  >
-                    Send
-                  </button>
+                <div style={{ padding: '2px 8px 8px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  {dataKeys.map((k) => (
+                    <label key={k} style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11.5, color: 'var(--muted)' }}>
+                      {k}
+                      <input
+                        className="input"
+                        value={compData[k] ?? ''}
+                        onChange={(e) => setCompData({ ...compData, [k]: e.target.value })}
+                        placeholder={w.tool_params?.[paramFor(k)] ?? ''}
+                      />
+                    </label>
+                  ))}
+                  {stateNames.length > 0 && (
+                    <label style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 11.5, color: 'var(--muted)' }}>
+                      state
+                      <select
+                        className="input"
+                        value={compState}
+                        onChange={(e) => setCompState(e.target.value)}
+                      >
+                        <option value="">default</option>
+                        {stateNames.map((s) => <option key={s} value={s}>{s}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <div className="row">
+                    <button
+                      type="button"
+                      className="btn sm primary"
+                      onClick={() => {
+                        const data = Object.fromEntries(
+                          Object.entries(compData).filter(([k, v]) => k.trim() && v.trim()),
+                        );
+                        if (compState) data.state = compState;
+                        onSendComponent(w.name, Object.keys(data).length ? data : undefined);
+                        setCompOpen(false);
+                        setCompArgsFor(null);
+                      }}
+                    >
+                      Send
+                    </button>
+                    <span className="muted" style={{ fontSize: 11, alignSelf: 'center' }}>
+                      blank fields are left out
+                    </span>
+                  </div>
                 </div>
               )}
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
       {repliesOpen && (

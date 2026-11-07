@@ -346,8 +346,17 @@ export interface AgentWidget {
   description?: string | null;
   spec: unknown;
   states?: { name: string; spec: unknown }[] | null;
-  /** Tool binding — a component carrying one needs `data` args to resolve. */
-  tool?: { name: string; args?: Record<string, string> } | null;
+  /** Tool binding — a component carrying one needs `data` args to resolve.
+   *  `name` may be unset (submit-only form); `submit` is the write side. */
+  tool?: {
+    name?: string;
+    args?: Record<string, string>;
+    submit?: { name: string; args?: Record<string, string> };
+  } | null;
+  /** The bound tool's declared params + method — server-stamped so the
+   *  picker can ask for named fields instead of raw ref-data JSON. */
+  tool_params?: Record<string, string> | null;
+  tool_method?: string | null;
   auto_greet?: boolean;
 }
 

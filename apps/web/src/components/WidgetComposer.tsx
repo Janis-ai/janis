@@ -42,7 +42,7 @@ interface SavedWidget {
 
 /** {prop} placeholders inside a spec — the data-binding surface the agent
  *  fills via WIDGET_REF data or a bound tool's result. */
-function specPropNames(v: unknown): string[] {
+export function specPropNames(v: unknown): string[] {
   const found = new Set<string>();
   const walk = (x: unknown): void => {
     if (typeof x === 'string') {

@@ -93,6 +93,16 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-07c — Component picker asks for named fields, not JSON
+- The composer's send-component popover used to offer a single "data as
+  JSON" input nobody could fill correctly — even the concierge produced a
+  malformed values template from it. Now GET /agents/:id/widgets stamps
+  each row's tool_params/tool_method, and the picker renders one labeled
+  input per needed key: the spec's {prop} placeholders plus the bound
+  tool's params (its own doc text as placeholder), a state dropdown when
+  named variants exist, and nothing at all for submit-only forms — a
+  non-GET binding shows "saves via gsheets_append" and sends as-is.
+
 ## 2026-11-07b — Draft card: controls and scrollbar above the draft text
 - The suggestion draft card still capped at 34vh but scrolled its whole
   body with the guide input + Send/Edit row sticky-pinned at the bottom.

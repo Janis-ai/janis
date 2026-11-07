@@ -2335,7 +2335,15 @@ export function agentRoutes(db: Db) {
       .from(agentWidgets)
       .where(eq(agentWidgets.agentId, agent.id))
       .orderBy(asc(agentWidgets.name));
-    return c.json({ widgets: rows });
+    // Stamp each bound tool's params/method alongside — the composer's
+    // send-picker asks for named fields instead of raw ref-data JSON.
+    const defs = toolsFor(agent);
+    const widgets = rows.map((w) => {
+      const name = (w.tool as { name?: string } | null)?.name;
+      const td = name ? defs.find((t) => t.name === name) : undefined;
+      return { ...w, tool_params: td?.params ?? null, tool_method: td?.method ?? null };
+    });
+    return c.json({ widgets });
   });
 
   app.post('/:id/widgets', agentAdmin, zValidator('json', widgetBody), async (c) => {
