@@ -3027,7 +3027,17 @@ describe('guided suggestion drafts', () => {
         });
         return new Response(
           JSON.stringify({
-            choices: [{ message: { content: 'Here you go!\nWIDGET_REF: hobbies-form' } }],
+            choices: [
+              {
+                // Mid-sentence ref — the model drops directives inline
+                // despite the grammar saying own-line; the draft must not
+                // leak the markup and the component still resolves.
+                message: {
+                  content:
+                    'Settling this once and for all! WIDGET_REF: hobbies-form Once you submit, we log it.',
+                },
+              },
+            ],
             usage: {},
           }),
           { status: 200 },

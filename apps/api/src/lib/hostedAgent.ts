@@ -1002,7 +1002,7 @@ export function systemPrompt(
   }
   if (opts.forSuggestion) {
     parts.push(
-      '\nNow write the reply you would send to the customer right now — your single best, most confident answer to their latest message, in your own voice. If details are missing, give the best answer you can and ask one targeted follow-up rather than hedging or deferring. Output only the reply text — no speaker labels, no preamble; never output [HANDOFF] in a draft. When the reply needs an action — sending a verification email, updating a profile, a gated tool — CALL that tool so it attaches to the draft as an operator-decidable card; never narrate an action you did not take, and never mention consoles, approvals or internal steps to the customer. And when the reply needs a component — a form, cards, an options picker — emit it as WIDGET: markup (or WIDGET_REF: name for a saved one); never describe a component as a bulleted list of its fields.' +
+      '\nNow write the reply you would send to the customer right now — your single best, most confident answer to their latest message, in your own voice. If details are missing, give the best answer you can and ask one targeted follow-up rather than hedging or deferring. Output only the reply text — no speaker labels, no preamble; never output [HANDOFF] in a draft. When the reply needs an action — sending a verification email, updating a profile, a gated tool — CALL that tool so it attaches to the draft as an operator-decidable card; never narrate an action you did not take, and never mention consoles, approvals or internal steps to the customer. And when the reply needs a component — a form, cards, an options picker — emit it as WIDGET: markup (or WIDGET_REF: name for a saved one) on its own line, never mid-sentence; never describe a component as a bulleted list of its fields.' +
         (opts.operator
           ? ' For apply/save work (a component, a knowledge entry, a settings change) call the apply_*/save_widget tool so the approval card carries it — never emit raw JSON, code blocks or spec blobs in the draft text.'
           : ''),
@@ -5598,6 +5598,23 @@ export async function runHostedEvent(
       if (retryStrip.widgets.length) widgets = retryStrip.widgets;
       if (retryStrip.refs.length) refs = retryStrip.refs;
       if (draft && CONTROL_TAG.test(draft)) draft = undefined;
+    }
+
+    // A ref the model dropped mid-sentence never reaches extractWidgets'
+    // line parser — it lands in the draft as raw "WIDGET_REF: name"
+    // customer-visible text. Pull the token out and resolve it like a
+    // well-formed one; the prose around it stays. Invented names degrade
+    // to text only — fabricating a component is worse.
+    if (draft) {
+      const salvaged = draft
+        .replace(/\bWIDGET_REF:\s*([A-Za-z0-9_][\w-]*)/g, (_m, name: string) => {
+          refs.push({ name: normWidgetRef(name) });
+          return '';
+        })
+        .replace(/[ \t]{2,}/g, ' ')
+        .replace(/\s+([.,!?])/g, '$1')
+        .trim();
+      draft = salvaged || undefined;
     }
 
     // Emitted WIDGET_REF: lines resolve against the catalog — the bound
