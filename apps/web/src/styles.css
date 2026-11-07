@@ -1491,6 +1491,17 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
 
 /* suggestion card — rich payload (buttons preview, pending components chip) */
 .card.draft { border-style: dashed; }
+/* The draft prompt is a real field — bordered like every other input so
+   it reads as editable without clicking; grows with content (JS sets the
+   height), scrolls past the cap. */
+.draft-inst {
+  width: 100%; box-sizing: border-box; resize: none;
+  font-size: 12.5px; line-height: 1.4; padding: 7px 10px;
+  background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  margin: 2px 0 4px; overflow-y: auto; max-height: 140px;
+}
+.draft-inst:focus { border-color: var(--accent); outline: none; }
 .draft-tag {
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
   border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px;

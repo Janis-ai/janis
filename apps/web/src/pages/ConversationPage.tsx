@@ -662,6 +662,19 @@ export default function ConversationPage() {
   // spec (it holds resource ids) — on apply we save it as a real bound
   // component and stamp collect so submissions route through the binding.
   const [editSaving, setEditSaving] = useState(false);
+  // The draft prompt is a field, not a caption — an auto-growing textarea
+  // (one row tall until the content wraps) styled like every other input
+  // so it reads as editable at a glance.
+  const instrRef = useRef<HTMLTextAreaElement>(null);
+  const instrValue =
+    instr ??
+    ((data?.suggestions?.[0]?.payload as { instruction?: string } | undefined)?.instruction ?? '');
+  useEffect(() => {
+    const el = instrRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }, [instrValue]);
   useEffect(() => {
     if (!replacedSid) return;
     const t = setTimeout(() => setReplacedSid(null), 30_000);
@@ -2099,38 +2112,33 @@ export default function ConversationPage() {
                 <div className="muted">Drafting…</div>
               ) : suggestions?.length > 0 ? (
                 <>
-                  <div className="muted" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
-                    <span>
-                      <span className="draft-tag">draft</span> Suggested (
-                      {suggestions[0].source === 'agent' ? 'your agent' : 'AI'}) —
-                    </span>
-                    <input
-                      value={instr ?? (suggestions[0].payload?.instruction as string | undefined) ?? ''}
-                      onChange={(e) => setInstr(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          e.preventDefault();
-                          setReplacedSid(suggestions?.[0]?.id ?? null);
-                          setDraftSent(false);
-                          setActionResults({});
-                          setLastInstruction((instr ?? '').trim() || null);
-                          suggest.mutate((instr ?? '').trim() || undefined);
-                        }
-                      }}
-                      placeholder="no prompt — drafted from context"
-                      title="The prompt behind this draft — edit it and hit Enter (or ↻) to redraft"
-                      style={{
-                        flex: 1,
-                        minWidth: 120,
-                        border: 'none',
-                        background: 'transparent',
-                        color: 'inherit',
-                        font: 'inherit',
-                        fontStyle: 'italic',
-                        borderBottom: '1px dashed var(--border)',
-                        padding: '0 2px',
-                      }}
-                    />
+                  <div className="muted" style={{ marginBottom: 4 }}>
+                    <span className="draft-tag">draft</span> Suggested (
+                    {suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
+                  </div>
+                  <textarea
+                    ref={instrRef}
+                    className="draft-inst"
+                    rows={1}
+                    value={instrValue}
+                    onChange={(e) => setInstr(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        const g = instrValue.trim();
+                        setReplacedSid(suggestions?.[0]?.id ?? null);
+                        setDraftSent(false);
+                        setActionResults({});
+                        setLastInstruction(g || null);
+                        suggest.mutate(g || undefined);
+                      }
+                    }}
+                    placeholder="blank — drafted from conversation context"
+                    title="The prompt behind this draft — edit it, then Enter or ↻ to redraft (Shift+Enter for a new line)"
+                    aria-label="Draft prompt"
+                  />
+                  <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
+                    prompt — edit, then Enter or ↻ to redraft (Shift+Enter for a new line)
                   </div>
                   {suggestions[0].notes && (
                     <div className="muted" style={{ fontStyle: 'italic', marginBottom: 6 }}>
@@ -2504,10 +2512,10 @@ export default function ConversationPage() {
                   aria-label="Try another suggestion"
                   disabled={suggest.isPending}
                   onClick={() => {
-                    // Re-draft with the same prompt — the instruction input
+                    // Re-draft with the same prompt — the instruction field
                     // on the card may have been edited; fall back to the one
                     // that produced this draft.
-                    const g = (instr ?? (suggestions[0].payload?.instruction as string | undefined) ?? '').trim();
+                    const g = instrValue.trim();
                     setReplacedSid(suggestions?.[0]?.id ?? null);
                     setDraftSent(false);
                     setActionResults({});
