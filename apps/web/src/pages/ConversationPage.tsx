@@ -658,6 +658,17 @@ export default function ConversationPage() {
     text: string;
     widgets: Record<number, unknown>;
   } | null>(null);
+  // A pending binding (model emitted blank args) asks the operator for
+  // them inline — named inputs per missing arg, browse… backed by the
+  // submit tool's sibling list tool (gsheets_append → gsheets_list).
+  const [bindArgs, setBindArgs] = useState<Record<number, Record<string, string>>>({});
+  const [bindSaving, setBindSaving] = useState<number | null>(null);
+  const [bindErr, setBindErr] = useState('');
+  const [bindBrowse, setBindBrowse] = useState<{
+    wi: number;
+    param: string;
+    rows: { id: string; label: string }[];
+  } | null>(null);
   // Component JSON carrying a `tool` block can't ride the visitor-facing
   // spec (it holds resource ids) — on apply we save it as a real bound
   // component and stamp collect so submissions route through the binding.
@@ -1156,6 +1167,97 @@ export default function ConversationPage() {
     }
     if (Object.keys(parsed).length) void qc.invalidateQueries({ queryKey: ['agent-widgets'] });
     return { text: editText, widgets: parsed };
+  };
+  // The sibling read tool a write tool's list comes from — gsheets_append
+  // → gsheets_list, hubspot_create_contact → hubspot_list.
+  const listToolFor = (toolName: string): string => {
+    const prefix = toolName.replace(
+      /_(append|update|read|create|add|write|delete|get|set|find|search|put|post)$/i,
+      '',
+    );
+    return `${prefix}_list`;
+  };
+  const openBindBrowse = async (wi: number, param: string, toolName: string) => {
+    setBindErr('');
+    try {
+      const out = await api<{ result: string }>(`/api/agents/${c.agent_id}/tools/run`, {
+        method: 'POST',
+        body: JSON.stringify({ tool: listToolFor(toolName) }),
+      });
+      const j: unknown = JSON.parse(out.result);
+      const rows = (
+        Array.isArray(j) ? j : Object.values(j as object).find(Array.isArray)
+      ) as Record<string, unknown>[] | undefined;
+      setBindBrowse({
+        wi,
+        param,
+        rows: (rows ?? [])
+          .slice(0, 20)
+          .map((r) => ({
+            id: String(r.id ?? r.spreadsheetId ?? ''),
+            label: String(r.name ?? r.title ?? r.id ?? ''),
+          }))
+          .filter((r) => r.id),
+      });
+    } catch (e) {
+      setBindErr(e instanceof Error ? e.message : 'no list tool — paste the id');
+    }
+  };
+  // Fill the pending binding's blank args → save it as a real bound
+  // component → stamp collect on the staged widget so Send routes
+  // submissions through it.
+  const savePendingBind = async (wi: number, spec: unknown, pending: { binding?: unknown; missing?: string[] }) => {
+    const b = pending.binding as Record<string, unknown> | undefined;
+    if (!b) return;
+    const filled = bindArgs[wi] ?? {};
+    const mergeArgs = (a?: Record<string, string>) =>
+      Object.fromEntries(Object.entries(a ?? {}).map(([k, v]) => [k, filled[k]?.trim() || v]));
+    const bind = {
+      ...b,
+      ...(b.args ? { args: mergeArgs(b.args as Record<string, string>) } : {}),
+      ...(b.submit
+        ? {
+            submit: {
+              ...(b.submit as Record<string, unknown>),
+              args: mergeArgs((b.submit as { args?: Record<string, string> }).args),
+            },
+          }
+        : {}),
+    };
+    const blanks = [
+      ...Object.values((bind.args ?? {}) as Record<string, string>),
+      ...Object.values(((bind.submit as { args?: Record<string, string> } | undefined)?.args ?? {})),
+    ].filter((v) => !String(v).trim());
+    if (blanks.length) {
+      setBindErr('fill every blank before saving');
+      return;
+    }
+    const clean = spec as Record<string, unknown>;
+    const base =
+      String(clean.title ?? clean.type ?? 'component')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'component';
+    const taken = new Set((agentWidgets?.widgets ?? []).map((w) => w.name));
+    let name = base;
+    for (let n = 2; taken.has(name); n += 1) name = `${base}-${n}`;
+    setBindSaving(wi);
+    setBindErr('');
+    try {
+      await api(`/api/agents/${c.agent_id}/widgets`, {
+        method: 'POST',
+        body: JSON.stringify({ name, spec: clean, tool: bind }),
+      });
+      setDraftEdits((p) => ({
+        text: p?.text ?? suggestions[0].text,
+        widgets: { ...(p?.widgets ?? {}), [wi]: { ...clean, collect: name } },
+      }));
+      void qc.invalidateQueries({ queryKey: ['agent-widgets'] });
+    } catch (e) {
+      setBindErr(e instanceof Error ? e.message : 'save failed');
+    } finally {
+      setBindSaving(null);
+    }
   };
   const brief = briefQ.data?.summary ?? null;
   const refreshBrief = async () => {
@@ -2335,9 +2437,78 @@ export default function ConversationPage() {
                             }
                           )?.widget_binds?.[wi];
                           if (pending?.missing?.length) {
+                            const bind = (pending as { binding?: Record<string, unknown> }).binding;
+                            const toolName =
+                              (bind?.submit as { name?: string } | undefined)?.name ??
+                              (bind?.name as string | undefined) ??
+                              '';
                             return (
-                              <div key={wi} className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                                saves submissions — needs {pending.missing.join(', ')} (fill in Edit)
+                              <div key={wi} style={{ marginTop: 4 }}>
+                                <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
+                                  saves submissions via {toolName} — needs:
+                                </div>
+                                {pending.missing.map((k) => (
+                                  <div key={k} className="row" style={{ gap: 4, marginBottom: 4 }}>
+                                    <input
+                                      aria-label={k}
+                                      placeholder={k}
+                                      value={bindArgs[wi]?.[k] ?? ''}
+                                      onChange={(e) =>
+                                        setBindArgs({
+                                          ...bindArgs,
+                                          [wi]: { ...(bindArgs[wi] ?? {}), [k]: e.target.value },
+                                        })
+                                      }
+                                      style={{ flex: 1, fontSize: 12, padding: '5px 8px' }}
+                                    />
+                                    {/_id$/i.test(k) && toolName && (
+                                      <button
+                                        type="button"
+                                        className="btn sm"
+                                        onClick={() => void openBindBrowse(wi, k, toolName)}
+                                      >
+                                        browse…
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                                {bindBrowse?.wi === wi && (
+                                  <div style={{ marginBottom: 4 }}>
+                                    {!bindBrowse.rows.length && (
+                                      <div className="muted" style={{ fontSize: 11 }}>nothing listed</div>
+                                    )}
+                                    {bindBrowse.rows.map((r) => (
+                                      <button
+                                        key={r.id}
+                                        type="button"
+                                        className="btn sm"
+                                        style={{ marginRight: 4, marginBottom: 4 }}
+                                        onClick={() => {
+                                          setBindArgs({
+                                            ...bindArgs,
+                                            [wi]: { ...(bindArgs[wi] ?? {}), [bindBrowse.param]: r.id },
+                                          });
+                                          setBindBrowse(null);
+                                        }}
+                                      >
+                                        {r.label}
+                                      </button>
+                                    ))}
+                                  </div>
+                                )}
+                                {bindErr && (
+                                  <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>
+                                    {bindErr}
+                                  </div>
+                                )}
+                                <button
+                                  type="button"
+                                  className="btn sm primary"
+                                  disabled={bindSaving === wi}
+                                  onClick={() => void savePendingBind(wi, _w, pending)}
+                                >
+                                  {bindSaving === wi ? 'saving…' : 'Save wiring'}
+                                </button>
                               </div>
                             );
                           }
