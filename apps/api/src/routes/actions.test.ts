@@ -10,6 +10,7 @@ import {
   agents,
   conversations,
   memberships,
+  messages,
   pendingActions,
   sessions,
   users,
@@ -215,6 +216,11 @@ describe('action decide route', () => {
       expect((await res.json()).status).toBe('approved');
       const [tgt] = await db.select().from(agents).where(eq(agents.id, target.id));
       expect((tgt.config as { knowledge?: string[] }).knowledge).toContain('Decide-time entry.');
+      // The rail note names the real decider — the visitor self-approved,
+      // not a teammate.
+      const notes = await db.select().from(messages).where(eq(messages.conversationId, cconv.id));
+      const note = notes.find((m) => (m.text ?? '').includes('approved and ran'));
+      expect(note?.text).toMatch(/^visitor approved and ran apply_knowledge/);
     } finally {
       env.operatorWorkspaceId = prev;
     }

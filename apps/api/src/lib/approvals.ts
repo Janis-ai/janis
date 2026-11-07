@@ -361,9 +361,15 @@ export async function decidePendingAction(
     }
   })();
   const cardResult = summary ?? friendly ?? preview;
+  // Concierge cards are self-decided by the verified visitor — the rail
+  // note saying "teammate approved" mislabels who acted (a guest
+  // approving their own create_agent card reads as an operator decision).
+  const visitorDecided =
+    isConciergeAction(action.workspaceId, conv.userProfile) &&
+    (conv.userProfile as { external_id?: string } | undefined)?.external_id === decidedBy.id;
   const resultText = approve
-    ? `teammate approved and ran ${action.toolName}${cardResult ? ` — ${cardResult}` : ''}`
-    : `teammate declined the action ${action.toolName} — do not retry it; tell the customer it could not be done`;
+    ? `${visitorDecided ? 'visitor' : 'teammate'} approved and ran ${action.toolName}${cardResult ? ` — ${cardResult}` : ''}`
+    : `${visitorDecided ? 'visitor' : 'teammate'} declined the action ${action.toolName} — do not retry it; tell the customer it could not be done`;
 
   // Resolve the request card in place so console renders the outcome.
   if (action.messageId) {
