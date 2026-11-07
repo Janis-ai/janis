@@ -93,6 +93,19 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-07 — Google OAuth verification: Limited Use / AI disclosure
+- Google flagged the app under the Workspace API Limited Use policy
+  (AI/ML + Workspace user data). Audit: Google-scoped data (gmail.readonly/
+  send + picked Docs/Sheets/Slides via drive.file) flows into prompts to the
+  agent's configured LLM for inference only. Metered providers configured in
+  prod: Gemini API (JANIS_LLM_*, default), OpenAI, Anthropic — all API-tier,
+  no-training terms. OpenRouter gateway exists in code but no key configured;
+  BYOK routes to the customer's own provider. Privacy policy now names the
+  providers. KEY FACT: JANIS_LLM_API_KEY is "JanisApiKey" in GCP project
+  gen-lang-client-0514639223 — billing ENABLED → Gemini API paid tier →
+  Google does not train on its prompts (free-tier keys DO; keep that project
+  billed or this compliance answer changes).
+
 ## 2026-11-06p — Submit args are inputs, not JSON; values-template rescue
 - The concierge's save_widget wrote
   `values: "[['{age}','{hair_color}']]"` — single-quoted cells failed the
