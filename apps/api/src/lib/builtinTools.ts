@@ -3369,6 +3369,125 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     },
   },
   {
+    name: 'stage_reply',
+    description:
+      "Stage a visitor-facing reply onto the draft card of the conversation the operator has open — 'draft a reply to Sam', 'send them a survey that records to the sheet', 'write them a message'. Compose the text yourself and pass any components (inline specs or saved-component refs resolved against that conversation's agent); it lands on their draft card for review and one-click send. The target resolves from the page the operator is viewing right now — never this chat; pass `conversation` only when they clearly mean a thread other than the open one. Admin-only.",
+    params: {
+      text: 'the reply text to send the customer, verbatim',
+      widgets:
+        'optional JSON array — inline component specs [{"type":"form",...}] or refs [{"ref":"component-name","data":{…}}] resolved to saved specs on the target agent',
+      conversation: 'conversation id — only needed when they mean a thread other than the open one',
+      workspace: 'workspace name — only needed when ambiguous',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const resolved = await visitorWorkspace(ctx, user, args.workspace, { adminOnly: true });
+      if (!('ws' in resolved)) return JSON.stringify(resolved);
+      const ws = resolved.ws;
+
+      // Target the open conversation page, not this chat — currentView
+      // reads the operator's `page` trait so the model can't misaddress a
+      // staged draft to its own thread.
+      const targetId = String(args.conversation ?? '').trim() || (await currentView(ctx)).conversationId;
+      if (!targetId) {
+        return JSON.stringify({ error: 'no conversation open — ask them to open the thread to draft for, or pass a conversation id' });
+      }
+      const [conv] = await ctx.db
+        .select()
+        .from(conversations)
+        .innerJoin(agents, eq(conversations.agentId, agents.id))
+        .where(and(eq(conversations.id, targetId), eq(agents.workspaceId, ws.id)))
+        .limit(1);
+      if (!conv) return JSON.stringify({ error: 'that conversation is not in this workspace' });
+      const agent = conv.agents;
+
+      const text = String(args.text ?? '').trim();
+      const rawWidgets = argObjectArray(args.widgets) ?? [];
+      if (!text && !rawWidgets.length) {
+        return JSON.stringify({ error: 'nothing to stage — pass reply text and/or components' });
+      }
+
+      // Components: inline specs validate against the schema; refs resolve
+      // through the saved-component catalog + bound-tool machinery the
+      // suggestion path uses, so the card shows exactly what will send.
+      const { resolveWidgetRef } = await import('./hostedAgent.js');
+      const { loadSecretsMap } = await import('./secrets.js');
+      const { connectionSecrets } = await import('./connections.js');
+      const agentToolDefs = toolsFor(agent);
+      const refSpecs = new Map<string, import('./hostedAgent.js').SavedWidgetDef>();
+      for (const w of await ctx.db
+        .select({
+          name: agentWidgets.name,
+          description: agentWidgets.description,
+          spec: agentWidgets.spec,
+          states: agentWidgets.states,
+          tool: agentWidgets.tool,
+        })
+        .from(agentWidgets)
+        .where(eq(agentWidgets.agentId, agent.id))) {
+        const spec = WidgetComponent.safeParse(w.spec);
+        if (!spec.success) continue;
+        const states = z.array(WidgetState).safeParse(w.states ?? []);
+        const tool = w.tool ? WidgetToolBinding.safeParse(w.tool) : null;
+        refSpecs.set(normWidgetRef(w.name), {
+          spec: spec.data,
+          states: states.success ? states.data : undefined,
+          tool: tool?.success ? tool.data : undefined,
+          description: w.description ?? undefined,
+        });
+      }
+      const secrets = { ...(await loadSecretsMap(ctx.db, agent.id)), ...(await connectionSecrets(ctx.db, agent.id)) };
+      const runCtx = { db: ctx.db, convId: conv.conversations.id, workspaceId: ws.id, agent, suggesting: true as const };
+      const widgets: unknown[] = [];
+      const failures: string[] = [];
+      for (const w of rawWidgets.slice(0, 3)) {
+        const ref = (w as { ref?: unknown }).ref;
+        if (typeof ref === 'string') {
+          const def = refSpecs.get(normWidgetRef(ref));
+          if (!def) {
+            failures.push(`"${ref}" is not a saved component on ${agent.name}`);
+            continue;
+          }
+          const spec = await resolveWidgetRef(
+            def,
+            (w as { data?: Record<string, unknown> }).data,
+            agentToolDefs,
+            secrets,
+            runCtx,
+            new Set<string>(),
+          );
+          if (spec) widgets.push(spec);
+          else failures.push(`"${ref}" resolved to nothing (bound tool missing, gated, or errored)`);
+        } else {
+          const spec = WidgetComponent.safeParse(w);
+          if (spec.success) widgets.push(spec.data);
+          else failures.push(`a component spec failed validation (${spec.error.issues[0]?.message})`);
+        }
+      }
+      if (!text && !widgets.length) {
+        return JSON.stringify({ error: `nothing sendable — ${failures.join('; ') || 'empty draft'}` });
+      }
+
+      const { storeSuggestion } = await import('../services/suggestions.js');
+      await storeSuggestion(ctx.db, conv.conversations.id, text || '(components only)', 'agent', undefined, {
+        ...(widgets.length ? { widgets } : {}),
+        ...(args.instruction ? { instruction: String(args.instruction) } : {}),
+      });
+      return JSON.stringify({
+        staged: true,
+        conversation_id: conv.conversations.id,
+        summary:
+          `Staged on the draft card — the operator reviews and sends it there.` +
+          (failures.length ? ` Dropped: ${failures.join('; ')}.` : ''),
+      });
+    },
+  },
+  {
     // Executor for approved save_widget cards — hidden from the model.
     name: 'apply_save_widget',
     description: 'internal — executes an approved save_widget action card',
