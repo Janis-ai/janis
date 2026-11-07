@@ -675,6 +675,14 @@ export default function ConversationPage() {
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
   }, [instrValue]);
+  // While a redraft is in flight the body swaps for a skeleton sized to
+  // the last rendered body, so the card doesn't collapse and re-grow.
+  const draftBodyRef = useRef<HTMLDivElement>(null);
+  const draftBodyH = useRef(0);
+  useLayoutEffect(() => {
+    const el = draftBodyRef.current;
+    if (el) draftBodyH.current = el.offsetHeight;
+  });
   useEffect(() => {
     if (!replacedSid) return;
     const t = setTimeout(() => setReplacedSid(null), 30_000);
@@ -705,6 +713,7 @@ export default function ConversationPage() {
     setSuggestOpen(false);
     setRoutedToCopilot(false);
     setLastInstruction(null);
+    setInstr(null);
     setDraftEditing(false);
     setDraftEdits(null);
     setEditErr('');
@@ -789,6 +798,7 @@ export default function ConversationPage() {
     if (suggest.isPending) return;
     const g = instruction?.trim();
     setLastInstruction(g || null);
+    setInstr(g ?? null);
     setSuggestOpen(true);
     setReplacedSid(data?.suggestions?.[0]?.id ?? null);
     setDraftSent(false);
@@ -1080,6 +1090,11 @@ export default function ConversationPage() {
   }
   if (!data) return <ConversationSkeleton />;
   const { conversation: c, messages, alerts, suggestions } = data;
+  // Regenerating — the card keeps its prompt header visible but frozen
+  // while the new draft is in flight (pending, or waiting for the fresh
+  // row to replace the stale one at the top of the list).
+  const draftBusy =
+    suggest.isPending || (replacedSid !== null && suggestions?.[0]?.id === replacedSid);
 
   // Apply the operator's draft edits: validate each component's JSON, then
   // lift any `tool`/`submit` block out of the spec into a REAL saved
@@ -2107,14 +2122,11 @@ export default function ConversationPage() {
           )}
           {canSuggest && (suggestOpen || suggestions?.length > 0) && (
             <div className="card suggestion draft">
-              {suggest.isPending ||
-              (replacedSid !== null && suggestions?.[0]?.id === replacedSid) ? (
-                <div className="muted">Drafting…</div>
-              ) : suggestions?.length > 0 ? (
+              {(suggestions?.length > 0 || draftBusy) && (
                 <>
                   <div className="muted" style={{ marginBottom: 4 }}>
                     <span className="draft-tag">draft</span> Suggested (
-                    {suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
+                    {suggestions?.[0]?.source === 'agent' ? 'your agent' : 'AI'})
                   </div>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'flex-start' }}>
                     <textarea
@@ -2122,6 +2134,7 @@ export default function ConversationPage() {
                       className="draft-inst"
                       rows={1}
                       value={instrValue}
+                      disabled={draftBusy}
                       onChange={(e) => setInstr(e.target.value)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && !e.shiftKey) {
@@ -2143,7 +2156,7 @@ export default function ConversationPage() {
                         className="btn icon"
                         title="Redraft with this prompt"
                         aria-label="Redraft with this prompt"
-                        disabled={suggest.isPending}
+                        disabled={draftBusy}
                         onClick={() => {
                           const g = instrValue.trim();
                           setReplacedSid(suggestions?.[0]?.id ?? null);
@@ -2160,6 +2173,10 @@ export default function ConversationPage() {
                   <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>
                     draft prompt — Enter or ↻ to redraft · Shift+Enter for a new line
                   </div>
+                </>
+              )}
+              {suggestions?.length > 0 && !draftBusy ? (
+                <div ref={draftBodyRef}>
                   {suggestions[0].notes && (
                     <div className="muted" style={{ fontStyle: 'italic', marginBottom: 6 }}>
                       {suggestions[0].notes}
@@ -2446,9 +2463,19 @@ export default function ConversationPage() {
                     </div>
                     );
                   })}
-                </>
+                </div>
               ) : (
-                <div className="muted">Drafting…</div>
+                <>
+                  <div className="muted">Drafting…</div>
+                  <div
+                    className="skel"
+                    style={{
+                      height: draftBodyH.current || 140,
+                      width: '100%',
+                      marginTop: 8,
+                    }}
+                  />
+                </>
               )}
               <div className="draft-foot">
               <div className="row" style={{ marginTop: 10 }}>
@@ -2456,6 +2483,7 @@ export default function ConversationPage() {
                 <button
                   className="btn primary"
                   disabled={
+                    draftBusy ||
                     !(suggestions?.length > 0) ||
                     !!suggestions[0].payload?.empty_draft ||
                     outbox.some((o) => o.status === 'pending')
@@ -2490,6 +2518,7 @@ export default function ConversationPage() {
                 <button
                   className="btn primary"
                   disabled={
+                    draftBusy ||
                     !(suggestions?.length > 0) ||
                     !!suggestions[0].payload?.empty_draft ||
                     outbox.some((o) => o.status === 'pending')
@@ -2534,6 +2563,7 @@ export default function ConversationPage() {
                 {!draftSent && !selfThread && hasCopilot && (
                   <button
                     className="btn"
+                    disabled={draftBusy}
                     title="Hand this draft to Copilot — it composes and stages the reply back here"
                     onClick={() => {
                       const s = suggestions?.[0];
