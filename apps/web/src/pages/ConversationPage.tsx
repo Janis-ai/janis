@@ -2465,17 +2465,18 @@ export default function ConversationPage() {
                   })}
                 </div>
               ) : (
-                <>
+                <div
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    height: draftBodyH.current || undefined,
+                    minHeight: draftBodyH.current ? 0 : 140,
+                    overflow: 'hidden',
+                  }}
+                >
                   <div className="muted">Drafting…</div>
-                  <div
-                    className="skel"
-                    style={{
-                      height: draftBodyH.current || 140,
-                      width: '100%',
-                      marginTop: 8,
-                    }}
-                  />
-                </>
+                  <div className="skel" style={{ flex: 1, marginTop: 8 }} />
+                </div>
               )}
               <div className="draft-foot">
               <div className="row" style={{ marginTop: 10 }}>
