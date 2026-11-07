@@ -2512,6 +2512,27 @@ export function agentRoutes(db: Db) {
     return c.json({ result: result.slice(0, 12000) });
   });
 
+  // Run a CREATOR tool for real — the composer's "＋ create new" option
+  // (make the spreadsheet gsheets_append writes to). Only defs flagged
+  // `creator`: operator-initiated in the console, never agent-silent.
+  const toolCreateBody = z.object({
+    tool: z.string().min(1),
+    args: z.record(z.string(), z.unknown()).optional(),
+  });
+  app.post('/:id/tools/create', agentAdmin, zValidator('json', toolCreateBody), async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const body = c.req.valid('json');
+    const def = toolsFor(agent).find((t) => t.name === body.tool);
+    if (!def) return c.json({ error: `no tool "${body.tool}"` }, 404);
+    if (!def.creator) return c.json({ error: 'not a create tool' }, 400);
+    const result = await callTool(def, body.args ?? {}, {
+      ...(await loadSecretsMap(db, agent.id)),
+      ...(await connectionSecrets(db, agent.id)),
+    });
+    return c.json({ result: result.slice(0, 12000) });
+  });
+
   app.delete('/:id/knowledge/:fileId', agentAdmin, async (c) => {
     if (!(await ownedAgent(c))) return c.json({ error: 'not found' }, 404);
     // Deleting a site row drops its page children too — the site IS the

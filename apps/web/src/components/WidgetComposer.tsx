@@ -479,6 +479,49 @@ function Composer({
     return tools.find((t) => t.name === `${prefix}_tabs`)?.name;
   };
 
+  /** The sibling create tool — gsheets_append → gsheets_create — feeding
+   *  the "＋ create new" option on id pickers. */
+  const createToolFor = (toolName: string): string | undefined => {
+    const prefix = toolName.replace(
+      /_(append|update|read|create|add|write|delete|get|set|find|search|put|post|list|tabs)$/i,
+      '',
+    );
+    return tools.find((t) => t.name === `${prefix}_create`)?.name;
+  };
+
+  // "＋ create new" on an id picker — inline name input → POST
+  // /tools/create → the new id lands as the arg's value.
+  const [creating, setCreating] = useState<string | null>(null);
+  const [createName, setCreateName] = useState('');
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createErr, setCreateErr] = useState('');
+  const createResource = async (param: string) => {
+    const ct = submitName ? createToolFor(submitName) : undefined;
+    if (!ct || !createName.trim()) return;
+    setCreateBusy(true);
+    setCreateErr('');
+    try {
+      const out = await api<{ result: string }>(`/api/agents/${agentId}/tools/create`, {
+        method: 'POST',
+        body: JSON.stringify({ tool: ct, args: { title: createName.trim() } }),
+      });
+      const j = JSON.parse(out.result) as { spreadsheetId?: string; id?: string };
+      const newId = j.spreadsheetId ?? j.id ?? '';
+      if (!newId) throw new Error('created, but no id came back');
+      setListRows((p) => ({
+        ...p,
+        [param]: [...(p[param] ?? []), { id: newId, label: createName.trim() }],
+      }));
+      setSubmitArgs({ ...submitArgs, [param]: newId });
+      setCreating(null);
+      setCreateName('');
+    } catch (e) {
+      setCreateErr(e instanceof Error ? e.message : 'create failed');
+    } finally {
+      setCreateBusy(false);
+    }
+  };
+
   /** Run a read tool and normalize its rows to {id,label} pick options —
    *  covers files rows (id/name) and tab rows ({properties:{title}}). */
   const fetchRows = async (tool: string, args: Record<string, unknown> = {}) => {
@@ -847,7 +890,14 @@ function Composer({
                                   className="input"
                                   style={inputStyle}
                                   value={submitArgs[k] ?? ''}
-                                  onChange={(e) => setSubmitArgs({ ...submitArgs, [k]: e.target.value })}
+                                  onChange={(e) => {
+                                    if (e.target.value === '__create') {
+                                      setCreating(k);
+                                      setCreateErr('');
+                                      return;
+                                    }
+                                    setSubmitArgs({ ...submitArgs, [k]: e.target.value });
+                                  }}
                                 >
                                   <option value="">— pick one —</option>
                                   {rows.map((r) => (
@@ -855,6 +905,9 @@ function Composer({
                                   ))}
                                   {submitArgs[k] && !rows.some((r) => r.id === submitArgs[k]) && (
                                     <option value={submitArgs[k]}>{submitArgs[k]}</option>
+                                  )}
+                                  {createToolFor(submitName) && (
+                                    <option value="__create">＋ create new…</option>
                                   )}
                                 </select>
                               )
@@ -894,6 +947,36 @@ function Composer({
                           <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
                             {helperFor(k)}
                           </div>
+                        )}
+                        {creating === k && (
+                          <div className="row" style={{ alignItems: 'flex-end', gap: 6, marginTop: 4 }}>
+                            <Field label="name it">
+                              <input
+                                autoFocus
+                                className="input"
+                                style={inputStyle}
+                                value={createName}
+                                onChange={(e) => setCreateName(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') void createResource(k);
+                                }}
+                                placeholder="Intake responses"
+                              />
+                            </Field>
+                            <button
+                              className="btn"
+                              disabled={!createName.trim() || createBusy}
+                              onClick={() => void createResource(k)}
+                            >
+                              {createBusy ? 'creating…' : 'create'}
+                            </button>
+                            <button className="btn sm" onClick={() => setCreating(null)}>
+                              cancel
+                            </button>
+                          </div>
+                        )}
+                        {creating === k && createErr && (
+                          <div className="error" style={{ fontSize: 11 }}>{createErr}</div>
                         )}
                         {k === 'spreadsheet_id' && submitArgs[k]?.trim() && (
                           <a

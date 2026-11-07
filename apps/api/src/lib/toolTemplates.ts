@@ -18,6 +18,9 @@ interface CatalogTool {
   bodyTemplate?: string;
   /** Mutating/money-moving calls — the agent proposes, a teammate approves. */
   approval?: boolean;
+  /** "Create a named resource" — the composer's "＋ create new" option can
+   *  run it directly via POST /tools/create (see ToolDef.creator). */
+  creator?: boolean;
   /** Customer-record tool — args hard-bind to the conversation's verified
    *  identity at runtime (see ToolDef.identity in toolExec). */
   identity?: boolean;
@@ -1832,6 +1835,21 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         url: 'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets.properties.title',
         headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
         params: { spreadsheet_id: 'sheet id from gsheets_list' },
+      },
+      {
+        name: 'gsheets_create',
+        label: 'Create a spreadsheet',
+        description:
+          'Create a new spreadsheet by title — returns spreadsheetId, the id the other Sheets tools take.',
+        method: 'POST',
+        url: 'https://sheets.googleapis.com/v4/spreadsheets',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: { title: 'name for the new spreadsheet' },
+        bodyTemplate: '{"properties":{"title":"${title:text}"}}',
+        // Operator-run from the composer's "create new" option; the agent
+        // itself only proposes (a new file is a real action).
+        creator: true,
+        approval: true,
       },
       {
         name: 'gsheets_append',

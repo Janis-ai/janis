@@ -31,6 +31,10 @@ export interface ToolDef {
   /** Mutating tools: the model proposes the call, a teammate approves or
    *  denies it in the console or Slack, and only then it executes. */
   approval?: boolean;
+  /** "Create a named resource" tools (gsheets_create) — safe for the
+   *  composer's "＋ create new" pick option; the operator runs it directly
+   *  via POST /tools/create, and the agent's own calls stay approval-gated. */
+  creator?: boolean;
   /** Installed but switched off — stays in config (credentials, approval
    *  flags, template stamp all kept) but toolsFor never hands it to the
    *  model. Toggled via PATCH /:id/tools/:template's `disabled` map. */
