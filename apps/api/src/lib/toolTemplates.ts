@@ -87,7 +87,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     id: 'shopify',
     name: 'Shopify',
     category: 'E-commerce',
-    blurb: 'Track and look up orders, cancel, edit addresses, create draft orders — customers can buy and manage orders in chat.',
+    blurb: 'Answers "where\'s my order", searches the catalog with live prices and stock, and does the work — cancels, refunds, returns, address edits, draft orders, discounts and sales analytics.',
     docs_url: 'https://shopify.dev/docs/api/admin-graphql',
     fields: [
       { key: 'shop', label: 'Shop domain', placeholder: 'mystore.myshopify.com' },
@@ -457,7 +457,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'WooCommerce',
     category: 'E-commerce',
     blurb:
-      'Look up orders and products on a WooCommerce store — answers "where\'s my order" and can leave private notes for the team.',
+      'Answers "where\'s my order" and product questions on a WooCommerce store — looks up orders, searches the catalog, and leaves private notes for the team.',
     docs_url: 'https://woocommerce.github.io/woocommerce-rest-api-docs/',
     fields: [
       { key: 'store_url', label: 'Store URL', placeholder: 'mystore.com' },
@@ -547,7 +547,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     id: 'hubspot',
     name: 'HubSpot',
     category: 'CRM',
-    blurb: 'Find and create contacts, and open tickets from escalations.',
+    blurb: 'Finds and creates contacts, updates contact properties, and opens tickets from escalations — via a private-app token.',
     docs_url: 'https://developers.hubspot.com/docs/api/overview',
     fields: [
       {
@@ -614,7 +614,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     id: 'hubspot-connect',
     name: 'HubSpot (OAuth)',
     category: 'CRM',
-    blurb: 'Same HubSpot tools via one-click OAuth — no private-app token to paste.',
+    blurb: 'Finds and creates contacts, updates contact properties, and opens tickets from escalations — one-click OAuth, no token to paste.',
     docs_url: 'https://developers.hubspot.com/docs/api/oauth-quickstart-guide',
     fields: [],
     secrets: () => ({}),
@@ -631,7 +631,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     id: 'zendesk',
     name: 'Zendesk',
     category: 'Support desk',
-    blurb: 'Search existing tickets and create tickets on escalation.',
+    blurb: 'Searches a customer\'s tickets and files new ones on escalation — via an API token.',
     docs_url: 'https://developer.zendesk.com/api-reference/',
     fields: [
       { key: 'subdomain', label: 'Subdomain', placeholder: 'yourcompany.zendesk.com' },
@@ -678,7 +678,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Zendesk (client credentials)',
     category: 'Support desk',
     blurb:
-      'Same ticket tools via your own OAuth client — the future-proof auth; Zendesk retires API tokens April 2027.',
+      'Searches a customer\'s tickets and files new ones on escalation — via your own OAuth client, the future-proof auth (Zendesk retires API tokens April 2027).',
     docs_url: 'https://developer.zendesk.com/api-reference/sales-force-service-apps/',
     fields: [
       { key: 'subdomain', label: 'Subdomain', placeholder: 'yourcompany.zendesk.com' },
@@ -737,7 +737,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Zendesk (OAuth)',
     category: 'Support desk',
     blurb:
-      'Same Zendesk tools via one-click OAuth consent — no client to register (Janis global client).',
+      'Searches a customer\'s tickets and files new ones on escalation — one-click OAuth with the Janis app, nothing to paste.',
     docs_url: 'https://developer.zendesk.com/documentation/api-basics/using-oauth-authentication/',
     // The only field OAuth can't supply: the customer's subdomain drives
     // both authorize and token hosts. The card appends it to the connect
@@ -819,7 +819,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Salesforce (OAuth)',
     category: 'CRM',
     blurb:
-      'Same Salesforce tools via one-click OAuth — no connected app to configure per org.',
+      'Queries contacts, accounts and cases — answers account questions and logs escalations over one-click OAuth.',
     docs_url: 'https://help.salesforce.com/s/articleView?id=sf.connected_app_create.htm',
     fields: [],
     secrets: () => ({}),
@@ -933,7 +933,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     id: 'jira-connect',
     name: 'Jira (OAuth)',
     category: 'Issue tracking',
-    blurb: 'Same Jira tools via one-click OAuth — no API token to paste.',
+    blurb: 'Checks ticket status for customers and files issues on escalation — one-click OAuth, no API token to paste.',
     docs_url: 'https://developer.atlassian.com/cloud/jira/platform/oauth-2-3lo-apps/',
     fields: [],
     secrets: () => ({}),
@@ -997,7 +997,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     id: 'confluence-connect',
     name: 'Confluence (OAuth)',
     category: 'Docs & data',
-    blurb: 'Same Confluence tools via one-click OAuth — no API token to paste.',
+    blurb: 'Grounds answers in your runbooks and docs — searches and reads Confluence pages over one-click OAuth.',
     docs_url: 'https://developer.atlassian.com/cloud/confluence/oauth-2-3lo-apps/',
     fields: [],
     secrets: () => ({}),
@@ -1114,7 +1114,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Linear (OAuth)',
     category: 'Issue tracking',
     blurb:
-      'Same Linear tools via one-click OAuth — issues post as the app, not whoever connected.',
+      'Checks issue status for customers and files issues on escalation — one-click OAuth, issues post as the app.',
     docs_url: 'https://linear.app/developers/oauth-2-0-authentication',
     fields: [],
     secrets: () => ({}),
@@ -1243,7 +1243,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'GitHub (OAuth)',
     category: 'Issue tracking',
     blurb:
-      'Same GitHub tools via one-click OAuth — no personal access token to paste.',
+      'Checks issue status for customers and files issues on escalation — one OAuth grant covers every repo you can reach.',
     docs_url:
       'https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps',
     fields: [],
@@ -1309,7 +1309,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Slack (OAuth)',
     category: 'Communication',
     blurb:
-      'Same Slack tools via one-click OAuth — Janis installs as a bot into your workspace.',
+      'Posts escalations into a Slack channel with the conversation context — one-click install as a bot in your workspace.',
     docs_url: 'https://docs.slack.dev/authentication/installing-with-oauth/',
     fields: [],
     secrets: () => ({}),
@@ -1425,7 +1425,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Notion (OAuth)',
     category: 'Docs & data',
     blurb:
-      'Same Notion tools via one-click OAuth — pick the pages to share during consent, no token to paste.',
+      'Answers from your team\'s docs — searches and reads Notion pages and databases, and can file new pages. Pick what to share during OAuth consent.',
     docs_url: 'https://developers.notion.com/docs/authorization',
     fields: [],
     secrets: () => ({}),
@@ -1469,7 +1469,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     id: 'stripe',
     name: 'Stripe',
     category: 'Billing',
-    blurb: 'Look up customers and their charges — answers "why was I charged" questions.',
+    blurb: 'Answers "why was I charged" — finds customers, charges and subscriptions, lists products and prices, and can refund or change a subscription with teammate approval.',
     docs_url: 'https://docs.stripe.com/keys#limit-access',
     fields: [
       {
@@ -1764,7 +1764,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Calendly (OAuth)',
     category: 'Scheduling',
     blurb:
-      'One-click Calendly connect — share booking links, check real slot availability, and look up a customer’s scheduled events.',
+      'Shares booking links, checks real slot availability, and looks up a customer’s scheduled events — one-click connect.',
     docs_url: 'https://developer.calendly.com/api-docs',
     fields: [],
     secrets: () => ({}),
@@ -1782,7 +1782,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Google Sheets',
     category: 'Docs & data',
     blurb:
-      'Read rows and append to Google Sheets — Connect grants read+write on the signed-in account\u2019s spreadsheets.',
+      'Reads rows, updates cells, and appends to Google Sheets — connect an account, then pick which spreadsheets the agent can use.',
     docs_url: 'https://developers.google.com/sheets/api',
     fields: [],
     secrets: () => ({}),
@@ -1841,7 +1841,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Google Docs',
     category: 'Docs & data',
     blurb:
-      'Read, create, and append to Google Docs — Connect grants access on the signed-in account\u2019s documents.',
+      'Reads, creates, and appends to Google Docs — connect an account, then pick which documents the agent can use.',
     docs_url: 'https://developers.google.com/docs/api',
     fields: [],
     secrets: () => ({}),
@@ -1899,7 +1899,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Google Slides',
     category: 'Docs & data',
     blurb:
-      'Read slide decks — titles, body text, and speaker notes — and create new presentations.',
+      'Reads slide decks — titles, body text, and speaker notes — and creates new presentations from the connected account.',
     docs_url: 'https://developers.google.com/slides/api',
     fields: [],
     secrets: () => ({}),
@@ -1946,7 +1946,7 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
     name: 'Google Drive',
     category: 'Docs & data',
     blurb:
-      'Read any file the user picks in Drive — Google Docs/Sheets/Slides export to text, Office files (docx/xlsx/pptx) convert to Google format first.',
+      'Reads any file you share from Drive — Docs/Sheets/Slides export to text, Office files (docx/xlsx/pptx) convert to Google format first.',
     docs_url: 'https://developers.google.com/drive/api',
     fields: [],
     secrets: () => ({}),

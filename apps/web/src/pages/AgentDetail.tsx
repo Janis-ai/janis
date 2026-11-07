@@ -3757,9 +3757,14 @@ function IntegrationCards({
 
   const installedCount = (t: ToolTemplateInfo) => {
     const names = new Set((cfg.tools ?? []).map((x) => x.name));
-    return t.tools.filter((x) => names.has(x.name)).length;
+    // Discovery templates (MCP) declare no catalog tools — their installs
+    // match by the template stamp, not by name.
+    return t.tools.length
+      ? t.tools.filter((x) => names.has(x.name)).length
+      : (cfg.tools ?? []).filter((x) => x.template === t.id).length;
   };
-  const installed = (t: ToolTemplateInfo) => installedCount(t) === t.tools.length;
+  const installed = (t: ToolTemplateInfo) =>
+    t.tools.length ? installedCount(t) === t.tools.length : installedCount(t) > 0;
   // Drifted installs — the template gained actions after connect, or a
   // deliberate subset was kept. Counts as connected, flagged as partial,
   // and "Update credentials"/re-install completes the set (install merges
@@ -3785,11 +3790,20 @@ function IntegrationCards({
       (sugOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER),
   );
 
-  // Progressive disclosure — suggested-for-this-agent (plus anything
-  // already installed) leads; the rest of the catalog is one click away
-  // under "Browse all", not a wall of irrelevant cards.
-  const shown = templates.filter((t) => sugOrder.has(t.id) || installedCount(t) > 0);
-  const rest = templates.filter((t) => !shown.includes(t));
+  // Suggested-for-this-agent (plus anything already installed) leads
+  // unsectioned; the rest of the catalog stays on the page below, grouped
+  // into category sections in catalog order. Dismissed suggestions that
+  // aren't installed fall back into their section — "not needed" means
+  // stop floating them to the top.
+  const shown = templates.filter(
+    (t) => (sugOrder.has(t.id) && !dismissedTpls.has(t.id)) || installedCount(t) > 0,
+  );
+  const restByCategory = new Map<string, ToolTemplateInfo[]>();
+  for (const t of templates.filter((t) => !shown.includes(t))) {
+    const l = restByCategory.get(t.category) ?? [];
+    l.push(t);
+    restByCategory.set(t.category, l);
+  }
   const grid = (list: ToolTemplateInfo[]) => (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 12 }}>
       {list.map(card)}
@@ -3804,6 +3818,11 @@ function IntegrationCards({
       openId === t.id
         ? t
         : manuals.find((m) => openId === `${t.id}:manual:${m.id}`);
+    // Discovery templates declare no catalog tools — the approval list
+    // reads the defs that were discovered at install instead.
+    const cardTools = t.tools.length
+      ? t.tools
+      : (cfg.tools ?? []).filter((x) => x.template === t.id);
     return (
         <div
           key={t.id}
@@ -3840,6 +3859,15 @@ function IntegrationCards({
             <span className="badge" style={{ marginLeft: 'auto' }}>{t.category}</span>
           </div>
           <div className="muted" style={{ fontSize: 12, margin: '8px 0 10px' }}>{t.blurb}</div>
+          {/* Action roll-call — the blurb says what it's for, this names
+              what it can do. Installed cards render the same labels as
+              toggle rows below instead. */}
+          {!installed(t) && t.tools.length > 0 && (
+            <div className="muted" style={{ fontSize: 11, margin: '-4px 0 10px', lineHeight: 1.7 }}>
+              {t.tools.slice(0, 7).map((x) => x.label ?? x.name).join(' · ')}
+              {t.tools.length > 7 ? ` · +${t.tools.length - 7} more` : ''}
+            </div>
+          )}
           {sugReason.get(t.id) ? (
             <div className="muted" style={{ fontSize: 11, margin: '-4px 0 10px', fontStyle: 'italic' }}>
               From your brief — {sugReason.get(t.id)}
@@ -3861,7 +3889,7 @@ function IntegrationCards({
               <div style={{ fontSize: 11, marginBottom: 2 }}>
                 Tick an action to require a teammate's approval before it runs:
               </div>
-              {t.tools.map((x) => {
+              {cardTools.map((x) => {
                 const live = (cfg.tools ?? []).find((o) => o.name === x.name);
                 const gated = live ? !!live.approval : !!x.approval;
                 const off = !!live?.disabled;
@@ -4137,21 +4165,22 @@ function IntegrationCards({
           {builtinErr && <div className="error" style={{ marginTop: 8 }}>{builtinErr}</div>}
         </div>
       ) : null}
-      {shown.length ? (
+      {shown.length > 0 && (
         <>
+          <h2 className="section-title">
+            {shown.some((t) => sugOrder.has(t.id) && !dismissedTpls.has(t.id))
+              ? 'Suggested & connected'
+              : 'Connected'}
+          </h2>
           {grid(shown)}
-          {rest.length > 0 && (
-            <details style={{ marginTop: 12 }}>
-              <summary className="muted" style={{ cursor: 'pointer', fontSize: 13 }}>
-                Browse all integrations ({rest.length})
-              </summary>
-              <div style={{ marginTop: 10 }}>{grid(rest)}</div>
-            </details>
-          )}
         </>
-      ) : (
-        grid(rest)
       )}
+      {[...restByCategory].map(([cat, list]) => (
+        <div key={cat}>
+          <h2 className="section-title">{cat}</h2>
+          {grid(list)}
+        </div>
+      ))}
       {/* Zapier is external automation on the agent's API keys, not a tool
           template — static card, same grid styling. The generated Workflow
           Element embed drops in here once zap templates are published. */}
