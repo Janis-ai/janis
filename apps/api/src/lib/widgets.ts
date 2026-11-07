@@ -1963,22 +1963,39 @@ export function extractWidgets(text: string): {
     }
     let ok = false;
     if (widgets.length < MAX_WIDGETS) {
-      try {
-        const parsed = WidgetComponent.safeParse(JSON.parse(m![1]));
+      const tryParse = (s: string): { ok: boolean; reason?: string } => {
+        let raw: unknown;
+        try {
+          raw = JSON.parse(s);
+        } catch {
+          return { ok: false, reason: 'malformed JSON' };
+        }
+        const parsed = WidgetComponent.safeParse(raw);
         if (parsed.success) {
           widgets.push(parsed.data);
-          ok = true;
-        } else {
-          const issue = parsed.error.issues[0];
-          dropReasons.push(
-            issue
-              ? `${issue.path.join('.') || 'spec'}: ${issue.message}`
-              : 'invalid component spec',
-          );
+          return { ok: true };
         }
-      } catch {
-        dropReasons.push('malformed JSON');
-      }
+        const issue = parsed.error.issues[0];
+        return {
+          ok: false,
+          reason: issue
+            ? `${issue.path.join('.') || 'spec'}: ${issue.message}`
+            : 'invalid component spec',
+        };
+      };
+      // Lenient second pass — code fences, single-quoted strings,
+      // trailing commas, unquoted keys: the model's most common drift.
+      const lenient = (s: string) =>
+        s
+          .replace(/^\s*```(?:json)?/i, '')
+          .replace(/```\s*$/, '')
+          .replace(/'([^'\\]*)'/g, '"$1"')
+          .replace(/,\s*([}\]])/g, '$1')
+          .replace(/([{,]\s*)([a-zA-Z_$][\w$]*)\s*:/g, '$1"$2":');
+      let r = tryParse(m![1]);
+      if (!r.ok) r = tryParse(lenient(m![1]));
+      ok = r.ok;
+      if (!ok && r.reason) dropReasons.push(r.reason);
     }
     if (!ok) dropped++;
     if (before) out.push(before);
