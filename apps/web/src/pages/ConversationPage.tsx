@@ -619,26 +619,12 @@ export default function ConversationPage() {
   };
 
   const [suggestOpen, setSuggestOpen] = useState(false);
-  // Operator guidance for the next draft — "offer 10% off and attach the
-  // return form". Rides /suggest as `instruction`; the landed suggestion
-  // echoes it back via payload.instruction.
-  const [guide, setGuide] = useState('');
   // The operator handed the draft off to Copilot — the card shows a quiet
   // receipt until a staged draft lands.
   const [routedToCopilot, setRoutedToCopilot] = useState(false);
   // The guide text behind the current draft — the Copilot hand-off seed
   // carries it forward so the concierge knows what the draft is for.
   const [lastInstruction, setLastInstruction] = useState<string | null>(null);
-  const guideRef = useRef<HTMLTextAreaElement>(null);
-  // Autosize like the composer — a pasted multi-line brief shouldn't
-  // collapse into a one-line scroll.
-  useEffect(() => {
-    const t = guideRef.current;
-    if (!t) return;
-    t.style.height = 'auto';
-    t.style.height = Math.min(t.scrollHeight, 120) + 'px';
-    t.style.overflowY = t.scrollHeight > 120 ? 'auto' : 'hidden';
-  }, [guide]);
   // Components a used suggestion carries — ride along on the next reply
   // send, dismissed with ✕ or consumed on success.
   const [pendingComponents, setPendingComponents] = useState<{
@@ -682,7 +668,6 @@ export default function ConversationPage() {
     setActionResults({});
     setEditAction(null);
     setSuggestOpen(false);
-    setGuide('');
     setRoutedToCopilot(false);
     setLastInstruction(null);
     setOb(() => []);
@@ -757,27 +742,21 @@ export default function ConversationPage() {
     onError: (e) => { setError(e.message); setSuggestOpen(false); },
   });
 
-  const askSuggestion = () => {
-    setSuggestOpen(true);
-    setDraftSent(false);
-    setActionResults({});
-    setReplacedSid(null);
-    suggest.mutate(undefined);
-  };
-
-  // Guided draft — the guide input's submit. Draft-first: any instruction
-  // (or none) runs the one-shot /suggest; Copilot is the escalation path
-  // via "Continue in Copilot" on the card, not the default route.
-  const guidedSuggest = () => {
+  // "Draft a reply with AI" — the composer's popover submits the operator's
+  // guidance (blank = draft from conversation context). Any instruction
+  // rides /suggest as `instruction`; the landed suggestion echoes it back
+  // via payload.instruction. Copilot is the escalation path via "Continue
+  // in Copilot" on the card, not the default route.
+  const draftReply = (instruction?: string) => {
     if (suggest.isPending) return;
-    const instruction = guide.trim();
-    setLastInstruction(instruction || null);
+    const g = instruction?.trim();
+    setLastInstruction(g || null);
     setSuggestOpen(true);
     setReplacedSid(data?.suggestions?.[0]?.id ?? null);
     setDraftSent(false);
     setActionResults({});
-    suggest.mutate(instruction || undefined);
-    setGuide('');
+    setRoutedToCopilot(false);
+    suggest.mutate(g || undefined);
   };
 
   const saveTest = useMutation({
@@ -2062,10 +2041,6 @@ export default function ConversationPage() {
                     {suggestions[0].notes}
                   </div>
                 )}
-                {/* The draft text scrolls in its own region — the controls
-                    stay above it (draft-body gets order:1, draft-foot stays
-                    order 0 in DOM order but renders first). */}
-                <div className="draft-body">
                 {suggestions[0].payload?.empty_draft ? (
                   <div className="muted" style={{ fontStyle: 'italic' }}>
                     The agent couldn't draft a reply this time — nothing usable came
@@ -2237,7 +2212,6 @@ export default function ConversationPage() {
                   </div>
                   );
                 })}
-                </div>
               </>
             ) : (
               <div className="muted">Drafting…</div>
@@ -2304,12 +2278,12 @@ export default function ConversationPage() {
                 aria-label="Try another suggestion"
                 disabled={suggest.isPending}
                 onClick={() => {
-                  // Re-draft through the same path — a filled guide input
-                  // carries into the regen, an empty one drafts blind.
+                  // Re-draft blind from context — guidance goes through the
+                  // composer's "Draft a reply with AI" popover now.
                   setReplacedSid(suggestions?.[0]?.id ?? null);
                   setDraftSent(false);
                   setActionResults({});
-                  suggest.mutate(guide.trim() || undefined);
+                  suggest.mutate(undefined);
                 }}
               >
                 <RefreshCw size={13} />
@@ -2349,35 +2323,6 @@ export default function ConversationPage() {
             {!draftSent && routedToCopilot && (
               <div className="muted" style={{ marginTop: 6 }}>
                 Opened in Copilot — a staged draft will land here.
-              </div>
-            )}
-            {!draftSent && (
-              <div className="row" style={{ marginTop: 10, gap: 6, alignItems: 'flex-end' }}>
-                <textarea
-                  ref={guideRef}
-                  rows={1}
-                  value={guide}
-                  onChange={(e) => {
-                    setGuide(e.target.value);
-                    setRoutedToCopilot(false);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      guidedSuggest();
-                    }
-                  }}
-                  placeholder="Guide the draft — e.g. “offer 10% off and include the return form”"
-                  style={{ flex: 1, resize: 'none' }}
-                />
-                <button
-                  className="btn sm"
-                  onClick={guidedSuggest}
-                  disabled={suggest.isPending || !guide.trim()}
-                  title="Draft a reply to your instruction"
-                >
-                  Draft
-                </button>
               </div>
             )}
             </div>
@@ -2448,11 +2393,8 @@ export default function ConversationPage() {
               pingTyping();
             }}
             onSend={send}
-            onSuggest={
-              suggestOpen || suggestions?.length > 0
-                ? () => { setSuggestOpen(false); void dismissSuggestions(); }
-                : askSuggestion
-            }
+            onSuggest={draftReply}
+            suggestBusy={suggest.isPending}
             suggestActive={suggestOpen || (suggestions?.length ?? 0) > 0}
             onResume={c.state === 'human' ? () => act.mutate('resume') : undefined}
             onTakeover={

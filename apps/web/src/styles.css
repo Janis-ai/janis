@@ -1992,21 +1992,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .conv-main { min-width: 420px; }
 }
 .card.suggestion { border-color: var(--accent); }
-/* The draft card's controls lead: at the 34vh cap the draft text scrolls
-   in .draft-body while the guide input and Send/Edit row sit above it —
-   the actions and the scrollbar are up front, not at the tail of a long
-   suggestion. draft-body carries order:1 so it renders after draft-foot
-   even though it comes first in the DOM. */
-.card.suggestion.draft:has(.draft-body) { display: flex; flex-direction: column; overflow: hidden; }
-.card.suggestion.draft .draft-foot { flex-shrink: 0; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
-.card.suggestion.draft .draft-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-/* A long draft must LOOK scrollable — the global 8px overlay-style thumb
-   blends into the card. Give the draft body a wider, muted thumb with a
-   reserved gutter so the cue is obvious whenever it overflows. */
-.card.suggestion.draft .draft-body { scrollbar-width: auto; scrollbar-color: var(--muted) transparent; }
-.card.suggestion.draft .draft-body::-webkit-scrollbar { width: 10px; }
-.card.suggestion.draft .draft-body::-webkit-scrollbar-track { background: var(--bg-2, var(--bg)); border-radius: 5px; }
-.card.suggestion.draft .draft-body::-webkit-scrollbar-thumb { background: var(--muted); border-radius: 5px; border: 2px solid var(--panel); }
+/* The suggestion draft is a transcript element — full height, no internal
+   scroll, no cap; it grows with its content at the bottom of the thread. */
+.conv-open .conv-main > .card.suggestion.draft { max-height: none; overflow: visible; }
 /* The Ask Janis rail claims ~340px — on the conversation screen at mid widths
    that squeezes the transcript + details into nested scrollbars, so the sidebar
    collapses to icons and the details panel stacks under the transcript in the

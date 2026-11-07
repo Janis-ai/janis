@@ -13,6 +13,7 @@ export default function Composer({
   onResume,
   onTakeover,
   onSuggest,
+  suggestBusy,
   suggestActive,
   sendAs,
   setSendAs,
@@ -32,8 +33,11 @@ export default function Composer({
   /** Hand the thread to the human — pauses the agent; the button next to
    *  Send toggles Take over ⇄ Resume agent off `state === 'human'`. */
   onTakeover?: () => void;
-  /** AI draft suggestion — lives in the bar as a sparkles icon. */
-  onSuggest?: () => void;
+  /** "Draft a reply with AI" — the popover collects optional guidance and
+   *  calls back with it (undefined = draft from conversation context). */
+  onSuggest?: (guide?: string) => void;
+  /** A suggestion run is in flight — disable the popover's Draft button. */
+  suggestBusy?: boolean;
   /** Pressed-in look while the suggestion card is open or generating. */
   suggestActive?: boolean;
   sendAs: 'human' | 'agent' | 'note' | 'teach';
@@ -58,6 +62,9 @@ export default function Composer({
   const [repliesOpen, setRepliesOpen] = useState(false);
   const [sendasOpen, setSendasOpen] = useState(false);
   const [compOpen, setCompOpen] = useState(false);
+  // "Draft a reply with AI" popover — holds the optional guide textarea.
+  const [suggestPop, setSuggestPop] = useState(false);
+  const [suggestGuide, setSuggestGuide] = useState('');
   const [compArgsFor, setCompArgsFor] = useState<string | null>(null);
   // Per-key ref data for the expanded component — named inputs built from
   // the spec's {prop}s and the bound tool's params, not a JSON blob.
@@ -67,12 +74,13 @@ export default function Composer({
 
   /** One popover at a time — opening one closes its siblings (two stacked
    *  menus was the narrow-screen failure mode). */
-  const togglePopover = (which: 'emoji' | 'replies' | 'sendas' | 'comp' | 'plus') => {
+  const togglePopover = (which: 'emoji' | 'replies' | 'sendas' | 'comp' | 'plus' | 'suggest') => {
     setEmojiOpen((o) => (which === 'emoji' ? !o : false));
     setRepliesOpen((o) => (which === 'replies' ? !o : false));
     setSendasOpen((o) => (which === 'sendas' ? !o : false));
     setCompOpen((o) => (which === 'comp' ? !o : false));
     setPlusOpen((o) => (which === 'plus' ? !o : false));
+    setSuggestPop((o) => (which === 'suggest' ? !o : false));
   };
   // Phone width gets terse placeholders + an icon-face mode picker —
   // the verbose "(Enter sends…)" hint means nothing on a touch keyboard
@@ -94,7 +102,7 @@ export default function Composer({
   // Dismiss the emoji/replies popovers on Escape or a click outside the
   // composer — re-clicking the trigger button is not the obvious close path.
   useEffect(() => {
-    if (!emojiOpen && !repliesOpen && !sendasOpen && !compOpen && !plusOpen) return;
+    if (!emojiOpen && !repliesOpen && !sendasOpen && !compOpen && !plusOpen && !suggestPop) return;
     const close = (e: MouseEvent) => {
       if (!boxRef.current?.contains(e.target as Node)) {
         setEmojiOpen(false);
@@ -102,6 +110,7 @@ export default function Composer({
         setSendasOpen(false);
         setCompOpen(false);
         setPlusOpen(false);
+        setSuggestPop(false);
       }
     };
     const esc = (e: KeyboardEvent) => {
@@ -111,6 +120,7 @@ export default function Composer({
         setSendasOpen(false);
         setCompOpen(false);
         setPlusOpen(false);
+        setSuggestPop(false);
       }
     };
     // Capture phase: the emoji picker's keydown handler stops propagation
@@ -121,7 +131,7 @@ export default function Composer({
       document.removeEventListener('mousedown', close);
       document.removeEventListener('keydown', esc, true);
     };
-  }, [emojiOpen, repliesOpen, sendasOpen, compOpen, plusOpen]);
+  }, [emojiOpen, repliesOpen, sendasOpen, compOpen, plusOpen, suggestPop]);
 
   // autosize: grow with content up to ~8 lines; no scrollbar until it overflows
   useEffect(() => {
@@ -283,18 +293,19 @@ export default function Composer({
           {!narrow && onSuggest && (
             <button
               type="button"
-              className={`btn icon${suggestActive && sendAs !== 'note' && sendAs !== 'teach' ? ' suggest-on' : ''}`}
+              className={`btn${suggestActive && sendAs !== 'note' && sendAs !== 'teach' ? ' suggest-on' : ''}`}
               title={
                 sendAs === 'note' || sendAs === 'teach'
                   ? 'Suggestions apply to visitor replies'
-                  : 'Suggest a reply'
+                  : 'Draft a reply with AI'
               }
-              aria-label="Suggest a reply"
-              aria-pressed={suggestActive && sendAs !== 'note' && sendAs !== 'teach'}
+              aria-label="Draft a reply with AI"
+              aria-expanded={suggestPop}
               disabled={sendAs === 'note' || sendAs === 'teach'}
-              onClick={onSuggest}
+              onClick={() => togglePopover('suggest')}
             >
-              <Sparkles size={16} />
+              <Sparkles size={14} />
+              <span className="btn-label">Draft a reply with AI</span>
             </button>
           )}
           <input
@@ -409,9 +420,9 @@ export default function Composer({
               type="button"
               className="reply-item"
               disabled={sendAs === 'note' || sendAs === 'teach'}
-              onClick={() => { setPlusOpen(false); onSuggest(); }}
+              onClick={() => togglePopover('suggest')}
             >
-              <span className="row" style={{gap:8,alignItems:'center'}}><Sparkles size={14} /><strong>Suggest a reply</strong></span>
+              <span className="row" style={{gap:8,alignItems:'center'}}><Sparkles size={14} /><strong>Draft a reply with AI</strong></span>
             </button>
           )}
         </div>
@@ -525,6 +536,54 @@ export default function Composer({
             </div>
             );
           })}
+        </div>
+      )}
+      {suggestPop && onSuggest && (
+        <div className="emoji-pop reply-pop">
+          <div className="row" style={{ padding: '4px 8px 0', alignItems: 'center' }}>
+            <span className="muted grow" style={{ fontSize: 11.5 }}>Draft a reply with AI</span>
+            <button
+              type="button"
+              className="btn icon sm"
+              aria-label="Close"
+              onClick={() => setSuggestPop(false)}
+            >
+              <X size={13} />
+            </button>
+          </div>
+          <div className="row" style={{ padding: '6px 8px 4px', gap: 6, alignItems: 'flex-end' }}>
+            <textarea
+              autoFocus
+              rows={2}
+              value={suggestGuide}
+              onChange={(e) => setSuggestGuide(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  onSuggest(suggestGuide.trim() || undefined);
+                  setSuggestGuide('');
+                  setSuggestPop(false);
+                }
+              }}
+              placeholder="Guide the draft — e.g. “offer 10% off and include the return form”"
+              style={{ flex: 1, resize: 'none' }}
+            />
+            <button
+              type="button"
+              className="btn sm primary"
+              disabled={suggestBusy}
+              onClick={() => {
+                onSuggest(suggestGuide.trim() || undefined);
+                setSuggestGuide('');
+                setSuggestPop(false);
+              }}
+            >
+              Draft
+            </button>
+          </div>
+          <div className="muted" style={{ fontSize: 11, padding: '0 8px 8px' }}>
+            Blank drafts from the conversation; guidance steers it.
+          </div>
         </div>
       )}
       {repliesOpen && (
