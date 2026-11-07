@@ -93,6 +93,24 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06n — Guided drafts actually steer now (+ widgets/refs resolve)
+- Mike's first guided draft ("prompt the user with a hobbies form") came
+  back answering the transcript instead. Two real gaps: (1) the
+  instruction was one line appended to a huge system prompt — the model
+  drowned it; it now rides as a clearly-labeled trailing user message
+  after the transcript ("[not a customer message — the operator sending
+  your next reply asks for this instead] …"), with the system-tail line
+  kept as reinforcement, and the empty-draft retry carries it too.
+  (2) The whole WIDGET: grammar block + saved-components digest was
+  gated behind !forSuggestion — the forSuggestion tail told the model to
+  "emit WIDGET: markup" while never teaching the shapes or listing
+  components. The widget grammar is now taught for drafts, the
+  suggestion path builds the same refSpecs catalog as the reply path
+  (agentWidgets + collect_forms, identity-gated for the prompt), and
+  emitted WIDGET_REF: lines resolve through resolveWidgetRef — bound
+  tools run, {prop}s fill, states pick. Verified end-to-end against the
+  platform LLM: "send them the hobbies-form component" → draft carries
+  the real saved form spec in payload.widgets.
 ## 2026-11-06m — create_agent re-pitches revise the pending card in place
 - 05.peace-guests concierge thread: the visitor parked a "Create agent
   Nova Reign" approval card, then uploaded more persona SOP files before

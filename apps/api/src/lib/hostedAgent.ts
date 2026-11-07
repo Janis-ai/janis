@@ -26,6 +26,7 @@ import { campaignContextFor } from './campaigns.js';
 import { enrichContactClaimed } from './contacts.js';
 import { sendEmail } from './notify.js';
 import { availabilityDropped, dedupeWidgetList, extractWidgets, filterRowsByQuery, formatMoney, internalDataResult, interpolateSpec, itemsFromResult, namedProductsInReply, normTitle, normWidgetRef, propsFromResult, purchaseOptionsLine, reconcilePagedResult, sellableCollectionCounts, specProps, shopifyCollectionId, storefrontTruth, stripEmptyStrings, titlesMatch, toolResultCount, toolResultEmpty, toolResultEndCursor, toolResultHasNext, toolResultNotes, widgetFromToolResult, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
+import type { WidgetRef } from './widgets.js';
 
 type AgentRow = typeof agents.$inferSelect;
 type ChannelRow = typeof channels.$inferSelect;
@@ -837,9 +838,11 @@ export function systemPrompt(
   // Collect-data forms — named lead/intake forms. Presented via
   // WIDGET_REF (they're registered alongside saved components); the
   // structured submit lands server-side — enrich, tags, destinations — so
-  // the model never needs to save the fields again itself. Suggestion
-  // drafts never get the component catalog, and forms only render on
-  // webchat — other channels keep the section out entirely.
+  // the model never needs to save the fields again itself. The save-fields
+  // guidance is reply-path only — suggestion drafts still see the forms
+  // via the saved-components digest (WIDGET_REF resolves in the draft),
+  // and they only render on webchat anyway — other channels keep the
+  // section out entirely.
   if (
     !opts.forSuggestion &&
     (!conv || channelKeyFor(conv) === 'webchat') &&
@@ -948,13 +951,26 @@ export function systemPrompt(
       ' Never tell the customer you cannot show buttons, cards or other components — you always can here; emit the BUTTON:/WIDGET: line rather than claiming it is impossible.' +
       '\nIf you need the customer\'s email or phone number, end your reply with a line "ASK: email" or "ASK: phone" — it becomes a one-tap share control where the channel supports it (otherwise they can type it). Still ask in the text — never rely on the control alone.',
     );
-    // Rich in-conversation widgets. Webchat renders all five shapes; Meta
-    // channels translate cards → generic-template carousel and options →
-    // native quick replies/list, so those two are taught there too — and
-    // the bot platforms map them the same way (cards → generic template /
-    // ManyChat cards, options → quick replies). Other kinds have no
-    // off-webchat equivalent — webchat only.
-    if (chan === 'webchat' || chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp' || chan === 'chatfuel' || chan === 'manychat') {
+    // Bot-platform dialect — invisible {{…}} directives the ingest path
+    // strips out of the text and executes on the platform side. tag/untag
+    // exist only on ManyChat (Chatfuel has no primitive for them).
+    if (chan === 'chatfuel' || chan === 'manychat') {
+      parts.push(
+        `\nThis conversation arrives through a ${chan === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} bot. Invisible markup in your reply drives the platform — \`{{set field=value}}\` saves a subscriber field, ` +
+          (chan === 'manychat' ? '`{{tag name}}`/`{{untag name}}` manage tags, ' : '') +
+          `\`{{goto "Flow Name"}}\` sends them into a named ${chan === 'chatfuel' ? 'block' : 'flow'}. These are stripped before delivery; never explain them to the user.`,
+      );
+    }
+  }
+  // Rich in-conversation widgets. Webchat renders all five shapes; Meta
+  // channels translate cards → generic-template carousel and options →
+  // native quick replies/list, so those two are taught there too — and
+  // the bot platforms map them the same way (cards → generic template /
+  // ManyChat cards, options → quick replies). Other kinds have no
+  // off-webchat equivalent — webchat only. Suggestion drafts get the
+  // grammar too — the draft card renders WIDGET:/WIDGET_REF: output and
+  // the operator's send delivers it like an agent reply.
+  if (chan === 'webchat' || chan === 'messenger' || chan === 'instagram' || chan === 'whatsapp' || chan === 'chatfuel' || chan === 'manychat') {
       const metaOnly =
         chan === 'webchat'
           ? ''
@@ -983,17 +999,6 @@ export function systemPrompt(
               opts.savedWidgets.map(widgetDigest).join('\n')
             : ''),
       );
-    }
-    // Bot-platform dialect — invisible {{…}} directives the ingest path
-    // strips out of the text and executes on the platform side. tag/untag
-    // exist only on ManyChat (Chatfuel has no primitive for them).
-    if (chan === 'chatfuel' || chan === 'manychat') {
-      parts.push(
-        `\nThis conversation arrives through a ${chan === 'chatfuel' ? 'Chatfuel' : 'ManyChat'} bot. Invisible markup in your reply drives the platform — \`{{set field=value}}\` saves a subscriber field, ` +
-          (chan === 'manychat' ? '`{{tag name}}`/`{{untag name}}` manage tags, ' : '') +
-          `\`{{goto "Flow Name"}}\` sends them into a named ${chan === 'chatfuel' ? 'block' : 'flow'}. These are stripped before delivery; never explain them to the user.`,
-      );
-    }
   }
   if (opts.forSuggestion) {
     parts.push(
@@ -5398,7 +5403,25 @@ export async function runHostedEvent(
       ]);
       return { ...map, ...conn };
     })();
+    // Operator guidance rides the request payload — the console's draft
+    // card sends it when the operator prompts for a specific reply
+    // ("apologize, offer 10% off, attach the return form").
+    const rawInstruction = (event.payload as { instruction?: unknown } | undefined)?.instruction;
+    const instruction =
+      typeof rawInstruction === 'string' && rawInstruction.trim()
+        ? rawInstruction.trim().slice(0, 500)
+        : undefined;
     const history = await transcriptFor(db, convId, await fileAnalysisP);
+    // A guided draft steers hardest where the model reads last — the
+    // instruction lands as a clearly-labeled directive after the transcript
+    // rather than a line buried mid-system-prompt.
+    if (instruction) {
+      history.push({
+        role: 'user',
+        content:
+          `[not a customer message — the operator sending your next reply asks for this instead] ${instruction}`,
+      });
+    }
     const docs = await loadKnowledgeDocs(db, agent.id, knowledgeQueryFor(history, conv), {
       includeDrafts: draftsOpted && (await testConvP),
       reservedChars: notesReserved(agent),
@@ -5412,16 +5435,63 @@ export async function runHostedEvent(
       suggesting: true,
       identity: await identityP,
     };
-    // Operator guidance rides the request payload — the console's draft
-    // card sends it when the operator prompts for a specific reply
-    // ("apologize, offer 10% off, attach the return form").
-    const rawInstruction = (event.payload as { instruction?: unknown } | undefined)?.instruction;
-    const instruction =
-      typeof rawInstruction === 'string' && rawInstruction.trim()
-        ? rawInstruction.trim().slice(0, 500)
-        : undefined;
+    // Saved components — the same WIDGET_REF: catalog the reply path
+    // teaches, so a guided draft can name a component ("include the order
+    // form"); emitted refs resolve below through the same binding
+    // machinery (bound tool runs as the operator's draft, {prop} fills).
+    const agentToolDefs = toolsFor(agent);
+    const refSpecs = new Map<string, SavedWidgetDef>();
+    for (const f of (agent.config as { collect_forms?: CollectForm[] } | undefined)?.collect_forms ??
+      []) {
+      if (!f.name?.trim() || !f.fields?.length) continue;
+      refSpecs.set(normWidgetRef(f.name), {
+        spec: {
+          type: 'form',
+          title: f.title ?? f.name,
+          submit_label: f.submit_label,
+          fields: f.fields,
+          collect: f.name,
+        },
+      });
+    }
+    for (const w of await db
+      .select({
+        name: agentWidgets.name,
+        description: agentWidgets.description,
+        spec: agentWidgets.spec,
+        states: agentWidgets.states,
+        tool: agentWidgets.tool,
+      })
+      .from(agentWidgets)
+      .where(eq(agentWidgets.agentId, agent.id))) {
+      const spec = WidgetComponent.safeParse(w.spec);
+      if (!spec.success) continue;
+      const states = z.array(WidgetState).safeParse(w.states ?? []);
+      const tool = w.tool ? WidgetToolBinding.safeParse(w.tool) : null;
+      refSpecs.set(normWidgetRef(w.name), {
+        spec: spec.data,
+        states: states.success ? states.data : undefined,
+        tool: tool?.success ? tool.data : undefined,
+        description: w.description ?? undefined,
+      });
+    }
+    const shopperVerified =
+      !!ctx.identity?.operator ||
+      !!(ctx.identity?.emails?.size || ctx.identity?.ids?.size);
+    const promptWidgets = [...refSpecs.entries()].filter(([, def]) => {
+      const td = def.tool ? agentToolDefs.find((t) => t.name === def.tool!.name) : undefined;
+      return shopperVerified || !td?.identity;
+    });
     const prompt =
-      systemPrompt(agent, docs, conv, { forSuggestion: true, operator: ctx.identity?.operator }) +
+      systemPrompt(agent, docs, conv, {
+        forSuggestion: true,
+        operator: ctx.identity?.operator,
+        savedWidgets: promptWidgets.map(([name, def]) => ({
+          name,
+          ...def,
+          toolDef: def.tool ? agentToolDefs.find((t) => t.name === def.tool!.name) : undefined,
+        })),
+      }) +
       ((await campaignP) ?? '') +
       (instruction
         ? `\n\nThe operator directing this draft asked for: "${instruction.replace(/"/g, "'")}". Shape the reply around it — what to say, what to offer, which component to include — and call whatever tools it implies. Never quote the instruction or mention that the draft was directed; the customer sees only the reply.`
@@ -5432,7 +5502,7 @@ export async function runHostedEvent(
       prompt,
       history,
       blessedUrls,
-      toolsFor(agent),
+      agentToolDefs,
       secrets,
       ctx,
       enabledBuiltins(
@@ -5469,20 +5539,22 @@ export async function runHostedEvent(
           .replace(/\s*\(\s*(human operator|operator|agent|assistant)\s*\)\s*/gi, ' '),
       );
       if (!clean)
-        return { text: undefined as string | undefined, buttons: [] as QuickReply[], widgets: [] as WidgetComponent[] };
+        return { text: undefined as string | undefined, buttons: [] as QuickReply[], widgets: [] as WidgetComponent[], refs: [] as WidgetRef[] };
       const { text: noButtons, buttons } = extractButtons(extractLearns(clean).text);
       // WIDGET: markup in the draft parses into payload.widgets — without
-      // this it renders to the operator as raw spec text.
-      const { text: noWidgets, widgets } = extractWidgets(noButtons);
+      // this it renders to the operator as raw spec text. WIDGET_REF: names
+      // resolve against the saved-component catalog after the draft text
+      // settles (a retry can re-emit different refs).
+      const { text: noWidgets, widgets, refs } = extractWidgets(noButtons);
       // Unparseable leftovers (truncated JSON, malformed refs) are still
       // directive markup — never show them as draft text either.
       const text = noWidgets
         .split('\n')
         .filter((l) => !/^\s*WIDGET(?:_REF)?:/i.test(l))
         .join('\n');
-      return { text: unwrapInlineLists(text) || undefined, buttons, widgets };
+      return { text: unwrapInlineLists(text) || undefined, buttons, widgets, refs };
     };
-    let { text: draft, buttons, widgets } = stripLabel(result?.text);
+    let { text: draft, buttons, widgets, refs } = stripLabel(result?.text);
     if (draft && CONTROL_TAG.test(draft)) draft = undefined;
 
     if (!draft) {
@@ -5498,7 +5570,9 @@ export async function runHostedEvent(
             [
               {
                 role: 'user',
-                content: `The customer said: "${lastCustomerMsg}". Draft the agent's reply — output only the reply text.`,
+                content:
+                  `The customer said: "${lastCustomerMsg}". Draft the agent's reply — output only the reply text.` +
+                  (instruction ? ` The operator asked that the draft: ${instruction}.` : ''),
               },
             ],
             [],
@@ -5522,7 +5596,28 @@ export async function runHostedEvent(
       draft = retryStrip.text;
       if (retryStrip.buttons.length) buttons = retryStrip.buttons;
       if (retryStrip.widgets.length) widgets = retryStrip.widgets;
+      if (retryStrip.refs.length) refs = retryStrip.refs;
       if (draft && CONTROL_TAG.test(draft)) draft = undefined;
+    }
+
+    // Emitted WIDGET_REF: lines resolve against the catalog — the bound
+    // tool runs (as the operator, never gated), {prop}s fill, a state key
+    // picks the variant. An unresolvable ref degrades to text only — its
+    // line is already stripped from the draft.
+    for (const ref of refs) {
+      const def = refSpecs.get(ref.name);
+      if (!def) continue;
+      const spec = await resolveWidgetRef(
+        def,
+        ref.data,
+        agentToolDefs,
+        secrets,
+        ctx,
+        result?.producedIds ?? new Set<string>(),
+        undefined,
+        def.tool ? result?.lastToolResult.get(def.tool.name) : undefined,
+      );
+      if (spec) widgets.push(spec);
     }
 
     const text =

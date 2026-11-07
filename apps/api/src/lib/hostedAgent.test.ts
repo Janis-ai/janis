@@ -5,8 +5,8 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
-import { agents, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, uploads, users, workspaces } from '../db/schema.js';
-import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, matchSavedComponent, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, deniesLiveData, ungroundedFigures, ungroundedSource, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems, prefillFormFields, openUrlFromToolCalls } from './hostedAgent.js';
+import { agents, agentWidgets, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, suggestions, uploads, users, workspaces } from '../db/schema.js';
+import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, matchSavedComponent, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, runHostedEvent, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, deniesLiveData, ungroundedFigures, ungroundedSource, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems, prefillFormFields, openUrlFromToolCalls } from './hostedAgent.js';
 import { identityBlockReason, type ToolDef } from './toolExec.js';
 import { env } from '../env.js';
 import { extractWidgets } from './widgets.js';
@@ -2958,6 +2958,105 @@ describe('collect-data forms', () => {
       {},
     );
     expect(noMarket).not.toContain('Storefront market');
+  });
+});
+
+describe('guided suggestion drafts', () => {
+  const fetchMock = vi.fn();
+  beforeEach(() => {
+    fetchMock.mockReset();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('the instruction lands as the last message and an emitted WIDGET_REF resolves into the draft', async () => {
+    // BYOK config — the platform path resolves to an empty key in tests and
+    // complete() returns early without ever fetching.
+    const [agent] = await db
+      .insert(agents)
+      .values({
+        workspaceId: wsId,
+        name: 'Guide',
+        apiKeyHash: 'h-guide',
+        apiKeyPreview: 'p',
+        hosted: true,
+        config: { llm: { api_key: 'k', base_url: 'https://llm.example', model: 'm' } },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'webchat:guide-1', state: 'active' })
+      .returning();
+    await db.insert(messages).values([
+      {
+        conversationId: conv.id,
+        direction: 'in',
+        text: 'where is my order?',
+        createdAt: new Date(Date.now() - 60_000),
+      },
+      {
+        conversationId: conv.id,
+        direction: 'out',
+        text: 'Could you share the order number?',
+        createdAt: new Date(Date.now() - 30_000),
+      },
+      { conversationId: conv.id, direction: 'in', text: "I don't have it", createdAt: new Date() },
+    ]);
+    await db.insert(agentWidgets).values({
+      agentId: agent.id,
+      name: 'hobbies-form',
+      description: "collect the customer's hobbies",
+      spec: {
+        type: 'form',
+        title: 'Your hobbies',
+        submit_label: 'Share',
+        fields: [{ name: 'hobbies', label: 'What are you into?', type: 'textarea', required: true }],
+      },
+    });
+    // foldConversationMemory can fire a second /chat/completions call — key
+    // assertions on the call whose LAST message carries the steer.
+    const calls: { last?: string; bodies: { role?: string; content?: unknown }[] }[] = [];
+    fetchMock.mockImplementation(async (url, init) => {
+      if (String(url).includes('/chat/completions')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          messages: { role?: string; content?: unknown }[];
+        };
+        calls.push({
+          bodies: body.messages,
+          last: typeof body.messages.at(-1)?.content === 'string' ? (body.messages.at(-1)?.content as string) : undefined,
+        });
+        return new Response(
+          JSON.stringify({
+            choices: [{ message: { content: 'Here you go!\nWIDGET_REF: hobbies-form' } }],
+            usage: {},
+          }),
+          { status: 200 },
+        );
+      }
+      return new Response(null, { status: 404 });
+    });
+
+    await runHostedEvent(db, agent, {
+      type: 'suggestion.request',
+      timestamp: new Date().toISOString(),
+      conversation_id: conv.externalId,
+      janis_conversation_id: conv.id,
+      payload: { instruction: 'send the hobbies form' },
+    });
+
+    expect(calls.some((c) => c.last?.includes('send the hobbies form'))).toBe(true);
+    const [sug] = await db
+      .select()
+      .from(suggestions)
+      .where(eq(suggestions.conversationId, conv.id));
+    const payload = sug.payload as {
+      instruction?: string;
+      widgets?: { type: string; title?: string }[];
+    };
+    expect(payload.instruction).toBe('send the hobbies form');
+    expect(payload.widgets?.[0]?.type).toBe('form');
+    expect(payload.widgets?.[0]?.title).toBe('Your hobbies');
+    expect(sug.text).not.toContain('WIDGET_REF');
   });
 });
 
