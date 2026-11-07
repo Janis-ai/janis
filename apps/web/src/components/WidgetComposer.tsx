@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Plus, Trash2, X } from 'lucide-react';
 import { api } from '../api/client';
@@ -55,6 +55,42 @@ export function specPropNames(v: unknown): string[] {
 }
 
 const inputStyle = { fontSize: 13 } as const;
+
+/** Comma-separated options editor — keeps the raw text so the comma
+ *  you're typing survives (binding value to the parsed array ate every
+ *  comma before it rendered). Parses into the spec on each change. */
+export function OptionsInput({
+  className,
+  style,
+  value,
+  onChange,
+  placeholder,
+}: {
+  className?: string;
+  style?: CSSProperties;
+  value: string[] | undefined;
+  onChange: (opts: string[]) => void;
+  placeholder?: string;
+}) {
+  const [raw, setRaw] = useState((value ?? []).join(', '));
+  return (
+    <input
+      className={className}
+      style={style}
+      placeholder={placeholder}
+      value={raw}
+      onChange={(e) => {
+        setRaw(e.target.value);
+        onChange(
+          e.target.value
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean),
+        );
+      }}
+    />
+  );
+}
 const rowStyle = { display: 'flex', gap: 6, marginTop: 6, flexWrap: 'wrap' as const };
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -928,7 +964,7 @@ function SpecEditor({ spec, onChange }: { spec: ChatWidget; onChange: (s: ChatWi
                   </select>
                 </Field>
                 {(f.type === 'select' || f.type === 'multiselect' || f.type === 'radio') && (
-                  <Field label="options (comma-separated)"><input className="input" style={inputStyle} value={(f.options ?? []).join(', ')} onChange={(e) => set({ ...f, options: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} /></Field>
+                  <Field label="options (comma-separated)"><OptionsInput className="input" style={inputStyle} value={f.options} onChange={(opts) => set({ ...f, options: opts })} /></Field>
                 )}
                 <label className="row" style={{ gap: 4, fontSize: 12, alignSelf: 'flex-end' }}>
                   <input type="checkbox" checked={!!f.required} onChange={(e) => set({ ...f, required: e.target.checked || undefined })} /> required

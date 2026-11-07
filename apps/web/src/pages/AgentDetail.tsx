@@ -33,7 +33,7 @@ import {
   type ModelOption,
 } from '../lib/llmProviders';
 import type { LlmVendor } from '@janis/shared';
-import { SavedWidgets } from '../components/WidgetComposer';
+import { OptionsInput, SavedWidgets } from '../components/WidgetComposer';
 import { janisBrain } from '../lib/agentContext';
 import { revealScenario } from '../lib/scenarioRing';
 import { railBus } from '../lib/railBus';
@@ -1794,15 +1794,11 @@ export function CollectSection({
             {f.fields.some((fd) => fd.type === 'select' || fd.type === 'multiselect' || fd.type === 'radio') &&
               f.fields.map((fd, i) =>
                 fd.type === 'select' || fd.type === 'multiselect' || fd.type === 'radio' ? (
-                  <input
+                  <OptionsInput
                     key={`opts-${i}`}
                     placeholder={`Options for "${fd.name || 'select'}" — comma separated`}
-                    value={(fd.options ?? []).join(', ')}
-                    onChange={(e) =>
-                      setField(fi, i, {
-                        options: e.target.value.split(',').map((o) => o.trim()).filter(Boolean),
-                      })
-                    }
+                    value={fd.options}
+                    onChange={(opts) => setField(fi, i, { options: opts })}
                   />
                 ) : null,
               )}
