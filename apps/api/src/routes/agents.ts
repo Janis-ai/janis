@@ -2301,13 +2301,14 @@ export function agentRoutes(db: Db) {
   ) => {
     if (!tool) return { ok: true as const };
     const defs = toolsFor(agent);
-    const def = defs.find((t) => t.name === tool.name);
-    if (!def) return { ok: false as const, error: `no tool named "${tool.name}" on this agent` };
-    if (def.approval)
+    const def = tool.name ? defs.find((t) => t.name === tool.name) : undefined;
+    if (tool.name && !def)
+      return { ok: false as const, error: `no tool named "${tool.name}" on this agent` };
+    if (def?.approval)
       return { ok: false as const, error: `"${tool.name}" is approval-gated — bind a read tool` };
     // The read slot runs at render — a write tool there fires on every
     // view. Only a form can hold one, and only as its submit tool.
-    if (specType !== undefined && specType !== 'form' && def.method !== 'GET')
+    if (def && specType !== undefined && specType !== 'form' && def.method !== 'GET')
       return {
         ok: false as const,
         error: `"${tool.name}" writes data — only a form can bind it, as its submit tool`,

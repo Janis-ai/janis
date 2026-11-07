@@ -211,9 +211,12 @@ export type WidgetSubmitBinding = z.infer<typeof WidgetSubmitBinding>;
  *  model supplies `args` in the WIDGET_REF data (prop → tool-param via
  *  `args`, identity-mapped by default); `props`/`items`/`item_map` map the
  *  JSON result into {prop} placeholders / a list's item rows. On a form,
- *  `submit` adds the write-side — collect answers into another tool. */
+ *  `submit` adds the write-side — collect answers into another tool.
+ *  `name` is optional: a submit-only binding (a form that just records
+ *  answers) carries no read tool at all. Legacy rows park a non-GET tool
+ *  on `name` — that IS the submit binding, it never runs at render. */
 export const WidgetToolBinding = z.object({
-  name: s(64),
+  name: s(64).optional(),
   args: z.record(z.string(), s(80)).optional(),
   props: z.record(z.string(), s(160)).optional(),
   items: s(120).optional(),

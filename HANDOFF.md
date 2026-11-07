@@ -93,6 +93,21 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06o — Form components: submit wiring up front, parked-name bug
+- The Chat components composer parked a submit-only form's write tool on
+  the binding's `name` slot (the schema required it), so reopening the
+  editor showed gsheets_append as the BOUND tool — "it keeps going back
+  to gsheets" — and the prompt digest told the model "emitting the ref
+  runs it", a lie (a non-GET binding never runs at render).
+  WidgetToolBinding.name is now optional: submit-only saves as
+  `{submit:{…}}`; every read-side consumer (resolveWidgetRef,
+  validToolBind, webchat legacy-submit detection, save_widget /
+  apply_save_widget, the prompt digest) guards on it; and the composer
+  routes a non-GET parked name to the submit slot on load — legacy rows
+  display correctly and re-save in the new shape. For a form the editor
+  leads with "on submit — save the answers with this tool" (params hint +
+  id browse) and collapses bound tool + named variants under an
+  "advanced" toggle; other types unchanged.
 ## 2026-11-06n — Guided drafts actually steer now (+ widgets/refs resolve)
 - Mike's first guided draft ("prompt the user with a hobbies form") came
   back answering the transcript instead. Two real gaps: (1) the

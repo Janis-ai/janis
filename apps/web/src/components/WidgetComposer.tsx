@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import { Widgets, type ChatWidget } from './ChatWidgets';
 
 interface WidgetToolBinding {
-  name: string;
+  name?: string;
   args?: Record<string, string>;
   props?: Record<string, string>;
   items?: string;
@@ -144,7 +144,14 @@ export function SavedWidgets({ agentId, isAdmin, tools = [] }: { agentId: string
                 </span>
               )}
               <span className="badge">{w.spec.type}</span>
-              {w.tool && <span className="badge" title={`Bound to ${w.tool.name}`}>⚡ {w.tool.name}</span>}
+              {(w.tool?.name ?? w.tool?.submit?.name) && (
+                <span
+                  className="badge"
+                  title={w.tool?.name ? `Bound to ${w.tool.name}` : `Submit saves via ${w.tool?.submit?.name}`}
+                >
+                  ⚡ {w.tool?.name ?? w.tool?.submit?.name}
+                </span>
+              )}
               {!!w.states?.length && (
                 <span className="badge" title={w.states.map((s) => s.name).join(', ')}>
                   {w.states.length} states
@@ -295,17 +302,28 @@ function Composer({
   const [description, setDescription] = useState(initial?.description ?? '');
   const [spec, setSpec] = useState<ChatWidget>(initial?.spec ?? emptySpec('cards'));
   const [states, setStates] = useState<{ name: string; spec: ChatWidget }[]>(initial?.states ?? []);
-  const [toolName, setToolName] = useState(initial?.tool?.name ?? '');
+  // A non-GET tool parked in the read slot of a FORM binding is the write
+  // side (pre-submit-block rows, and submit-only saves from when `name`
+  // was required) — it never ran at render and belongs in the submit slot.
+  // Unknown tools (not in the list) keep the old read assumption.
+  const boundIsWrite =
+    initial?.spec.type === 'form' &&
+    !!initial?.tool?.name &&
+    (tools.find((t) => t.name === initial.tool!.name)?.method ?? 'GET') !== 'GET';
+  const initSubmit =
+    initial?.tool?.submit ??
+    (boundIsWrite ? { name: initial!.tool!.name!, args: initial!.tool!.args } : undefined);
+  const [toolName, setToolName] = useState(boundIsWrite ? '' : (initial?.tool?.name ?? ''));
   const [toolCfg, setToolCfg] = useState(() => {
-    if (!initial?.tool) return '';
+    if (!initial?.tool || boundIsWrite) return '';
     const rest = Object.fromEntries(
       Object.entries(initial.tool).filter(([k, v]) => k !== 'name' && k !== 'submit' && v != null),
     );
     return Object.keys(rest).length ? JSON.stringify(rest) : '';
   });
-  const [submitName, setSubmitName] = useState(initial?.tool?.submit?.name ?? '');
+  const [submitName, setSubmitName] = useState(initSubmit?.name ?? '');
   const [submitCfg, setSubmitCfg] = useState(() => {
-    const a = initial?.tool?.submit?.args;
+    const a = initSubmit?.args;
     return a && Object.keys(a).length ? JSON.stringify(a) : '';
   });
   // "Browse…" pick list for an id param (spreadsheet_id ← gsheets_list
@@ -331,6 +349,9 @@ function Composer({
     setStates(states.filter((_, j) => j !== i));
     setOpenStates((prev) => new Set([...prev].filter((j) => j !== i).map((j) => (j > i ? j - 1 : j))));
   };
+  // Forms lead with the submit wiring; the read-side binding and named
+  // variants sit under "advanced" — open it only when one is already set.
+  const [advOpen, setAdvOpen] = useState(!!toolName || states.length > 0);
 
   const setType = (t: ChatWidget['type']) => {
     if (t !== spec.type) setSpec(emptySpec(t));
@@ -359,13 +380,14 @@ function Composer({
         return { tool: null, err: 'submit args are not valid JSON' };
       }
     }
+    if (!toolName && toolCfg.trim())
+      return { tool: null, err: 'mapping JSON needs a bound tool — pick one or clear the box' };
     if (!toolName && !submitName) return { tool: null };
     return {
       tool: {
-        // A submit-only form still needs the binding's name slot — the
-        // write tool's name there is harmless (non-GET never runs at
-        // render) and keeps one schema for both directions.
-        name: toolName || submitName,
+        // `name` stays unset on a submit-only form — parking the write
+        // tool there made the read slot echo it back as "bound".
+        ...(toolName ? { name: toolName } : {}),
         ...(extra as Omit<WidgetToolBinding, 'name' | 'submit'>),
         ...(submitName
           ? { submit: { name: submitName, ...(submitArgs ? { args: submitArgs } : {}) } }
@@ -494,120 +516,66 @@ function Composer({
     }
   };
 
-  return (
-    <div className="card" style={{ background: 'var(--panel-2)', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
-      <div className="row">
-        <strong className="grow">{initial ? `Edit ${initial.name}` : 'New component'}</strong>
-        <button className="btn sm" onClick={onCancel} aria-label="Cancel"><X size={14} /></button>
-      </div>
-      <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
-        <Field label="name (the agent types WIDGET_REF: this)">
-          <input
-            className="input"
-            style={inputStyle}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="plans"
-          />
-        </Field>
-        <Field label="type">
-          <select className="input" style={inputStyle} value={spec.type} onChange={(e) => setType(e.target.value as ChatWidget['type'])}>
-            {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-          </select>
-        </Field>
-        <Field label="when to use — one line; the agent reads this to pick this component over prose or another widget">
-          <input
-            className="input"
-            style={{ ...inputStyle, minWidth: 220 }}
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="customer asks where their order is"
-            maxLength={200}
-          />
-        </Field>
-      </div>
-      {!nameOk && name && <div className="error">lowercase letters, numbers, - and _ — starts with a letter</div>}
-
-      <SpecEditor spec={spec} onChange={setSpec} />
-
-      {/* Data binding — {prop} placeholders fill from ref data or a bound
-          tool's result. */}
-      {(() => {
-        const props = specPropNames(spec);
-        return (
-          <div className="muted" style={{ fontSize: 11.5 }}>
-            {props.length ? (
-              <>
-                data props: <span className="mono">{props.join(', ')}</span> — the agent fills them
-                via <span className="mono">{'WIDGET_REF: ' + (name || 'name') + ' {"prop":"…"}'}</span>
-                {' '}or a bound tool's result
-              </>
-            ) : (
-              <>tip: put {'{prop}'} placeholders in fields (e.g. {'{order_id}'}) to make the component data-bound</>
-            )}
-          </div>
-        );
-      })()}
-
-      {/* Named states — the agent picks a variant with {"state":"name"}. */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <div className="muted" style={{ fontSize: 11.5 }}>
-          States — named variants the agent selects with {'{"state":"name"}'} (e.g. a
-          &quot;not found&quot; state with different steps or no buttons)
-        </div>
-        {states.map((st, i) => {
-          const open = openStates.has(i);
-          return (
-            <div key={i} className="card" style={{ padding: 8, borderStyle: 'dashed' }}>
-              <div className="row" style={{ marginBottom: open ? 4 : 0 }}>
-                <button
-                  className="btn sm"
-                  onClick={() => toggleState(i)}
-                  aria-label={open ? `Collapse state ${i + 1}` : `Expand state ${i + 1}`}
-                  title={open ? 'Collapse' : 'Expand'}
-                >
-                  {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                </button>
-                <input
-                  className="input grow"
-                  style={inputStyle}
-                  placeholder="state name (e.g. in_transit)"
-                  value={st.name}
-                  onChange={(e) =>
-                    setStates(states.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
-                  }
-                />
-                <button
-                  className="btn sm"
-                  onClick={() => removeState(i)}
-                  aria-label={`Remove state ${i + 1}`}
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
-              {open && (
-                <SpecEditor
-                  spec={st.spec}
-                  onChange={(s) => setStates(states.map((x, j) => (j === i ? { ...x, spec: s } : x)))}
-                />
-              )}
+  // Section bodies — a form leads with the write side and
+  // collapses the read-side machinery under "advanced".
+  const statesSection = (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className="muted" style={{ fontSize: 11.5 }}>
+              States — named variants the agent selects with {'{"state":"name"}'} (e.g. a
+              &quot;not found&quot; state with different steps or no buttons)
             </div>
-          );
-        })}
-        <button
-          className="btn sm"
-          style={{ alignSelf: 'flex-start' }}
-          onClick={() => {
-            setStates([...states, { name: '', spec: JSON.parse(JSON.stringify(spec)) as ChatWidget }]);
-            setOpenStates((prev) => new Set(prev).add(states.length));
-          }}
-        >
-          <Plus size={12} /> Add state
-        </button>
-      </div>
-
-      {/* Tool binding — the component IS a tool invocation when bound. */}
-      {tools.length > 0 && (
+            {states.map((st, i) => {
+              const open = openStates.has(i);
+              return (
+                <div key={i} className="card" style={{ padding: 8, borderStyle: 'dashed' }}>
+                  <div className="row" style={{ marginBottom: open ? 4 : 0 }}>
+                    <button
+                      className="btn sm"
+                      onClick={() => toggleState(i)}
+                      aria-label={open ? `Collapse state ${i + 1}` : `Expand state ${i + 1}`}
+                      title={open ? 'Collapse' : 'Expand'}
+                    >
+                      {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    </button>
+                    <input
+                      className="input grow"
+                      style={inputStyle}
+                      placeholder="state name (e.g. in_transit)"
+                      value={st.name}
+                      onChange={(e) =>
+                        setStates(states.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
+                      }
+                    />
+                    <button
+                      className="btn sm"
+                      onClick={() => removeState(i)}
+                      aria-label={`Remove state ${i + 1}`}
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                  {open && (
+                    <SpecEditor
+                      spec={st.spec}
+                      onChange={(s) => setStates(states.map((x, j) => (j === i ? { ...x, spec: s } : x)))}
+                    />
+                  )}
+                </div>
+              );
+            })}
+            <button
+              className="btn sm"
+              style={{ alignSelf: 'flex-start' }}
+              onClick={() => {
+                setStates([...states, { name: '', spec: JSON.parse(JSON.stringify(spec)) as ChatWidget }]);
+                setOpenStates((prev) => new Set(prev).add(states.length));
+              }}
+            >
+              <Plus size={12} /> Add state
+            </button>
+          </div>
+  );
+  const boundSection = tools.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <Field label="bound tool — runs when the component is referenced, fills {props} and list rows from its result">
@@ -688,14 +656,11 @@ function Composer({
             </div>
           )}
         </div>
-      )}
-
-      {/* Submit binding — the form's write side: post answers into a
-          tool when the visitor submits. */}
-      {spec.type === 'form' && tools.length > 0 && (
+  );
+  const submitSection = spec.type === 'form' && tools.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <Field label="submit tool — runs when the visitor submits the form (saves the answers somewhere)">
+            <Field label="on submit — save the answers with this tool">
               <select
                 className="input"
                 style={inputStyle}
@@ -705,7 +670,7 @@ function Composer({
                   setBrowse(null);
                 }}
               >
-                <option value="">none — submit just posts as a message</option>
+                <option value="">none — answers just arrive as a chat message</option>
                 {tools.map((t) => (
                   <option key={t.name} value={t.name}>{t.name}</option>
                 ))}
@@ -726,29 +691,31 @@ function Composer({
           </div>
           {submitName &&
             (() => {
-              const idParams = Object.keys(
+              const params = Object.keys(
                 tools.find((t) => t.name === submitName)?.params ?? {},
-              ).filter((p) => /(^id$|_id$)/.test(p));
+              );
+              const idParams = params.filter((p) => /(^id$|_id$)/.test(p));
               const listTool = listToolFor(submitName);
               return (
                 <div className="muted" style={{ fontSize: 11.5 }}>
-                  a <span className="mono">"values"</span> arg left unset defaults to a row of the
-                  fields in order
-                  {listTool && idParams.length > 0 && (
+                  {params.length > 0 && (
                     <>
-                      {' — browse for a value: '}
-                      {idParams.map((p) => (
-                        <button
-                          key={p}
-                          className="btn"
-                          style={{ fontSize: 11, padding: '1px 8px', marginRight: 4 }}
-                          onClick={() => void openBrowse(p)}
-                        >
-                          {p}…
-                        </button>
-                      ))}
+                      takes args: <span className="mono">{params.join(', ')}</span>
+                      {params.includes('values') &&
+                        ' — a "values" arg left unset defaults to a row of the fields in order'}
                     </>
                   )}
+                  {listTool &&
+                    idParams.map((p) => (
+                      <button
+                        key={p}
+                        className="btn"
+                        style={{ fontSize: 11, padding: '1px 8px', marginLeft: 6 }}
+                        onClick={() => void openBrowse(p)}
+                      >
+                        {p}…
+                      </button>
+                    ))}
                 </div>
               );
             })()}
@@ -772,6 +739,90 @@ function Composer({
             </div>
           )}
         </div>
+  );
+
+  return (
+    <div className="card" style={{ background: 'var(--panel-2)', padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div className="row">
+        <strong className="grow">{initial ? `Edit ${initial.name}` : 'New component'}</strong>
+        <button className="btn sm" onClick={onCancel} aria-label="Cancel"><X size={14} /></button>
+      </div>
+      <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <Field label="name (the agent types WIDGET_REF: this)">
+          <input
+            className="input"
+            style={inputStyle}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="plans"
+          />
+        </Field>
+        <Field label="type">
+          <select className="input" style={inputStyle} value={spec.type} onChange={(e) => setType(e.target.value as ChatWidget['type'])}>
+            {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
+          </select>
+        </Field>
+        <Field label="when to use — one line; the agent reads this to pick this component over prose or another widget">
+          <input
+            className="input"
+            style={{ ...inputStyle, minWidth: 220 }}
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="customer asks where their order is"
+            maxLength={200}
+          />
+        </Field>
+      </div>
+      {!nameOk && name && <div className="error">lowercase letters, numbers, - and _ — starts with a letter</div>}
+
+      <SpecEditor spec={spec} onChange={setSpec} />
+
+      {/* Data binding — {prop} placeholders fill from ref data or a bound
+          tool's result. */}
+      {(() => {
+        const props = specPropNames(spec);
+        return (
+          <div className="muted" style={{ fontSize: 11.5 }}>
+            {props.length ? (
+              <>
+                data props: <span className="mono">{props.join(', ')}</span> — the agent fills them
+                via <span className="mono">{'WIDGET_REF: ' + (name || 'name') + ' {"prop":"…"}'}</span>
+                {' '}or a bound tool's result
+              </>
+            ) : (
+              <>tip: put {'{prop}'} placeholders in fields (e.g. {'{order_id}'}) to make the component data-bound</>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Forms lead with the submit wiring — "collect answers, save them
+          somewhere" is the common build. The read-side binding and named
+          variants are advanced; other types keep the bound tool up front. */}
+      {submitSection}
+      {spec.type === 'form' ? (
+        <>
+          <button
+            className="btn sm"
+            style={{ alignSelf: 'flex-start', fontSize: 11.5 }}
+            onClick={() => setAdvOpen((v) => !v)}
+            aria-expanded={advOpen}
+          >
+            {advOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />} advanced — prefill
+            from a tool · named variants
+          </button>
+          {advOpen && (
+            <>
+              {boundSection}
+              {statesSection}
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          {statesSection}
+          {boundSection}
+        </>
       )}
 
       <label className="row" style={{ gap: 6, fontSize: 12.5 }}>

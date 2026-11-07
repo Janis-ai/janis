@@ -162,7 +162,7 @@ function argObjectArray(v: unknown): unknown[] | undefined {
 /** The model spells "no binding" as {"name":"none"} often enough that
  *  erroring on it just burns a retry — treat the sentinel names as absent. */
 function toolBindingOrNull(v: WidgetToolBinding | null): WidgetToolBinding | null {
-  return v && !['none', 'null', 'n/a'].includes(v.name.trim().toLowerCase()) ? v : null;
+  return v && !['none', 'null', 'n/a'].includes((v.name ?? '').trim().toLowerCase()) ? v : null;
 }
 
 /** Resolve which of the visitor's workspaces a concierge tool should act on.
@@ -3529,13 +3529,15 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       }
       const toolBind = toolBindingOrNull(toolParsed.data);
       if (toolBind) {
-        const def = toolsFor(agent).find((t) => t.name === toolBind.name);
-        if (!def) return JSON.stringify({ error: `no tool named "${toolBind.name}" on ${agent.name}` });
-        if (def.approval)
+        const defs = toolsFor(agent);
+        const def = toolBind.name ? defs.find((t) => t.name === toolBind.name) : undefined;
+        if (toolBind.name && !def)
+          return JSON.stringify({ error: `no tool named "${toolBind.name}" on ${agent.name}` });
+        if (def?.approval)
           return JSON.stringify({ error: `"${toolBind.name}" is approval-gated — a component can only bind a read tool` });
         // The read slot runs at render — a write tool there fires on every
         // view. Only a form can hold one, and only as its submit tool.
-        if (spec.data.type !== 'form' && def.method !== 'GET') {
+        if (def && spec.data.type !== 'form' && def.method !== 'GET') {
           return JSON.stringify({
             error: `"${toolBind.name}" writes data — only a form can bind it, as its submit tool`,
           });
@@ -3553,7 +3555,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         }).find(([, v]) => typeof v === 'string' && PLACEHOLDER.test(v));
         if (placeholderArg) {
           return JSON.stringify({
-            error: `"${toolBind.name}" arg "${placeholderArg[0]}" is a placeholder (${placeholderArg[1]}) — pass a real value or drop the binding; a component bound to it can never run`,
+            error: `"${toolBind.name ?? toolBind.submit?.name}" arg "${placeholderArg[0]}" is a placeholder (${placeholderArg[1]}) — pass a real value or drop the binding; a component bound to it can never run`,
           });
         }
         // Submit-side: forms only, real tool, never approval-gated — it
@@ -3562,7 +3564,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         if (sub) {
           if (spec.data.type !== 'form')
             return JSON.stringify({ error: 'a submit binding only applies to form components' });
-          const subDef = toolsFor(agent).find((t) => t.name === sub.name);
+          const subDef = defs.find((t) => t.name === sub.name);
           if (!subDef) return JSON.stringify({ error: `no tool named "${sub.name}" on ${agent.name}` });
           if (subDef.approval)
             return JSON.stringify({ error: `"${sub.name}" is approval-gated — a submit-side tool must run without review` });
@@ -3834,10 +3836,16 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       const tool = toolParsed.success ? toolBindingOrNull(toolParsed.data) : null;
       if (tool) {
         // Re-verify at decide time — the bound tool must still exist and be
-        // a plain read on the target agent.
-        const def = toolsFor(agent).find((t) => t.name === tool.name);
-        if (!def || def.approval)
+        // a plain read on the target agent; a submit tool likewise.
+        const defs = toolsFor(agent);
+        const def = tool.name ? defs.find((t) => t.name === tool.name) : undefined;
+        if ((tool.name && !def) || def?.approval)
           return `error: bound tool "${tool.name}" is missing or approval-gated on ${agent.name}`;
+        if (tool.submit) {
+          const subDef = defs.find((t) => t.name === tool.submit!.name);
+          if (!subDef || subDef.approval)
+            return `error: submit tool "${tool.submit.name}" is missing or approval-gated on ${agent.name}`;
+        }
       }
       const name = normWidgetRef(String(args.name ?? '')).slice(0, 60);
       if (!name) return 'error: component name cannot be blank';

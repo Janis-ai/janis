@@ -777,6 +777,7 @@ export function webchatRoutes(db: Db) {
           // on `tool` — non-GET methods are writes, never a render read.
           const legacy =
             !binding.submit &&
+            binding.name &&
             agentToolDefs.find((t) => t.name === binding.name)?.method !== 'GET'
               ? { name: binding.name, args: binding.args }
               : undefined;

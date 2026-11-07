@@ -439,11 +439,13 @@ function widgetDigest(w: SavedWidgetDef & { name: string; toolDef?: ToolDef }): 
       ]
     : [];
   const meta = [
-    w.tool
+    w.tool?.name
       ? `bound to tool ${w.tool.name}${reqArgs.length ? ` (required args: ${reqArgs.join(', ')})` : ''} — emitting the ref runs it; pass its args in the ref data`
-      : props.length
-        ? `props: ${props.join(', ')}`
-        : '',
+      : w.tool?.submit
+        ? `on submit saves via ${w.tool.submit.name}`
+        : props.length
+          ? `props: ${props.join(', ')}`
+          : '',
     w.states?.length ? `states: ${w.states.map((x) => x.name).join(' | ')}` : '',
   ]
     .filter(Boolean)
@@ -549,12 +551,14 @@ export async function resolveWidgetRef(
   // a failure drops the whole component (the cheese-survey bug). A GET
   // `tool` still reads at emit to prefill {prop}s; an explicit `submit`
   // block never reaches the render path at all.
-  const boundTool = def.tool ? tools.find((t) => t.name === def.tool!.name) : undefined;
+  const boundTool = def.tool?.name
+    ? tools.find((t) => t.name === def.tool!.name)
+    : undefined;
   const submitBound =
-    def.spec.type === 'form' && !!def.tool && (boundTool?.method ?? 'GET') !== 'GET';
+    def.spec.type === 'form' && !!def.tool?.name && (boundTool?.method ?? 'GET') !== 'GET';
   const submitCapable = def.spec.type === 'form' && !!def.tool && (!!def.tool.submit || submitBound);
-  if (def.tool && !submitBound) {
-    const tool = tools.find((t) => t.name === def.tool!.name);
+  if (def.tool?.name && !submitBound) {
+    const tool = boundTool;
     if (!tool || tool.approval) {
       console.warn(`[widgets] bound tool unavailable or gated: ${def.tool.name}`);
       if (cap) cap.error = `bound tool "${def.tool.name}" is missing or approval-gated`;
@@ -5561,7 +5565,9 @@ export async function runHostedEvent(
       !!ctx.identity?.operator ||
       !!(ctx.identity?.emails?.size || ctx.identity?.ids?.size);
     const promptWidgets = [...refSpecs.entries()].filter(([, def]) => {
-      const td = def.tool ? agentToolDefs.find((t) => t.name === def.tool!.name) : undefined;
+      const td = def.tool?.name
+        ? agentToolDefs.find((t) => t.name === def.tool!.name)
+        : undefined;
       return shopperVerified || !td?.identity;
     });
     const prompt =
@@ -5571,7 +5577,9 @@ export async function runHostedEvent(
         savedWidgets: promptWidgets.map(([name, def]) => ({
           name,
           ...def,
-          toolDef: def.tool ? agentToolDefs.find((t) => t.name === def.tool!.name) : undefined,
+          toolDef: def.tool?.name
+            ? agentToolDefs.find((t) => t.name === def.tool!.name)
+            : undefined,
         })),
       }) +
       ((await campaignP) ?? '') +
@@ -5716,7 +5724,7 @@ export async function runHostedEvent(
         ctx,
         result?.producedIds ?? new Set<string>(),
         undefined,
-        def.tool ? result?.lastToolResult.get(def.tool.name) : undefined,
+        def.tool?.name ? result?.lastToolResult.get(def.tool.name) : undefined,
         ref.name,
       );
       if (spec) widgets.push(spec);
@@ -6413,7 +6421,7 @@ async function replyAsHostedAgent(
       !!ctx?.identity?.operator ||
       !!(ctx?.identity?.emails?.size || ctx?.identity?.ids?.size);
     const promptWidgets = [...refSpecs.entries()].filter(([, def]) => {
-      const td = def.tool
+      const td = def.tool?.name
         ? agentToolDefs.find((t) => t.name === def.tool!.name)
         : undefined;
       return shopperVerified || !td?.identity;
@@ -6449,7 +6457,7 @@ async function replyAsHostedAgent(
         savedWidgets: promptWidgets.map(([name, def]) => ({
           name,
           ...def,
-          toolDef: def.tool
+          toolDef: def.tool?.name
             ? agentToolDefs.find((t) => t.name === def.tool!.name)
             : undefined,
         })),
@@ -6636,7 +6644,7 @@ async function replyAsHostedAgent(
           ctx,
           gen.producedIds,
           cap,
-          def.tool ? gen.lastToolResult.get(def.tool.name) : undefined,
+          def.tool?.name ? gen.lastToolResult.get(def.tool.name) : undefined,
           ref.name,
         );
         if (spec) {
