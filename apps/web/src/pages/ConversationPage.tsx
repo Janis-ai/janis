@@ -655,6 +655,10 @@ export default function ConversationPage() {
     text: string;
     widgets: Record<number, unknown>;
   } | null>(null);
+  // Component JSON carrying a `tool` block can't ride the visitor-facing
+  // spec (it holds resource ids) — on apply we save it as a real bound
+  // component and stamp collect so submissions route through the binding.
+  const [editSaving, setEditSaving] = useState(false);
   useEffect(() => {
     if (!replacedSid) return;
     const t = setTimeout(() => setReplacedSid(null), 30_000);
@@ -1059,6 +1063,56 @@ export default function ConversationPage() {
   }
   if (!data) return <ConversationSkeleton />;
   const { conversation: c, messages, alerts, suggestions } = data;
+
+  // Apply the operator's draft edits: validate each component's JSON, then
+  // lift any `tool`/`submit` block out of the spec into a REAL saved
+  // component — bindings carry resource ids and can't ship inside the
+  // visitor-facing spec. The sent spec keeps a `collect` stamp so its
+  // submissions route through the new binding.
+  const applyDraftEdits = async (s: { payload?: unknown }) => {
+    const parsed: Record<number, unknown> = {};
+    const payload = s.payload as Record<string, unknown> | undefined;
+    const refs = payload?.widget_refs as (string | null)[] | undefined;
+    for (const [k, v] of Object.entries(editWidgets)) {
+      if (!v.trim()) continue;
+      const i = Number(k);
+      let spec: Record<string, unknown>;
+      try {
+        spec = JSON.parse(v) as Record<string, unknown>;
+      } catch {
+        setEditErr(`component ${i + 1}: invalid JSON — fix or clear it`);
+        return null;
+      }
+      let bind = spec.tool && typeof spec.tool === 'object' ? (spec.tool as Record<string, unknown>) : undefined;
+      if (!bind && spec.submit) bind = { submit: spec.submit };
+      if (bind && (bind.submit || bind.name)) {
+        const { tool: _tool, submit: _sub, ...clean } = spec;
+        const base = String(
+          refs?.[i] ?? (clean.title as string | undefined) ?? (clean.type as string | undefined) ?? 'component',
+        )
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-+|-+$/g, '') || `component-${i + 1}`;
+        const taken = new Set((agentWidgets?.widgets ?? []).map((w) => w.name));
+        let name = base;
+        for (let n = 2; taken.has(name); n += 1) name = `${base}-${n}`;
+        try {
+          await api(`/api/agents/${c.agent_id}/widgets`, {
+            method: 'POST',
+            body: JSON.stringify({ name, spec: clean, tool: bind }),
+          });
+        } catch (e) {
+          setEditErr(`saving "${name}": ${e instanceof Error ? e.message : 'failed'}`);
+          return null;
+        }
+        parsed[i] = { ...clean, collect: name };
+      } else {
+        parsed[i] = spec;
+      }
+    }
+    if (Object.keys(parsed).length) void qc.invalidateQueries({ queryKey: ['agent-widgets'] });
+    return { text: editText, widgets: parsed };
+  };
   const brief = briefQ.data?.summary ?? null;
   const refreshBrief = async () => {
     if (briefBusy) return;
@@ -2058,21 +2112,16 @@ export default function ConversationPage() {
                       <button
                         type="button"
                         className={`btn sm${draftEditing ? '' : ' primary'}`}
-                        onClick={() => {
-                          // Leaving Edit validates each component's JSON and
-                          // applies it to the card; a bad parse stays open.
+                        onClick={async () => {
+                          // Leaving Edit validates + applies — component JSON
+                          // carrying a tool/submit block saves as a real
+                          // bound component (bind details strip before send).
                           if (!draftEditing) return;
-                          const parsed: Record<number, unknown> = {};
-                          for (const [k, v] of Object.entries(editWidgets)) {
-                            if (!v.trim()) continue;
-                            try {
-                              parsed[Number(k)] = JSON.parse(v);
-                            } catch {
-                              setEditErr(`component ${Number(k) + 1}: invalid JSON — fix or clear it`);
-                              return;
-                            }
-                          }
-                          setDraftEdits({ text: editText, widgets: parsed });
+                          setEditSaving(true);
+                          const edits = await applyDraftEdits(suggestions[0]);
+                          setEditSaving(false);
+                          if (!edits) return;
+                          setDraftEdits(edits);
                           setEditErr('');
                           setDraftEditing(false);
                         }}
@@ -2153,6 +2202,10 @@ export default function ConversationPage() {
                       {editErr && (
                         <div className="muted" style={{ fontSize: 11.5 }}>{editErr}</div>
                       )}
+                      <div className="muted" style={{ fontSize: 11 }}>
+                        A "tool" or "submit" block in a form's JSON saves it as a bound
+                        component on this agent — stripped from what the visitor sees.
+                      </div>
                     </div>
                   ) : (
                     <div>{draftEdits?.text ?? suggestions[0].text}</div>
@@ -2373,22 +2426,16 @@ export default function ConversationPage() {
                     !!suggestions[0].payload?.empty_draft ||
                     outbox.some((o) => o.status === 'pending')
                   }
-                  onClick={() => {
+                  onClick={async () => {
                     const s = suggestions[0];
-                    const parsed: Record<number, unknown> = {};
-                    for (const [k, v] of Object.entries(editWidgets)) {
-                      if (!v.trim()) continue;
-                      try {
-                        parsed[Number(k)] = JSON.parse(v);
-                      } catch {
-                        setEditErr(`component ${Number(k) + 1}: invalid JSON — fix or clear it`);
-                        return;
-                      }
-                    }
+                    setEditSaving(true);
+                    const edits = await applyDraftEdits(s);
+                    setEditSaving(false);
+                    if (!edits) return;
                     send([], undefined, {
-                      text: editText,
+                      text: edits.text,
                       ...(s.payload?.widgets?.length
-                        ? { widgets: s.payload.widgets.map((w, i) => parsed[i] ?? w) }
+                        ? { widgets: s.payload.widgets.map((w, i) => edits.widgets[i] ?? w) }
                         : {}),
                       ...(s.payload?.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
                     });
