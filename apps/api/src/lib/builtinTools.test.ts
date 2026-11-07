@@ -537,6 +537,53 @@ describe('create_agent builtin', () => {
       env.llmApiKey = prevKey;
     }
   });
+
+  it('re-calling for the same name revises the pending card in place — no stale twin', async () => {
+    const prevKey = env.llmApiKey;
+    env.llmApiKey = '';
+    try {
+      const first = await createAgent().run(
+        { name: 'Revise Bot', purpose: 'answers homework', workspace: 'Free WS' },
+        cctx(CONV2),
+      );
+      expect(first).toContain('action_card');
+      const [card] = await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, CONV2))
+        .orderBy(desc(pendingActions.createdAt));
+      expect(card.toolName).toBe('apply_create_agent');
+
+      // Visitor sends more spec material before approving — the model
+      // re-calls with the merged brief.
+      const second = await createAgent().run(
+        {
+          name: 'revise bot',
+          purpose: 'answers homework AND marks worksheets',
+          workspace: 'Free WS',
+        },
+        cctx(CONV2),
+      );
+      expect(second).toContain('updated with the revised details');
+      const cards = await db
+        .select()
+        .from(pendingActions)
+        .where(
+          and(eq(pendingActions.conversationId, CONV2), eq(pendingActions.status, 'pending')),
+        );
+      expect(cards.filter((c) => c.toolName === 'apply_create_agent').length).toBe(1);
+      const [revised] = cards;
+      expect(revised.id).toBe(card.id);
+      expect((revised.args as { purpose?: string }).purpose).toContain('marks worksheets');
+      // The rendered card the decider sees carries the revised brief.
+      const [cardMsg] = await db.select().from(messages).where(eq(messages.id, card.messageId!));
+      const action = (cardMsg.payload as { action: { args: { purpose?: string } } }).action;
+      expect(action.args.purpose).toContain('marks worksheets');
+      await db.delete(pendingActions).where(eq(pendingActions.id, card.id));
+    } finally {
+      env.llmApiKey = prevKey;
+    }
+  });
 });
 
 describe('update_agent_brief builtin', () => {

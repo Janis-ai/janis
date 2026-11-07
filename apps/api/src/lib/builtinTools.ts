@@ -557,6 +557,10 @@ async function parkConciergeAction(
   execArgs: Record<string, unknown>,
   label: string,
   display: Record<string, unknown>,
+  /** When set, a pending action matching this predicate is the SAME
+   *  proposal being revised — its args are updated in place instead of
+   *  stacking a second card the decider could approve stale. */
+  reviseMatch?: (p: typeof pendingActions.$inferSelect) => boolean,
 ): Promise<string> {
   const conciergeAgentId = ctx.agent?.id;
   if (!conciergeAgentId) return 'error: no agent context';
@@ -574,6 +578,42 @@ async function parkConciergeAction(
     )
   ) {
     return 'action_card: an identical card is already awaiting a decision in this chat — point the visitor at it';
+  }
+  const revise = reviseMatch ? existing.find(reviseMatch) : undefined;
+  if (revise) {
+    // Guard status in the UPDATE so a decide that lands mid-revise isn't
+    // resurrected — zero rows means the card was already decided and a
+    // fresh one parks below.
+    const [updated] = await ctx.db
+      .update(pendingActions)
+      .set({ args: execArgs as never })
+      .where(and(eq(pendingActions.id, revise.id), eq(pendingActions.status, 'pending')))
+      .returning();
+    if (updated) {
+      if (revise.messageId) {
+        const [msg] = await ctx.db
+          .select()
+          .from(messages)
+          .where(eq(messages.id, revise.messageId))
+          .limit(1);
+        if (msg) {
+          const p = (msg.payload ?? {}) as Record<string, unknown>;
+          const a = (p.action ?? {}) as Record<string, unknown>;
+          const [upd] = await ctx.db
+            .update(messages)
+            .set({
+              payload: {
+                ...p,
+                action: { ...a, label, args: execArgs, display },
+              },
+            })
+            .where(eq(messages.id, msg.id))
+            .returning();
+          bus.publish(ctx.workspaceId, { type: 'message', data: toMessage(upd) });
+        }
+      }
+      return 'action_card: the approval card already in this chat was updated with the revised details — the visitor applies or dismisses it there; do not claim the change is done';
+    }
   }
   const [action] = await ctx.db
     .insert(pendingActions)
@@ -1006,7 +1046,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'create_agent',
     description:
-      "Propose creating a new hosted AI agent — 'take a prompt, get a working agent'. ONLY for signed-in users administering a workspace: if the visitor is not signed in (anonymous chat or voice caller), do NOT offer this — tell them to sign in first instead. Confirm the name and purpose with the visitor, then call this with their description as `purpose` — it is stored verbatim as the agent's builder brief and drives the drafted instructions, greeting, and setup suggestions, exactly as if they had typed it into the Create step. Posts an approval card showing the name + drafted instructions — nothing is created until the visitor approves. On approval the builder's Create page opens for the new agent — do NOT offer channels, the builder covers that next. Ask which workspace only if they administer more than one.",
+      "Propose creating a new hosted AI agent — 'take a prompt, get a working agent'. ONLY for signed-in users administering a workspace: if the visitor is not signed in (anonymous chat or voice caller), do NOT offer this — tell them to sign in first instead. Confirm the name and purpose with the visitor, then call this with their description as `purpose` — it is stored verbatim as the agent's builder brief and drives the drafted instructions, greeting, and setup suggestions, exactly as if they had typed it into the Create step. Posts an approval card showing the name + drafted instructions — nothing is created until the visitor approves. On approval the builder's Create page opens for the new agent — do NOT offer channels, the builder covers that next. Ask which workspace only if they administer more than one. If the visitor sends more setup material or corrections while the card is still pending (extra instructions, files, a fuller persona), call this AGAIN with everything merged in — the same card updates in place rather than stacking a second one, so the approval covers the latest details.",
     params: {
       name: 'agent name, e.g. "Acme Support"',
       purpose:
@@ -1100,6 +1140,14 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           ...(purpose ? { brief: purpose.length > 200 ? `${purpose.slice(0, 200)}…` : purpose } : {}),
           ...(draft?.greeting ?? greeting ? { greeting: draft?.greeting ?? greeting } : {}),
         },
+        // A re-pitch for the same agent name in the same workspace is a
+        // revision of the pending card, not a new proposal — the visitor
+        // refining their brief mid-approval shouldn't face two cards.
+        (p) =>
+          p.toolName === 'apply_create_agent' &&
+          (p.args as { workspace_id?: unknown }).workspace_id === ws.id &&
+          typeof (p.args as { name?: unknown }).name === 'string' &&
+          ((p.args as { name: string }).name).toLowerCase() === name.toLowerCase(),
       );
     },
   },
