@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ChevronDown, ChevronRight, Plus, Trash2, X } from 'lucide-react';
 import { api } from '../api/client';
@@ -374,10 +374,11 @@ function Composer({
         if (k !== p) inv[p] = k;
     return inv;
   });
-  // "Browse…" pick list for an id param (spreadsheet_id ← gsheets_list
-  // and friends) — {rows, param} while open.
-  const [browse, setBrowse] = useState<{ rows: { id: string; label: string }[]; param: string } | null>(null);
-  const [browseErr, setBrowseErr] = useState('');
+  // Fetched pick rows per arg — a _id param becomes a name-picker, never
+  // a typed id (undefined = loading, null = fetch failed → text input).
+  const [listRows, setListRows] = useState<Record<string, { id: string; label: string }[] | null>>({});
+  // Tab pick rows for a range arg once a spreadsheet is picked.
+  const [tabRows, setTabRows] = useState<{ id: string; label: string }[] | null | undefined>(undefined);
   const [autoGreet, setAutoGreet] = useState(initial?.autoGreet ?? false);
   const [jsonErr, setJsonErr] = useState('');
   const [testData, setTestData] = useState('{}');
@@ -478,77 +479,61 @@ function Composer({
     return tools.find((t) => t.name === `${prefix}_tabs`)?.name;
   };
 
-  const openBrowse = async (param: string, forTool = submitName) => {
-    const lt = forTool ? listToolFor(forTool) : undefined;
-    if (!lt) return;
-    setBrowseErr('');
-    try {
-      const out = await api<{ result: string }>(`/api/agents/${agentId}/tools/run`, {
-        method: 'POST',
-        body: JSON.stringify({ tool: lt }),
-      });
-      const j: unknown = JSON.parse(out.result);
-      const rows = (
-        Array.isArray(j) ? j : Object.values(j as object).find(Array.isArray)
-      ) as Record<string, unknown>[] | undefined;
-      setBrowse({
-        param,
-        rows: (rows ?? [])
-          .slice(0, 20)
-          .map((r) => ({
-            id: String(r.id ?? r.spreadsheetId ?? ''),
-            label: String(r.name ?? r.title ?? r.id ?? ''),
-          }))
-          .filter((r) => r.id),
-      });
-    } catch (e) {
-      setBrowseErr(e instanceof Error ? e.message : 'the list tool failed');
-    }
+  /** Run a read tool and normalize its rows to {id,label} pick options —
+   *  covers files rows (id/name) and tab rows ({properties:{title}}). */
+  const fetchRows = async (tool: string, args: Record<string, unknown> = {}) => {
+    const out = await api<{ result: string }>(`/api/agents/${agentId}/tools/run`, {
+      method: 'POST',
+      body: JSON.stringify({ tool, args }),
+    });
+    const j: unknown = JSON.parse(out.result);
+    const rows = (
+      Array.isArray(j) ? j : Object.values(j as object).find(Array.isArray)
+    ) as Record<string, unknown>[] | undefined;
+    return (rows ?? [])
+      .slice(0, 40)
+      .map((r) => {
+        const title = (r as { properties?: { title?: string } }).properties?.title;
+        return {
+          id: String(r.id ?? r.spreadsheetId ?? title ?? r.name ?? r.title ?? ''),
+          label: String(r.name ?? r.title ?? title ?? r.id ?? ''),
+        };
+      })
+      .filter((r) => r.id);
   };
 
-  // Tab picker for a range arg — the write tool's sibling *_tabs tool
-  // (gsheets_tabs) returns the tab names; a pick writes 'Tab'!A1.
-  const openTabBrowse = async (param: string) => {
-    const tt = tabToolFor(submitName);
-    if (!tt) return;
-    setBrowseErr('');
-    try {
-      const out = await api<{ result: string }>(`/api/agents/${agentId}/tools/run`, {
-        method: 'POST',
-        body: JSON.stringify({
-          tool: tt,
-          args: { spreadsheet_id: submitArgs.spreadsheet_id },
-        }),
-      });
-      const j: unknown = JSON.parse(out.result);
-      const rows = (
-        Array.isArray(j) ? j : Object.values(j as object).find(Array.isArray)
-      ) as Record<string, unknown>[] | undefined;
-      setBrowse({
-        param,
-        rows: (rows ?? [])
-          .slice(0, 40)
-          .map((r) => {
-            const title = String(
-              (r as { properties?: { title?: string } }).properties?.title ??
-                r.title ??
-                r.name ??
-                '',
-            );
-            return { id: `'${title}'!A1`, label: title };
-          })
-          .filter((r) => r.label),
-      });
-    } catch (e) {
-      setBrowseErr(e instanceof Error ? e.message : 'the tab list failed');
+  // Fetch pick options for every _id arg when the submit tool changes —
+  // the select IS the control, no browse button to discover.
+  useEffect(() => {
+    if (!submitName) return;
+    const lt = listToolFor(submitName);
+    const tp = tools.find((t) => t.name === submitName)?.params ?? {};
+    for (const k of Object.keys(tp)) {
+      if (!/(^id$|_id$)/.test(k) || listRows[k] !== undefined) continue;
+      if (!lt) {
+        setListRows((p) => ({ ...p, [k]: null }));
+        continue;
+      }
+      fetchRows(lt)
+        .then((rows) => setListRows((p) => ({ ...p, [k]: rows })))
+        .catch(() => setListRows((p) => ({ ...p, [k]: null })));
     }
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submitName]);
 
-  const pickBrowse = (id: string) => {
-    if (!browse) return;
-    setSubmitArgs({ ...submitArgs, [browse.param]: id });
-    setBrowse(null);
-  };
+  // Tab options follow the picked spreadsheet — repick refetches.
+  useEffect(() => {
+    const tt = submitName ? tabToolFor(submitName) : undefined;
+    const sid = submitArgs.spreadsheet_id?.trim();
+    if (!tt || !sid) {
+      setTabRows(undefined);
+      return;
+    }
+    fetchRows(tt, { spreadsheet_id: sid })
+      .then((rows) => setTabRows(rows.map((r) => ({ id: `'${r.label}'!A1`, label: r.label }))))
+      .catch(() => setTabRows(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [submitName, submitArgs.spreadsheet_id]);
 
   const runTest = async () => {
     const { tool, err } = buildTool();
@@ -789,16 +774,7 @@ function Composer({
                 className="input"
                 style={inputStyle}
                 value={submitName}
-                onChange={(e) => {
-                  const tn = e.target.value;
-                  setSubmitName(tn);
-                  setBrowse(null);
-                  // Pick the destination first — a blank _id arg opens its
-                  // picker automatically, no "browse…" to discover.
-                  const tp = tools.find((t) => t.name === tn)?.params ?? {};
-                  const idKey = Object.keys(tp).find((k) => /(^id$|_id$)/.test(k));
-                  if (idKey && !submitArgs[idKey]?.trim()) void openBrowse(idKey, tn);
-                }}
+                onChange={(e) => setSubmitName(e.target.value)}
               >
                 <option value="">none — answers just arrive as a chat message</option>
                 {tools.map((t) => (
@@ -823,9 +799,9 @@ function Composer({
                 k === 'range'
                   ? 'which tab or area to write — blank writes to A1 (appends after the last row)'
                   : k === 'values'
-                    ? 'the row to append — {name} drops that answer in · blank appends your fields in order'
+                    ? 'the columns the answers land in — {name} writes that answer there · blank = one column per field, in order'
                     : /(^id$|_id$)/.test(k) && listTool
-                      ? `the ${k.replace(/_id$/, '').replace(/_/g, ' ')} to write to — pick it, don't type an id`
+                      ? `the ${k.replace(/_id$/, '').replace(/_/g, ' ')} to write to — pick it by name`
                       : params[k] ?? null;
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -834,90 +810,108 @@ function Composer({
                       this tool takes no args — it runs as-is
                     </div>
                   )}
-                  {argKeys.map((k) => (
-                    <div key={k}>
-                      <div className="row" style={{ alignItems: 'flex-end' }}>
-                        <Field label={k === 'values' ? 'values — the row to append' : k}>
-                          <input
-                            className="input"
-                            style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
-                            value={submitArgs[k] ?? ''}
-                            onChange={(e) => setSubmitArgs({ ...submitArgs, [k]: e.target.value })}
-                            placeholder={
+                  {argKeys.map((k) => {
+                    // A _id arg with a fetched list is a name-picker —
+                    // the operator picks "Leads — Property inquiries",
+                    // the id never surfaces.
+                    const rows = listRows[k];
+                    const idPick = /(^id$|_id$)/.test(k) && listTool;
+                    const tabPick = k === 'range' && tabsTool && submitArgs.spreadsheet_id?.trim();
+                    return (
+                      <div key={k}>
+                        <div className="row" style={{ alignItems: 'flex-end' }}>
+                          <Field
+                            label={
                               k === 'values'
-                                ? `[["${(spec.fields ?? [])
-                                    .map((f) => `{${f.name || '?'}}`)
-                                    .join('","')}"]] — blank appends these fields`
-                                : params[k]
+                                ? 'values — which columns the answers land in'
+                                : k === 'spreadsheet_id'
+                                  ? 'spreadsheet — the file to write to'
+                                  : k === 'range'
+                                    ? 'tab — where in the file to write'
+                                    : k
                             }
-                          />
-                        </Field>
-                        {listTool && /(^id$|_id$)/.test(k) && (
-                          <button
-                            className="btn"
-                            style={{ fontSize: 11.5 }}
-                            title={`Pick a value for ${k}`}
-                            onClick={() => void openBrowse(k)}
                           >
-                            browse…
-                          </button>
+                            {idPick ? (
+                              rows === undefined ? (
+                                <div className="muted" style={{ fontSize: 12 }}>loading…</div>
+                              ) : rows === null || !rows.length ? (
+                                <input
+                                  className="input"
+                                  style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
+                                  value={submitArgs[k] ?? ''}
+                                  onChange={(e) => setSubmitArgs({ ...submitArgs, [k]: e.target.value })}
+                                  placeholder={params[k]}
+                                />
+                              ) : (
+                                <select
+                                  className="input"
+                                  style={inputStyle}
+                                  value={submitArgs[k] ?? ''}
+                                  onChange={(e) => setSubmitArgs({ ...submitArgs, [k]: e.target.value })}
+                                >
+                                  <option value="">— pick one —</option>
+                                  {rows.map((r) => (
+                                    <option key={r.id} value={r.id}>{r.label}</option>
+                                  ))}
+                                  {submitArgs[k] && !rows.some((r) => r.id === submitArgs[k]) && (
+                                    <option value={submitArgs[k]}>{submitArgs[k]}</option>
+                                  )}
+                                </select>
+                              )
+                            ) : tabPick && tabRows !== undefined && tabRows !== null && tabRows.length ? (
+                              <select
+                                className="input"
+                                style={inputStyle}
+                                value={submitArgs[k] ?? ''}
+                                onChange={(e) => setSubmitArgs({ ...submitArgs, [k]: e.target.value })}
+                              >
+                                <option value="">blank → A1 (after the last row)</option>
+                                {tabRows.map((r) => (
+                                  <option key={r.id} value={r.id}>{r.label}</option>
+                                ))}
+                                {submitArgs[k] && !tabRows.some((r) => r.id === submitArgs[k]) && (
+                                  <option value={submitArgs[k]}>{submitArgs[k]}</option>
+                                )}
+                              </select>
+                            ) : (
+                              <input
+                                className="input"
+                                style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
+                                value={submitArgs[k] ?? ''}
+                                onChange={(e) => setSubmitArgs({ ...submitArgs, [k]: e.target.value })}
+                                placeholder={
+                                  k === 'values'
+                                    ? `[["${(spec.fields ?? [])
+                                        .map((f) => `{${f.name || '?'}}`)
+                                        .join('","')}"]] — blank appends these fields`
+                                    : params[k]
+                                }
+                              />
+                            )}
+                          </Field>
+                        </div>
+                        {helperFor(k) && (
+                          <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                            {helperFor(k)}
+                          </div>
                         )}
-                        {k === 'range' && tabsTool && (
-                          <button
-                            className="btn"
-                            style={{ fontSize: 11.5 }}
-                            title={
-                              submitArgs.spreadsheet_id?.trim()
-                                ? 'Pick a tab from that spreadsheet'
-                                : 'pick a spreadsheet first'
-                            }
-                            disabled={!submitArgs.spreadsheet_id?.trim()}
-                            onClick={() => void openTabBrowse(k)}
+                        {k === 'spreadsheet_id' && submitArgs[k]?.trim() && (
+                          <a
+                            className="muted"
+                            style={{ fontSize: 11 }}
+                            target="_blank"
+                            rel="noreferrer"
+                            href={`https://docs.google.com/spreadsheets/d/${submitArgs[k].trim()}`}
                           >
-                            tabs…
-                          </button>
+                            open the sheet ↗
+                          </a>
                         )}
                       </div>
-                      {helperFor(k) && (
-                        <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-                          {helperFor(k)}
-                        </div>
-                      )}
-                      {k === 'spreadsheet_id' && submitArgs[k]?.trim() && (
-                        <a
-                          className="muted"
-                          style={{ fontSize: 11 }}
-                          target="_blank"
-                          rel="noreferrer"
-                          href={`https://docs.google.com/spreadsheets/d/${submitArgs[k].trim()}`}
-                        >
-                          open the sheet ↗
-                        </a>
-                      )}
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               );
             })()}
-          {browseErr && <div className="error">{browseErr}</div>}
-          {browse && (
-            <div className="card" style={{ padding: 6, maxHeight: 160, overflow: 'auto' }}>
-              {!browse.rows.length && (
-                <div className="muted" style={{ fontSize: 12 }}>the list tool returned nothing</div>
-              )}
-              {browse.rows.map((r) => (
-                <div
-                  key={r.id}
-                  className="row"
-                  style={{ fontSize: 12, cursor: 'pointer', padding: '3px 4px', gap: 8 }}
-                  onClick={() => pickBrowse(r.id)}
-                >
-                  <span style={{ flex: 1 }}>{r.label}</span>
-                  <span className="muted mono" style={{ fontSize: 10.5 }}>{r.id}</span>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
   );
 
