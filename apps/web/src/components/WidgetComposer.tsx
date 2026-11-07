@@ -797,10 +797,22 @@ function Composer({
                       )}
                     </div>
                   ))}
-                  <div className="muted" style={{ fontSize: 11.5 }}>
-                    <span className="mono">{'{field_name}'}</span> inserts the visitor's answer for
-                    that field — blank args use defaults (range → A1, values → your fields in order)
-                  </div>
+                  {(() => {
+                    const fnames = ((spec as { fields?: { name?: string }[] }).fields ?? [])
+                      .map((f) => f.name)
+                      .filter((n): n is string => !!n);
+                    return (
+                      <div className="muted" style={{ fontSize: 11.5 }}>
+                        drop an answer into an arg by writing its field name in braces
+                        {fnames.length ? (
+                          <>
+                            {' '}— yours: <span className="mono">{fnames.map((n) => `{${n}}`).join(' ')}</span>
+                          </>
+                        ) : null}
+                        {' '}· blank args use defaults (range → A1, values → your fields in order)
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })()}
