@@ -2174,7 +2174,8 @@ export default function ConversationPage() {
                         if (!ref) {
                           return (_w as { type?: string }).type === 'form' ? (
                             <div key={wi} className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                              inline form — answers arrive as a message, nothing saves them
+                              inline form — answers arrive as a message, nothing saves them —
+                              Copilot can build it as a bound component
                             </div>
                           ) : null;
                         }
