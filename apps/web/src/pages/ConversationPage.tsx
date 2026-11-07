@@ -2225,6 +2225,16 @@ export default function ConversationPage() {
                         const ref = (suggestions[0].payload as { widget_refs?: (string | null)[] })
                           ?.widget_refs?.[wi];
                         if (!ref) {
+                          const lifted = agentWidgets?.widgets.find(
+                            (x) => x.name === (_w as { collect?: string }).collect,
+                          );
+                          if (lifted?.tool?.submit?.name) {
+                            return (
+                              <div key={wi} className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                                {lifted.name} · saves submissions via {lifted.tool.submit.name}
+                              </div>
+                            );
+                          }
                           return (_w as { type?: string }).type === 'form' ? (
                             <div key={wi} className="muted" style={{ fontSize: 11, marginTop: 4 }}>
                               inline form — answers arrive as a message, nothing saves them —

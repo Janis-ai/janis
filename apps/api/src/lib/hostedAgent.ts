@@ -515,6 +515,44 @@ export function matchSavedComponent(
  *  4. {prop} placeholders interpolate; the result must still validate. */
 /** Count leaf scalars — a GraphQL miss like {orders:{nodes:[]}} yields 0,
  *  distinguishing "bound tool found nothing" from a successful fetch. */
+/** A WIDGET: spec may carry a `tool`/`submit` block — the binding can
+ *  never ship inside the visitor-facing spec (it holds resource ids), so
+ *  a valid one is saved as a named bound component and the spec returns
+ *  with a `collect` stamp routing submissions through it. Either way the
+ *  block is stripped from what renders. */
+async function liftWidgetBinding(
+  db: Db,
+  agent: typeof agents.$inferSelect,
+  toolDefs: { name: string; approval?: boolean; method?: string }[],
+  spec: Record<string, unknown>,
+): Promise<WidgetComponent> {
+  const { tool, submit, ...clean } = spec;
+  const bindRaw =
+    tool && typeof tool === 'object' ? tool : submit !== undefined ? { submit } : undefined;
+  const parsed = WidgetToolBinding.safeParse(bindRaw);
+  if (!parsed.success) return clean as unknown as WidgetComponent;
+  const b = parsed.data;
+  const read = b.name ? toolDefs.find((t) => t.name === b.name) : undefined;
+  const sub = b.submit?.name ? toolDefs.find((t) => t.name === b.submit!.name) : undefined;
+  const isForm = clean.type === 'form';
+  const readOk = !b.name || (!!read && !read.approval && read.method !== undefined && read.method !== 'POST');
+  const subOk = !b.submit || (!!sub && !sub.approval && isForm);
+  if (!readOk || !subOk || (!b.name && !b.submit)) return clean as unknown as WidgetComponent;
+  const base =
+    normWidgetRef(String(clean.title ?? clean.type ?? 'component')) || 'component';
+  const rows = await db
+    .select({ name: agentWidgets.name })
+    .from(agentWidgets)
+    .where(eq(agentWidgets.agentId, agent.id));
+  const taken = new Set(rows.map((r) => r.name));
+  let name = base;
+  for (let n = 2; taken.has(name); n += 1) name = `${base}-${n}`;
+  await db
+    .insert(agentWidgets)
+    .values({ agentId: agent.id, name, spec: clean, tool: b });
+  return { ...clean, collect: name } as unknown as WidgetComponent;
+}
+
 function countLeaves(v: unknown, depth = 0): number {
   if (v == null || depth > 8) return 0;
   if (Array.isArray(v)) return v.reduce((n, x) => n + countLeaves(x, depth + 1), 0);
@@ -1036,7 +1074,7 @@ export function systemPrompt(
     parts.push(
       '\nNow write the reply you would send to the customer right now — your single best, most confident answer to their latest message, in your own voice. If details are missing, give the best answer you can and ask one targeted follow-up rather than hedging or deferring. Output only the reply text — no speaker labels, no preamble; never output [HANDOFF] in a draft. When the reply needs an action — sending a verification email, updating a profile, a gated tool — CALL that tool so it attaches to the draft as an operator-decidable card; never narrate an action you did not take, and never mention consoles, approvals or internal steps to the customer. And when the reply needs a component — a form, cards, an options picker — emit it as WIDGET: markup (or WIDGET_REF: name for a saved one) on its own line, never mid-sentence; never describe a component as a bulleted list of its fields.' +
         (opts.operator
-          ? ' Components belong inline in this draft — emit WIDGET: markup (or WIDGET_REF: name for a saved one) on its own line. A draft never saves components or changes settings, and never mentions approval cards, consoles or internal steps to the customer. A form that must RECORD answers — save to a sheet, feed a tool, route to a destination — can only come from WIDGET_REF: a saved component that carries a submit binding; an inline WIDGET: form collects answers into a plain chat message and saves nothing, so when the instruction asks for a saving form and the saved-components digest has one, emit the ref — if it has none, emit the inline form anyway (the operator sees its save-wiring status on the card), and never tell the customer a tool was missing.'
+          ? ' Components belong inline in this draft — emit WIDGET: markup (or WIDGET_REF: name for a saved one) on its own line. A draft never saves components or changes settings, and never mentions approval cards, consoles or internal steps to the customer. A form that must RECORD answers — save to a sheet, feed a tool, route to a destination — can only come from WIDGET_REF: a saved component that carries a submit binding; an inline WIDGET: form collects answers into a plain chat message and saves nothing, so when the instruction asks for a saving form and the saved-components digest has one, emit the ref — if it has none, emit the form spec with a "tool" object — {"tool":{"submit":{"name":"<a write tool from your toolset>","args":{<its params>}}} — resource ids (spreadsheet_id, list ids) come from a REAL list call in this run (e.g. the sheets list tool), never invented; the platform saves it as a bound component automatically. Never tell the customer a tool was missing.'
           : ''),
     );
   } else {
@@ -5733,6 +5771,11 @@ export async function runHostedEvent(
     // Which saved component each ref-resolved widget came from — the draft
     // card shows the wiring (submits to X / bound to Y) so the operator can
     // verify before sending. Ref-resolved specs append after inline ones.
+    // WIDGET: specs may carry tool/submit — lift each binding into a saved
+    // bound component (collect-stamped); it never ships inside the spec.
+    for (let i = 0; i < widgets.length; i += 1) {
+      widgets[i] = await liftWidgetBinding(db, agent, agentToolDefs, widgets[i]);
+    }
     const refNames: string[] = [];
     for (const ref of refs) {
       const def = refSpecs.get(ref.name);
@@ -6619,6 +6662,11 @@ async function replyAsHostedAgent(
       toolWidgets.push(...gen.widgets);
       const { text: noLearns, learns: l } = extractLearns(stripTranscriptNotes(gen.text));
       const { text: noWidgets, widgets: w, refs, dropped } = extractWidgets(noLearns);
+      // Same lift as the draft path — a spec-carrying tool/submit becomes a
+      // saved bound component; the block never reaches the visitor.
+      for (let i = 0; i < w.length; i += 1) {
+        w[i] = await liftWidgetBinding(db, agent, agentToolDefs, w[i]);
+      }
       // Saved components resolve through their defs: a state key picks a
       // variant, a tool binding fetches live props/items, inline data fills
       // {prop} placeholders — a static spec when it carries none of those.
