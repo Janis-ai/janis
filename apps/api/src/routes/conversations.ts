@@ -934,6 +934,8 @@ export function conversationRoutes(db: Db) {
       },
       new Set(),
       cap,
+      undefined,
+      body.name,
     );
     if (!spec) return c.json({ error: cap.error ?? 'component produced nothing' }, 400);
     if (body.preview) return c.json({ widget: spec });
