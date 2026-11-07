@@ -2057,6 +2057,10 @@ export default function ConversationPage() {
                     {suggestions[0].notes}
                   </div>
                 )}
+                {/* The draft text scrolls in its own region — the controls
+                    stay above it (draft-body gets order:1, draft-foot stays
+                    order 0 in DOM order but renders first). */}
+                <div className="draft-body">
                 {suggestions[0].payload?.empty_draft ? (
                   <div className="muted" style={{ fontStyle: 'italic' }}>
                     The agent couldn't draft a reply this time — nothing usable came
@@ -2205,6 +2209,7 @@ export default function ConversationPage() {
                   </div>
                   );
                 })}
+                </div>
               </>
             ) : (
               <div className="muted">Drafting…</div>

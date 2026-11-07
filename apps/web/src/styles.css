@@ -1992,10 +1992,14 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .conv-main { min-width: 420px; }
 }
 .card.suggestion { border-color: var(--accent); }
-/* The draft card scrolls its content at the 34vh cap — the guide input
-   and Send/Edit row pin to the card's bottom edge instead of scrolling
-   away with the draft text. */
-.card.suggestion.draft .draft-foot { position: sticky; bottom: 0; background: var(--bg-2, var(--bg)); padding-bottom: 2px; }
+/* The draft card's controls lead: at the 34vh cap the draft text scrolls
+   in .draft-body while the guide input and Send/Edit row sit above it —
+   the actions and the scrollbar are up front, not at the tail of a long
+   suggestion. draft-body carries order:1 so it renders after draft-foot
+   even though it comes first in the DOM. */
+.card.suggestion.draft:has(.draft-body) { display: flex; flex-direction: column; overflow: hidden; }
+.card.suggestion.draft .draft-foot { flex-shrink: 0; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+.card.suggestion.draft .draft-body { order: 1; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 /* The Ask Janis rail claims ~340px — on the conversation screen at mid widths
    that squeezes the transcript + details into nested scrollbars, so the sidebar
    collapses to icons and the details panel stacks under the transcript in the

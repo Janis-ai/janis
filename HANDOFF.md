@@ -93,6 +93,15 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-07b — Draft card: controls and scrollbar above the draft text
+- The suggestion draft card still capped at 34vh but scrolled its whole
+  body with the guide input + Send/Edit row sticky-pinned at the bottom.
+  Now the card is flex-column: the draft text/widgets/actions scroll in
+  .draft-body while .draft-foot renders above it (order:1 on the body —
+  the foot stays DOM-last but paints between the label and the text).
+  The component-preview draft cards keep their old scroll — the new
+  rules only apply when a .draft-body exists.
+
 ## 2026-11-07 — Google OAuth verification: Limited Use / AI disclosure
 - Google flagged the app under the Workspace API Limited Use policy
   (AI/ML + Workspace user data). Audit: Google-scoped data (gmail.readonly/
