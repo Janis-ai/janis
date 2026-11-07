@@ -1044,6 +1044,11 @@ export default function ConversationPage() {
       .catch(() => setWsSwitch('failed'));
   }, [loadError, wsSwitch, id, qc]);
 
+  // Saved components on this agent — the draft card labels each staged
+  // widget with its wiring (submits to / bound to) via payload.widget_refs.
+  // Sits above every early return — hooks can't run conditionally.
+  const { data: agentWidgets } = useAgentWidgets(data?.conversation.agent_id);
+
   if (loadError instanceof ApiError && loadError.status === 404) {
     if (wsSwitch !== 'failed') {
       // Deep link into another workspace (alert emails) — the switch attempt
@@ -1058,9 +1063,6 @@ export default function ConversationPage() {
   }
   if (!data) return <ConversationSkeleton />;
   const { conversation: c, messages, alerts, suggestions } = data;
-  // Saved components on this agent — the draft card labels each staged
-  // widget with its wiring (submits to / bound to) via payload.widget_refs.
-  const { data: agentWidgets } = useAgentWidgets(c.agent_id);
   const brief = briefQ.data?.summary ?? null;
   const refreshBrief = async () => {
     if (briefBusy) return;
