@@ -468,8 +468,18 @@ function Composer({
     return tools.find((t) => t.name === `${prefix}_list`)?.name;
   };
 
-  const openBrowse = async (param: string) => {
-    const lt = submitName ? listToolFor(submitName) : undefined;
+  /** The sibling tab tool a write tool's tabs come from — gsheets_append
+   *  → gsheets_tabs (tab names for the range arg). */
+  const tabToolFor = (toolName: string): string | undefined => {
+    const prefix = toolName.replace(
+      /_(append|update|read|create|add|write|delete|get|set|find|search|put|post)$/i,
+      '',
+    );
+    return tools.find((t) => t.name === `${prefix}_tabs`)?.name;
+  };
+
+  const openBrowse = async (param: string, forTool = submitName) => {
+    const lt = forTool ? listToolFor(forTool) : undefined;
     if (!lt) return;
     setBrowseErr('');
     try {
@@ -493,6 +503,44 @@ function Composer({
       });
     } catch (e) {
       setBrowseErr(e instanceof Error ? e.message : 'the list tool failed');
+    }
+  };
+
+  // Tab picker for a range arg — the write tool's sibling *_tabs tool
+  // (gsheets_tabs) returns the tab names; a pick writes 'Tab'!A1.
+  const openTabBrowse = async (param: string) => {
+    const tt = tabToolFor(submitName);
+    if (!tt) return;
+    setBrowseErr('');
+    try {
+      const out = await api<{ result: string }>(`/api/agents/${agentId}/tools/run`, {
+        method: 'POST',
+        body: JSON.stringify({
+          tool: tt,
+          args: { spreadsheet_id: submitArgs.spreadsheet_id },
+        }),
+      });
+      const j: unknown = JSON.parse(out.result);
+      const rows = (
+        Array.isArray(j) ? j : Object.values(j as object).find(Array.isArray)
+      ) as Record<string, unknown>[] | undefined;
+      setBrowse({
+        param,
+        rows: (rows ?? [])
+          .slice(0, 40)
+          .map((r) => {
+            const title = String(
+              (r as { properties?: { title?: string } }).properties?.title ??
+                r.title ??
+                r.name ??
+                '',
+            );
+            return { id: `'${title}'!A1`, label: title };
+          })
+          .filter((r) => r.label),
+      });
+    } catch (e) {
+      setBrowseErr(e instanceof Error ? e.message : 'the tab list failed');
     }
   };
 
@@ -630,7 +678,7 @@ function Composer({
   const boundSection = tools.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
-            <Field label="bound tool — runs when the component is referenced, fills {props} and list rows from its result">
+            <Field label="prefill from a tool — it runs when the component shows, filling {placeholders} and list rows">
               <select
                 className="input"
                 style={inputStyle}
@@ -742,8 +790,14 @@ function Composer({
                 style={inputStyle}
                 value={submitName}
                 onChange={(e) => {
-                  setSubmitName(e.target.value);
+                  const tn = e.target.value;
+                  setSubmitName(tn);
                   setBrowse(null);
+                  // Pick the destination first — a blank _id arg opens its
+                  // picker automatically, no "browse…" to discover.
+                  const tp = tools.find((t) => t.name === tn)?.params ?? {};
+                  const idKey = Object.keys(tp).find((k) => /(^id$|_id$)/.test(k));
+                  if (idKey && !submitArgs[idKey]?.trim()) void openBrowse(idKey, tn);
                 }}
               >
                 <option value="">none — answers just arrive as a chat message</option>
@@ -753,14 +807,26 @@ function Composer({
               </select>
             </Field>
           </div>
-          {/* One input per declared arg — no JSON to get wrong. `values`
-              stays blank: the submit then writes the form's fields in
-              order, which IS the 1:1 append. */}
+          {/* One input per declared arg, each with its own helper — ids
+              lead (pick the destination first), `values` last. */}
           {submitName &&
             (() => {
               const params = tools.find((t) => t.name === submitName)?.params ?? {};
-              const argKeys = [...new Set([...Object.keys(params), ...Object.keys(submitArgs)])];
               const listTool = listToolFor(submitName);
+              const tabsTool = tabToolFor(submitName);
+              const argKeys = [...new Set([...Object.keys(params), ...Object.keys(submitArgs)])].sort(
+                (a, b) =>
+                  (a === 'values' ? 1 : 0) - (b === 'values' ? 1 : 0) ||
+                  Number(/(^id$|_id$)/.test(b)) - Number(/(^id$|_id$)/.test(a)),
+              );
+              const helperFor = (k: string): string | null =>
+                k === 'range'
+                  ? 'which tab or area to write — blank writes to A1 (appends after the last row)'
+                  : k === 'values'
+                    ? 'the row to append — {name} drops that answer in · blank appends your fields in order'
+                    : /(^id$|_id$)/.test(k) && listTool
+                      ? `the ${k.replace(/_id$/, '').replace(/_/g, ' ')} to write to — pick it, don't type an id`
+                      : params[k] ?? null;
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {!argKeys.length && (
@@ -769,50 +835,67 @@ function Composer({
                     </div>
                   )}
                   {argKeys.map((k) => (
-                    <div className="row" style={{ alignItems: 'flex-end' }} key={k}>
-                      <Field label={k === 'values' ? 'values — blank appends your fields in order' : k}>
-                        <input
-                          className="input"
-                          style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
-                          value={submitArgs[k] ?? ''}
-                          onChange={(e) => setSubmitArgs({ ...submitArgs, [k]: e.target.value })}
-                          placeholder={
-                            k === 'values'
-                              ? `[["${(spec.fields ?? [])
-                                  .map((f) => `{${f.name || '?'}}`)
-                                  .join('","')}"]] — blank appends these fields`
-                              : params[k]
-                          }
-                        />
-                      </Field>
-                      {listTool && /(^id$|_id$)/.test(k) && (
-                        <button
-                          className="btn"
-                          style={{ fontSize: 11.5 }}
-                          title={`Pick a value for ${k}`}
-                          onClick={() => void openBrowse(k)}
+                    <div key={k}>
+                      <div className="row" style={{ alignItems: 'flex-end' }}>
+                        <Field label={k === 'values' ? 'values — the row to append' : k}>
+                          <input
+                            className="input"
+                            style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
+                            value={submitArgs[k] ?? ''}
+                            onChange={(e) => setSubmitArgs({ ...submitArgs, [k]: e.target.value })}
+                            placeholder={
+                              k === 'values'
+                                ? `[["${(spec.fields ?? [])
+                                    .map((f) => `{${f.name || '?'}}`)
+                                    .join('","')}"]] — blank appends these fields`
+                                : params[k]
+                            }
+                          />
+                        </Field>
+                        {listTool && /(^id$|_id$)/.test(k) && (
+                          <button
+                            className="btn"
+                            style={{ fontSize: 11.5 }}
+                            title={`Pick a value for ${k}`}
+                            onClick={() => void openBrowse(k)}
+                          >
+                            browse…
+                          </button>
+                        )}
+                        {k === 'range' && tabsTool && (
+                          <button
+                            className="btn"
+                            style={{ fontSize: 11.5 }}
+                            title={
+                              submitArgs.spreadsheet_id?.trim()
+                                ? 'Pick a tab from that spreadsheet'
+                                : 'pick a spreadsheet first'
+                            }
+                            disabled={!submitArgs.spreadsheet_id?.trim()}
+                            onClick={() => void openTabBrowse(k)}
+                          >
+                            tabs…
+                          </button>
+                        )}
+                      </div>
+                      {helperFor(k) && (
+                        <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+                          {helperFor(k)}
+                        </div>
+                      )}
+                      {k === 'spreadsheet_id' && submitArgs[k]?.trim() && (
+                        <a
+                          className="muted"
+                          style={{ fontSize: 11 }}
+                          target="_blank"
+                          rel="noreferrer"
+                          href={`https://docs.google.com/spreadsheets/d/${submitArgs[k].trim()}`}
                         >
-                          browse…
-                        </button>
+                          open the sheet ↗
+                        </a>
                       )}
                     </div>
                   ))}
-                  {(() => {
-                    const fnames = ((spec as { fields?: { name?: string }[] }).fields ?? [])
-                      .map((f) => f.name)
-                      .filter((n): n is string => !!n);
-                    return (
-                      <div className="muted" style={{ fontSize: 11.5 }}>
-                        drop an answer into an arg by writing its field name in braces
-                        {fnames.length ? (
-                          <>
-                            {' '}— yours: <span className="mono">{fnames.map((n) => `{${n}}`).join(' ')}</span>
-                          </>
-                        ) : null}
-                        {' '}· blank args use defaults (range → A1, values → your fields in order)
-                      </div>
-                    );
-                  })()}
                 </div>
               );
             })()}
@@ -872,6 +955,10 @@ function Composer({
       </div>
       {!nameOk && name && <div className="error">lowercase letters, numbers, - and _ — starts with a letter</div>}
 
+      {/* Prefill first — "what fills this component" is the decision the
+          operator makes before laying out fields, not an advanced extra. */}
+      {boundSection}
+
       <SpecEditor spec={spec} onChange={setSpec} />
 
       {/* Data binding — {prop} placeholders fill from ref data or a bound
@@ -893,9 +980,8 @@ function Composer({
         );
       })()}
 
-      {/* Forms lead with the submit wiring — "collect answers, save them
-          somewhere" is the common build. The read-side binding and named
-          variants are advanced; other types keep the bound tool up front. */}
+      {/* The submit wiring — "collect answers, save them somewhere" is
+          the common build. Named variants stay advanced for every type. */}
       {submitSection}
       {spec.type === 'form' ? (
         <>
@@ -905,21 +991,13 @@ function Composer({
             onClick={() => setAdvOpen((v) => !v)}
             aria-expanded={advOpen}
           >
-            {advOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />} advanced — prefill
-            from a tool · named variants
+            {advOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />} advanced — named
+            variants
           </button>
-          {advOpen && (
-            <>
-              {boundSection}
-              {statesSection}
-            </>
-          )}
+          {advOpen && statesSection}
         </>
       ) : (
-        <>
-          {statesSection}
-          {boundSection}
-        </>
+        statesSection
       )}
 
       <label className="row" style={{ gap: 6, fontSize: 12.5 }}>

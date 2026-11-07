@@ -1824,6 +1824,16 @@ export const TOOL_TEMPLATES: ToolTemplate[] = [
         bodyTemplate: '{"values": ${values}}',
       },
       {
+        name: 'gsheets_tabs',
+        label: 'List tabs',
+        description:
+          'List the tabs (sheet names) in a spreadsheet — the names range args want, e.g. Sheet1!A1.',
+        method: 'GET',
+        url: 'https://sheets.googleapis.com/v4/spreadsheets/{spreadsheet_id}?fields=sheets.properties.title',
+        headers: { authorization: 'Bearer {{secrets.CONN_GOOGLE_TOKEN}}' },
+        params: { spreadsheet_id: 'sheet id from gsheets_list' },
+      },
+      {
         name: 'gsheets_append',
         label: 'Append rows',
         description:
