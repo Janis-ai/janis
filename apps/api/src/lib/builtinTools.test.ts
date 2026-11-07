@@ -1401,6 +1401,54 @@ describe('save_widget builtin', () => {
     ],
   });
 
+  it('rejects a bound-tool arg left as a bracket placeholder', async () => {
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    const prev = bot2.config;
+    await db
+      .update(agents)
+      .set({
+        config: {
+          ...((prev ?? {}) as Record<string, unknown>),
+          tools: [
+            {
+              name: 'gsheets_append',
+              url: 'https://sheets.googleapis.com/x',
+              method: 'POST',
+              bodyTemplate: '{}',
+              params: { spreadsheet_id: 'sheet id', range: 'range', values: 'rows' },
+            },
+          ],
+        } as never,
+      })
+      .where(eq(agents.id, bot2.id));
+    try {
+      const out = await save().run(
+        {
+          workspace: 'free',
+          agent: 'bot2',
+          name: 'survey-form',
+          spec: '{"type":"form","title":"S","fields":[{"name":"c","label":"C","type":"text"}]}',
+          tool: JSON.stringify({
+            name: 'gsheets_append',
+            args: { spreadsheet_id: '[YOUR_SPREADSHEET_ID]', range: 'Sheet1!A1', values: '[[{c}]]' },
+            props: { c: 'c' },
+          }),
+        },
+        cctx(CONV2),
+      );
+      expect(out).toContain('placeholder');
+      const cards = await db
+        .select()
+        .from(pendingActions)
+        .where(
+          and(eq(pendingActions.conversationId, CONV2), eq(pendingActions.status, 'pending')),
+        );
+      expect(cards.some((c) => c.toolName === 'apply_save_widget')).toBe(false);
+    } finally {
+      await db.update(agents).set({ config: prev as never }).where(eq(agents.id, bot2.id));
+    }
+  });
+
   it('parks a component card; approving writes agent_widgets', async () => {
     const out = await save().run(
       { workspace: 'free', agent: 'bot2', name: 'Pricing Table', spec },

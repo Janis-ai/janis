@@ -3308,6 +3308,18 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         if (!def) return JSON.stringify({ error: `no tool named "${toolBind.name}" on ${agent.name}` });
         if (def.approval)
           return JSON.stringify({ error: `"${toolBind.name}" is approval-gated — a component can only bind a read tool` });
+        // A placeholder arg ("[YOUR_SPREADSHEET_ID]") saves a component
+        // that can never run — the ref resolves nothing at emit and the
+        // visitor gets promise text with no component. Fail the call so
+        // the model fills a real value or drops the binding.
+        const placeholderArg = Object.entries(toolBind.args ?? {}).find(
+          ([, v]) => typeof v === 'string' && /^\s*\[[^\]]*\]\s*$/.test(v),
+        );
+        if (placeholderArg) {
+          return JSON.stringify({
+            error: `"${toolBind.name}" arg "${placeholderArg[0]}" is a placeholder (${placeholderArg[1]}) — pass a real value or drop the binding; a component bound to it can never run`,
+          });
+        }
       }
       const autoGreet = ['true', 'yes', 'on', '1'].includes(String(args.auto_greet).toLowerCase());
       // Same name + identical spec already saved → nothing to propose.
