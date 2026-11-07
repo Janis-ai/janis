@@ -2305,6 +2305,13 @@ export function agentRoutes(db: Db) {
     if (!def) return { ok: false as const, error: `no tool named "${tool.name}" on this agent` };
     if (def.approval)
       return { ok: false as const, error: `"${tool.name}" is approval-gated — bind a read tool` };
+    // The read slot runs at render — a write tool there fires on every
+    // view. Only a form can hold one, and only as its submit tool.
+    if (specType !== undefined && specType !== 'form' && def.method !== 'GET')
+      return {
+        ok: false as const,
+        error: `"${tool.name}" writes data — only a form can bind it, as its submit tool`,
+      };
     // Submit-side: forms only, real tool, never gated — it fires per
     // visitor submit with no further review.
     if (tool.submit) {
@@ -2386,7 +2393,7 @@ export function agentRoutes(db: Db) {
         // A submit binding is form-only — when the patch doesn't carry a
         // spec the existing row's type is the one that applies.
         let specType = body.spec ? (WidgetComponent.parse(body.spec).type as string) : undefined;
-        if (body.tool?.submit && specType === undefined) {
+        if (body.tool && specType === undefined) {
           const [cur] = await db
             .select({ spec: agentWidgets.spec })
             .from(agentWidgets)

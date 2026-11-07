@@ -24,17 +24,41 @@ export function submitToolArgs(
     .map((f) => f.name)
     .filter((n): n is string => !!n);
   const args: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(sub.args ?? {})) {
-    // JSON-structured args (`[[{f}]]`) substitute encoded — a bare `{f}`
-    // arg is just a string fill, quoting it would double-wrap.
-    const jsonish = /^[\[{]/.test(v.trim()) && !/^\{[a-z0-9_]+\}$/i.test(v.trim());
-    args[k] = v.replace(/\{([a-z0-9_]+)\}/gi, (_m, f: string) => {
+  // `{f}` and `{{f}}` both interpolate — the concierge writes the moustache
+  // form by habit. Dotted names (`{{secrets.X}}`) never match the class.
+  const FIELD = /\{\{?([a-z0-9_]+)\}?\}/gi;
+  const fill = (v: string, jsonish: boolean) =>
+    v.replace(FIELD, (_m, f: string) => {
       const val = values[f.toLowerCase()] ?? values[f] ?? '';
       return jsonish ? JSON.stringify(val) : val;
     });
+  for (const [k, v] of Object.entries(sub.args ?? {})) {
+    // JSON-structured args (`[[{f}]]`) substitute encoded — a bare `{f}`
+    // arg is just a string fill, quoting it would double-wrap.
+    const jsonish =
+      /^[\[{]/.test(v.trim()) && !/^\{\{?[a-z0-9_]+\}?\}$/i.test(v.trim());
+    args[k] = fill(v, jsonish);
   }
-  if (toolParams && 'values' in toolParams && args.values == null) {
-    args.values = JSON.stringify([fields.map((n) => values[n] ?? '')]);
+  if (toolParams && 'values' in toolParams) {
+    if (args.values == null) {
+      args.values = JSON.stringify([fields.map((n) => values[n] ?? '')]);
+    } else {
+      // Sheets-style append bodies splice `values` in as a JSON array of
+      // row arrays. A comma-list template ("{a},{b}") interpolates to
+      // "Pizza,x" — invalid JSON there, so every submit failed. Rebuild
+      // the template as one row of plain cell values.
+      let isArray = false;
+      try {
+        isArray = Array.isArray(JSON.parse(String(args.values)));
+      } catch {
+        /* not JSON */
+      }
+      if (!isArray) {
+        const template = String(sub.args!.values);
+        const cells = template.split(',').map((cell) => fill(cell.trim(), false).trim());
+        args.values = JSON.stringify([cells]);
+      }
+    }
   }
   return args;
 }

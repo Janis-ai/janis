@@ -623,6 +623,9 @@ export default function ConversationPage() {
   // return form". Rides /suggest as `instruction`; the landed suggestion
   // echoes it back via payload.instruction.
   const [guide, setGuide] = useState('');
+  // The instruction went to the concierge instead of /suggest — the card
+  // shows a quiet receipt until the staged draft lands.
+  const [routedToCopilot, setRoutedToCopilot] = useState(false);
   const guideRef = useRef<HTMLTextAreaElement>(null);
   // Autosize like the composer — a pasted multi-line brief shouldn't
   // collapse into a one-line scroll.
@@ -658,6 +661,12 @@ export default function ConversationPage() {
     const t = setTimeout(() => setReplacedSid(null), 30_000);
     return () => clearTimeout(t);
   }, [replacedSid]);
+  // A fresh suggestion row IS the concierge's staged draft landing —
+  // drop the receipt line once it's here.
+  const topSuggestionId = data?.suggestions?.[0]?.id;
+  useEffect(() => {
+    if (topSuggestionId) setRoutedToCopilot(false);
+  }, [topSuggestionId]);
   // Conversation switch — the page stays mounted, so every piece of
   // per-thread state must reset or a pending send/draft from the previous
   // conversation appears inside this one (a draft bubble that looks sent
@@ -671,6 +680,7 @@ export default function ConversationPage() {
     setEditAction(null);
     setSuggestOpen(false);
     setGuide('');
+    setRoutedToCopilot(false);
     setOb(() => []);
     setError('');
     receiptFor.current = null;
@@ -755,18 +765,39 @@ export default function ConversationPage() {
   // the concierge, which builds the procedure conversationally (inline
   // components, tool wiring, chained asks) and stages the result back
   // onto this card via stage_reply. No guide = fast one-shot /suggest.
+  // The concierge thread itself (the operator's own webchat) and accounts
+  // without a copilot fall back to the one-shot — a seed posted into the
+  // concierge's own thread would just chat back, never stage a draft.
   const guidedSuggest = () => {
     const instruction = guide.trim();
-    if (!instruction) {
+    const selfThread =
+      !!me?.user?.id &&
+      (c.external_id === `webchat:u:${me.user.id}` ||
+        c.external_id.startsWith(`webchat:u:${me.user.id}:`));
+    const hasCopilot = !!me?.support_channel_id;
+    if (!instruction || selfThread || !hasCopilot) {
       if (suggest.isPending) return;
       setReplacedSid(data?.suggestions?.[0]?.id ?? null);
       setDraftSent(false);
       setActionResults({});
-      suggest.mutate(undefined);
+      suggest.mutate(instruction || undefined);
+      setGuide('');
       return;
     }
-    railBus.publish({ channelId: '', label: 'Copilot', seed: instruction });
+    const agentName = agents?.agents.find((a) => a.id === c.agent_id)?.name ?? 'its agent';
+    railBus.publish({
+      channelId: '',
+      label: 'Copilot',
+      seed:
+        `Draft my next reply for the conversation I have open (${displayName(c)} on ${agentName}). ` +
+        `Compose it and put it on that conversation's draft card with stage_reply — don't send it and don't answer here. ` +
+        `If it needs a form that saves answers through a tool, save it as a component on ${agentName} ` +
+        `(save_widget with a submit binding, real ids from the list tools) and stage it by ref once approved. ` +
+        `My instruction: ${instruction}`,
+    });
     window.dispatchEvent(new CustomEvent('janis:open-copilot'));
+    setGuide('');
+    setRoutedToCopilot(true);
   };
 
   const saveTest = useMutation({
@@ -2196,7 +2227,10 @@ export default function ConversationPage() {
                   ref={guideRef}
                   rows={1}
                   value={guide}
-                  onChange={(e) => setGuide(e.target.value)}
+                  onChange={(e) => {
+                    setGuide(e.target.value);
+                    setRoutedToCopilot(false);
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !e.shiftKey) {
                       e.preventDefault();
@@ -2214,6 +2248,11 @@ export default function ConversationPage() {
                 >
                   Draft
                 </button>
+              </div>
+            )}
+            {!draftSent && routedToCopilot && (
+              <div className="muted" style={{ marginTop: 6 }}>
+                Sent to Copilot — the draft lands here when it's ready.
               </div>
             )}
             <div className="row" style={{ marginTop: 10 }}>

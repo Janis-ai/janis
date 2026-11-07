@@ -19,6 +19,7 @@ import {
   memberships,
   messages,
   pendingActions,
+  suggestions,
   users,
   workspaces,
 } from '../db/schema.js';
@@ -1624,6 +1625,127 @@ describe('save_widget builtin', () => {
     expect(applied.ok).toBe(true);
     const [w] = await db.select().from(agentWidgets).where(eq(agentWidgets.name, 'no-binding'));
     expect(w.tool).toBeNull();
+  });
+
+  it('rejects a write tool in the read slot of a non-form spec', async () => {
+    // The read slot runs at render — a POST bound there fires on every
+    // view. Only a form can hold it, as its submit tool.
+    const [bot2] = await db.select().from(agents).where(eq(agents.name, 'Bot2'));
+    const prev = bot2.config;
+    await db
+      .update(agents)
+      .set({
+        config: {
+          ...((prev ?? {}) as Record<string, unknown>),
+          tools: [
+            {
+              name: 'gsheets_append',
+              url: 'https://sheets.googleapis.com/x',
+              method: 'POST',
+              bodyTemplate: '{}',
+              params: { spreadsheet_id: 'sheet id', range: 'range', values: 'rows' },
+            },
+          ],
+        } as never,
+      })
+      .where(eq(agents.id, bot2.id));
+    try {
+      const out = JSON.parse(
+        await save().run(
+          {
+            workspace: 'free',
+            agent: 'bot2',
+            name: 'write-bound-cards',
+            spec: '{"type":"cards","items":[{"title":"A"}]}',
+            tool: JSON.stringify({ name: 'gsheets_append', args: { spreadsheet_id: 'sid', range: 'A1' } }),
+          },
+          cctx(CONV2),
+        ),
+      );
+      expect(out.error).toContain('only a form can bind it');
+      const cards = await db
+        .select()
+        .from(pendingActions)
+        .where(and(eq(pendingActions.conversationId, CONV2), eq(pendingActions.status, 'pending')));
+      expect(cards.some((c) => (c.args as { name?: string }).name === 'write-bound-cards')).toBe(false);
+    } finally {
+      await db.update(agents).set({ config: prev as never }).where(eq(agents.id, bot2.id));
+    }
+  });
+});
+
+describe('stage_reply builtin', () => {
+  const stage = () => BUILTIN_TOOLS.find((b) => b.name === 'stage_reply')!;
+
+  it('refuses when the open page is the concierge chat itself', async () => {
+    const [agent2] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.workspaceId, WS2))
+      .limit(1);
+    const [viewConv] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent2.id,
+        externalId: 'u:test:stage-self',
+        userProfile: {
+          external_id: USER2,
+          email: 'a@x.com',
+          identity_verified: true,
+        },
+      })
+      .returning();
+    await db
+      .update(conversations)
+      .set({
+        userProfile: {
+          external_id: USER2,
+          email: 'a@x.com',
+          identity_verified: true,
+          metadata: { page: `/conversations/${viewConv.id}` },
+        },
+      })
+      .where(eq(conversations.id, viewConv.id));
+    const out = JSON.parse(
+      await stage().run({ workspace: 'free', text: 'hi' }, ctx(viewConv.id)),
+    );
+    expect(out.error).toContain('not a customer conversation');
+  });
+
+  it('stages a pending suggestion on the conversation the operator has open', async () => {
+    const [agent2] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.workspaceId, WS2))
+      .limit(1);
+    const [target] = await db
+      .insert(conversations)
+      .values({ agentId: agent2.id, externalId: 'cust:stage-target' })
+      .returning();
+    const [viewConv] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent2.id,
+        externalId: 'u:test:stage',
+        userProfile: {
+          external_id: USER2,
+          email: 'a@x.com',
+          identity_verified: true,
+          metadata: { page: `/conversations/${target.id}` },
+        },
+      })
+      .returning();
+    const out = JSON.parse(
+      await stage().run({ workspace: 'free', text: 'Your order ships Monday.' }, ctx(viewConv.id)),
+    );
+    expect(out.staged).toBe(true);
+    expect(out.conversation_id).toBe(target.id);
+    const [sug] = await db
+      .select()
+      .from(suggestions)
+      .where(and(eq(suggestions.conversationId, target.id), eq(suggestions.status, 'pending')));
+    expect(sug.text).toBe('Your order ships Monday.');
+    expect(sug.source).toBe('agent');
   });
 });
 

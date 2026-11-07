@@ -3308,6 +3308,13 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         if (!def) return JSON.stringify({ error: `no tool named "${toolBind.name}" on ${agent.name}` });
         if (def.approval)
           return JSON.stringify({ error: `"${toolBind.name}" is approval-gated — a component can only bind a read tool` });
+        // The read slot runs at render — a write tool there fires on every
+        // view. Only a form can hold one, and only as its submit tool.
+        if (spec.data.type !== 'form' && def.method !== 'GET') {
+          return JSON.stringify({
+            error: `"${toolBind.name}" writes data — only a form can bind it, as its submit tool`,
+          });
+        }
         // Placeholder args save a component that can never run — both the
         // bracketed kind ("[YOUR_SPREADSHEET_ID]") and the template-y kind
         // ("YOUR_SPREADSHEET_ID_HERE", "INSERT_ID", "TBD"). Fail the call
@@ -3395,7 +3402,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
     params: {
       text: 'the reply text to send the customer, verbatim',
       widgets:
-        'optional JSON array — inline component specs [{"type":"form",...}] or refs [{"ref":"component-name","data":{…}}] resolved to saved specs on the target agent',
+        'optional JSON array — inline component specs [{"type":"form",...}] or refs [{"ref":"component-name","data":{…}}] resolved to saved specs on the target agent. Inline specs render as-is but cannot save answers anywhere; a form that must record answers through a tool has to be a saved component with a submit binding (save_widget) — stage it by {"ref": name} after the card is approved',
       conversation: 'conversation id — only needed when they mean a thread other than the open one',
       workspace: 'workspace name — only needed when ambiguous',
     },
@@ -3414,6 +3421,11 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       // reads the operator's `page` trait so the model can't misaddress a
       // staged draft to its own thread.
       const targetId = String(args.conversation ?? '').trim() || (await currentView(ctx)).conversationId;
+      if (targetId === ctx.convId) {
+        return JSON.stringify({
+          error: 'the open page is this chat, not a customer conversation — ask them to open the conversation to draft for',
+        });
+      }
       if (!targetId) {
         return JSON.stringify({ error: 'no conversation open — ask them to open the thread to draft for, or pass a conversation id' });
       }
