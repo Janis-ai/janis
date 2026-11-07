@@ -93,6 +93,15 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-07d — Conversation page hooks crash: hoist queries above early returns
+- cabe9ac8 added `useAgentWidgets(c.agent_id)` BELOW the `loadError`/!data
+  early returns in ConversationPage — skeleton render ran one fewer hook
+  than the loaded render → "Rendered more hooks than during the previous
+  render" error boundary on every conversation open. Fixed by hoisting the
+  query above all returns (`data?.conversation.agent_id` — the hook already
+  gates on `enabled`). Rule of thumb for this file: hooks live above the
+  404/`!data` blocks, never between them.
+
 ## 2026-11-07c — Component picker asks for named fields, not JSON
 - The composer's send-component popover used to offer a single "data as
   JSON" input nobody could fill correctly — even the concierge produced a
