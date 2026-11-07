@@ -654,6 +654,9 @@ export default function ConversationPage() {
   // Sent the draft's text but undecided proposed actions remain — the card
   // stays open showing just the actions until they're all decided.
   const [draftSent, setDraftSent] = useState(false);
+  // Overlay scrollbars hide until the first scroll — a draft that overflows
+  // gets an explicit "more below" cue instead of relying on the thumb.
+  const [draftScrollable, setDraftScrollable] = useState(false);
   // Regenerating: the hosted path returns before the LLM finishes, so
   // isPending clears early and the STALE draft reappears until the fresh
   // row lands via refetch. Track the row being replaced — while it still
@@ -2065,7 +2068,18 @@ export default function ConversationPage() {
                 {/* The draft text scrolls in its own region — the controls
                     stay above it (draft-body gets order:1, draft-foot stays
                     order 0 in DOM order but renders first). */}
-                <div className="draft-body">
+                <div
+                  className="draft-body"
+                  ref={(el) => {
+                    // Inline ref → re-measures every render; the card swaps
+                    // drafts without remounting this node.
+                    if (el) setDraftScrollable(el.scrollHeight > el.clientHeight + 4);
+                  }}
+                  onScroll={(e) => {
+                    const el = e.currentTarget;
+                    setDraftScrollable(el.scrollTop + el.clientHeight < el.scrollHeight - 4);
+                  }}
+                >
                 {suggestions[0].payload?.empty_draft ? (
                   <div className="muted" style={{ fontStyle: 'italic' }}>
                     The agent couldn't draft a reply this time — nothing usable came
@@ -2238,6 +2252,9 @@ export default function ConversationPage() {
                   );
                 })}
                 </div>
+                {draftScrollable && (
+                  <div className="muted draft-more">scroll for more ↓</div>
+                )}
               </>
             ) : (
               <div className="muted">Drafting…</div>
