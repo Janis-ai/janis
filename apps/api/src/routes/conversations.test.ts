@@ -6,7 +6,7 @@ import { desc, eq, inArray } from 'drizzle-orm';
 import { Hono } from 'hono';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
-import { agents, agentWidgets, alerts, conversations, memberships, messages, pendingActions, sessions, suggestions, users, workspaces } from '../db/schema.js';
+import { agents, agentWidgets, alerts, conversations, memberships, messages, pendingActions, sessions, suggestions, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import { generateApiKey, generateSessionToken, hashPassword } from '../lib/crypto.js';
 import { conversationRoutes } from './conversations.js';
 import { viewRoutes } from './views.js';
@@ -1069,5 +1069,64 @@ describe('run-action', () => {
     const action = body.suggestions[0].payload.proposed_actions[0];
     expect(action.status).toBe('approved');
     expect(action.result).toContain('verified');
+  });
+});
+
+describe('suggest', () => {
+  it('forwards operator guidance on the suggestion.request payload', async () => {
+    const conv = await makeConversation('suggest-guide');
+    await db
+      .update(agents)
+      .set({ webhookUrl: 'http://127.0.0.1:9/hook' })
+      .where(eq(agents.id, agent.id));
+    try {
+      const res = await post(`/${conv.id}/suggest`, adminCookie, {
+        instruction: 'apologize and offer 10% off',
+      });
+      expect(res.status).toBe(200);
+      expect((await res.json()).mode).toBe('agent');
+      const [d] = await db
+        .select()
+        .from(webhookDeliveries)
+        .where(eq(webhookDeliveries.agentId, agent.id))
+        .orderBy(desc(webhookDeliveries.createdAt))
+        .limit(1);
+      const payload = d.payload as {
+        type: string;
+        payload?: { instruction?: string };
+      };
+      expect(payload.type).toBe('suggestion.request');
+      expect(payload.payload?.instruction).toBe('apologize and offer 10% off');
+    } finally {
+      await db.update(agents).set({ webhookUrl: null }).where(eq(agents.id, agent.id));
+    }
+  });
+
+  it('omits instruction when the operator sent none', async () => {
+    const conv = await makeConversation('suggest-blind');
+    await db
+      .update(agents)
+      .set({ webhookUrl: 'http://127.0.0.1:9/hook' })
+      .where(eq(agents.id, agent.id));
+    try {
+      const res = await post(`/${conv.id}/suggest`, adminCookie, {});
+      expect(res.status).toBe(200);
+      const [d] = await db
+        .select()
+        .from(webhookDeliveries)
+        .where(eq(webhookDeliveries.agentId, agent.id))
+        .orderBy(desc(webhookDeliveries.createdAt))
+        .limit(1);
+      const payload = d.payload as { payload?: { instruction?: string } };
+      expect(payload.payload?.instruction).toBeUndefined();
+    } finally {
+      await db.update(agents).set({ webhookUrl: null }).where(eq(agents.id, agent.id));
+    }
+  });
+
+  it('rejects a whitespace-only instruction', async () => {
+    const conv = await makeConversation('suggest-empty');
+    const res = await post(`/${conv.id}/suggest`, adminCookie, { instruction: '   ' });
+    expect(res.status).toBe(400);
   });
 });

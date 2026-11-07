@@ -888,6 +888,9 @@ export const Suggestion = z.object({
       // The run produced no usable draft — text is the placeholder; the
       // card shows "couldn't draft" rather than a sendable fake reply.
       empty_draft: z.boolean().optional(),
+      // Operator guidance the draft was generated from ("offer 10% off…") —
+      // the card shows it so a teammate knows what the draft aimed at.
+      instruction: z.string().optional(),
     })
     .optional(),
   source: z.enum(['agent', 'llm']),

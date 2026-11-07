@@ -618,6 +618,10 @@ export default function ConversationPage() {
   };
 
   const [suggestOpen, setSuggestOpen] = useState(false);
+  // Operator guidance for the next draft — "offer 10% off and attach the
+  // return form". Rides /suggest as `instruction`; the landed suggestion
+  // echoes it back via payload.instruction.
+  const [guide, setGuide] = useState('');
   // Components a used suggestion carries — ride along on the next reply
   // send, dismissed with ✕ or consumed on success.
   const [pendingComponents, setPendingComponents] = useState<{
@@ -655,6 +659,7 @@ export default function ConversationPage() {
     setActionResults({});
     setEditAction(null);
     setSuggestOpen(false);
+    setGuide('');
     setOb(() => []);
     setError('');
     receiptFor.current = null;
@@ -718,7 +723,11 @@ export default function ConversationPage() {
   });
 
   const suggest = useMutation({
-    mutationFn: () => api(`/api/conversations/${id}/suggest`, { method: 'POST' }),
+    mutationFn: (instruction?: string) =>
+      api(`/api/conversations/${id}/suggest`, {
+        method: 'POST',
+        body: JSON.stringify(instruction ? { instruction } : {}),
+      }),
     onSuccess: () => { setError(''); void qc.invalidateQueries({ queryKey: ['conversation', id] }); },
     onError: (e) => { setError(e.message); setSuggestOpen(false); },
   });
@@ -728,7 +737,19 @@ export default function ConversationPage() {
     setDraftSent(false);
     setActionResults({});
     setReplacedSid(null);
-    suggest.mutate();
+    suggest.mutate(undefined);
+  };
+
+  // Guided draft — the guide input's submit. Replaces whatever suggestion
+  // tops the card; while the stale row still leads the list the card stays
+  // on Thinking (replacedSid).
+  const guidedSuggest = () => {
+    const instruction = guide.trim();
+    if (suggest.isPending) return;
+    setReplacedSid(data?.suggestions?.[0]?.id ?? null);
+    setDraftSent(false);
+    setActionResults({});
+    suggest.mutate(instruction || undefined);
   };
 
   const saveTest = useMutation({
@@ -1991,6 +2012,9 @@ export default function ConversationPage() {
                 <div className="muted" style={{ marginBottom: 6 }}>
                   <span className="draft-tag">draft</span> Suggested (
                   {suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
+                  {suggestions[0].payload?.instruction
+                    ? ` — “${suggestions[0].payload.instruction}”`
+                    : ''}
                 </div>
                 {suggestions[0].notes && (
                   <div className="muted" style={{ fontStyle: 'italic', marginBottom: 6 }}>
@@ -2149,6 +2173,30 @@ export default function ConversationPage() {
             ) : (
               <div className="muted">Thinking…</div>
             )}
+            {!draftSent && (
+              <div className="row" style={{ marginTop: 10, gap: 6 }}>
+                <input
+                  value={guide}
+                  onChange={(e) => setGuide(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      guidedSuggest();
+                    }
+                  }}
+                  placeholder="Guide the draft — e.g. “offer 10% off and include the return form”"
+                  style={{ flex: 1 }}
+                />
+                <button
+                  className="btn sm"
+                  onClick={guidedSuggest}
+                  disabled={suggest.isPending || !guide.trim()}
+                  title="Draft a reply to your instruction"
+                >
+                  Draft
+                </button>
+              </div>
+            )}
             <div className="row" style={{ marginTop: 10 }}>
               {!draftSent && (
               <button
@@ -2210,10 +2258,12 @@ export default function ConversationPage() {
                 aria-label="Try another suggestion"
                 disabled={suggest.isPending}
                 onClick={() => {
+                  // Re-draft through the same path — a filled guide input
+                  // carries into the regen, an empty one drafts blind.
                   setReplacedSid(suggestions?.[0]?.id ?? null);
                   setDraftSent(false);
                   setActionResults({});
-                  suggest.mutate();
+                  suggest.mutate(guide.trim() || undefined);
                 }}
               >
                 <RefreshCw size={13} />

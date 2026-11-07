@@ -5412,9 +5412,20 @@ export async function runHostedEvent(
       suggesting: true,
       identity: await identityP,
     };
+    // Operator guidance rides the request payload — the console's draft
+    // card sends it when the operator prompts for a specific reply
+    // ("apologize, offer 10% off, attach the return form").
+    const rawInstruction = (event.payload as { instruction?: unknown } | undefined)?.instruction;
+    const instruction =
+      typeof rawInstruction === 'string' && rawInstruction.trim()
+        ? rawInstruction.trim().slice(0, 500)
+        : undefined;
     const prompt =
       systemPrompt(agent, docs, conv, { forSuggestion: true, operator: ctx.identity?.operator }) +
-      ((await campaignP) ?? '');
+      ((await campaignP) ?? '') +
+      (instruction
+        ? `\n\nThe operator directing this draft asked for: "${instruction.replace(/"/g, "'")}". Shape the reply around it — what to say, what to offer, which component to include — and call whatever tools it implies. Never quote the instruction or mention that the draft was directed; the customer sees only the reply.`
+        : '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     const result = await generateReply(
       llm,
@@ -5546,6 +5557,9 @@ export async function runHostedEvent(
           ? { widgets: [...(result?.widgets ?? []), ...widgets] }
           : {}),
         ...(buttons.length ? { buttons } : {}),
+        // Guidance the draft was generated to — the card echoes it back so
+        // a teammate can see what the operator asked for.
+        ...(instruction ? { instruction } : {}),
         ...(result?.proposedActions?.length
           ? { proposed_actions: result.proposedActions }
           : {}),

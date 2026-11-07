@@ -1073,8 +1073,14 @@ export function conversationRoutes(db: Db) {
     }
   });
 
-  // Ask for a suggested reply: agent webhook if configured, else Janis-side LLM
-  app.post('/:id/suggest', async (c) => {
+  // Ask for a suggested reply: agent webhook if configured, else Janis-side LLM.
+  // `instruction` is optional operator guidance that shapes the draft —
+  // forwarded to the agent on suggestion.request (external agents may
+  // ignore it; hosted agents draft to it).
+  const suggestBody = z.object({
+    instruction: z.string().trim().min(1).max(500).optional(),
+  });
+  app.post('/:id/suggest', zValidator('json', suggestBody), async (c) => {
     try {
       const { conversation, agent } = await getConversationForWorkspace(
         db,
@@ -1086,7 +1092,12 @@ export function conversationRoutes(db: Db) {
         return c.json({ error: 'conversation is archived' }, 409);
       }
       await touchTakeover(db, conversation.id);
-      const result = await requestSuggestion(db, conversation, agent);
+      const result = await requestSuggestion(
+        db,
+        conversation,
+        agent,
+        c.req.valid('json').instruction,
+      );
       return c.json(
         result.mode === 'llm'
           ? { mode: 'llm', suggestion: toSuggestion(result.suggestion) }

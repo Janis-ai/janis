@@ -23,6 +23,7 @@ export async function requestSuggestion(
   db: Db,
   conv: ConvRow,
   agent: AgentRow,
+  instruction?: string,
 ): Promise<{ mode: 'agent' } | { mode: 'llm'; suggestion: typeof suggestions.$inferSelect }> {
   if (agent.webhookUrl || agent.hosted) {
     const recent = await db
@@ -36,13 +37,16 @@ export async function requestSuggestion(
       janis_conversation_id: conv.id,
       payload: {
         transcript: recent.reverse().map((m) => ({ direction: m.direction, text: m.text })),
+        // Operator guidance for the draft — "offer 10% off and include the
+        // return form". External agents may honor or ignore it.
+        ...(instruction ? { instruction } : {}),
       },
     });
     return { mode: 'agent' };
   }
 
   const llm = await llmFor(db, agent);
-  const result = await generateWithLlm(db, conv, agent, llm);
+  const result = await generateWithLlm(db, conv, agent, llm, instruction);
   if (result) {
     await recordLlmUsage(db, {
       workspaceId: agent.workspaceId,
@@ -61,7 +65,14 @@ export async function requestSuggestion(
       400,
     );
   }
-  const row = await storeSuggestion(db, conv.id, text, 'llm', result?.notes ?? undefined);
+  const row = await storeSuggestion(
+    db,
+    conv.id,
+    text,
+    'llm',
+    result?.notes ?? undefined,
+    instruction ? { instruction } : undefined,
+  );
   return { mode: 'llm', suggestion: row };
 }
 
@@ -108,6 +119,7 @@ async function generateWithLlm(
   conv: ConvRow,
   agent: AgentRow,
   llm: LlmSettings,
+  instruction?: string,
 ): Promise<{ text: string; notes: string | null; promptTokens: number; completionTokens: number } | null> {
   if (!llm.apiKey) return null;
   const recent = await db
@@ -152,7 +164,14 @@ async function generateWithLlm(
         response_format: { type: 'json_object' },
         messages: [
           { role: 'system', content: system },
-          { role: 'user', content: `Conversation so far:\n\n${transcript}\n\nDraft the reply that moves this toward resolution:` },
+          {
+            role: 'user',
+            content:
+              `Conversation so far:\n\n${transcript}\n\nDraft the reply that moves this toward resolution:` +
+              (instruction
+                ? `\n\nThe operator directing this draft asked for: "${instruction}" — shape the reply around it; never mention the instruction itself.`
+                : ''),
+          },
         ],
       }),
       signal: AbortSignal.timeout(15_000),
