@@ -93,6 +93,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-07e — Integrations: whole catalog on the page, sectioned
+- "Browse all integrations" collapsed 20 of 22 cards under a details; now
+  everything renders — suggested/connected lead unsectioned, the rest
+  group under `.section-title` category headings in catalog order. OAuth
+  cards' "Same X tools" meta-blurbs replaced with capability-first copy,
+  and uninstalled cards roll-call their action labels under the blurb.
+  Bug fix along the way: discovery templates (MCP) have empty catalog
+  tools so installed() was 0===0 → true; an uninstalled MCP card showed
+  "Update credentials". Installs now match by the `template` stamp on
+  stored tools, and its approval list reads the discovered defs.
+
 ## 2026-11-07d — Conversation page hooks crash: hoist queries above early returns
 - cabe9ac8 added `useAgentWidgets(c.agent_id)` BELOW the `loadError`/!data
   early returns in ConversationPage — skeleton render ran one fewer hook
