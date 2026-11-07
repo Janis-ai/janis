@@ -839,7 +839,9 @@ function Composer({
                   Number(/(^id$|_id$)/.test(b)) - Number(/(^id$|_id$)/.test(a)),
               );
               const helperFor = (k: string): string | null =>
-                /(^id$|_id$)/.test(k) && listTool ? null : (params[k] ?? null);
+                k === 'range' || k === 'values' || (/(^id$|_id$)/.test(k) && listTool)
+                  ? null
+                  : (params[k] ?? null);
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {!argKeys.length && (
