@@ -918,7 +918,7 @@ export function AskJanis({
     if (dead) onSendFailed?.();
   };
 
-  const send = async (body: string, atts: Attachment[], retryOf?: OutEntry, tap?: { of?: string }) => {
+  const send = async (body: string, atts: Attachment[], retryOf?: OutEntry, tap?: { of?: string; kind?: string }) => {
     const t = body.trim();
     if ((!t && !atts.length) || sending || !loaded) return;
     if (t) onCustomerMessage?.(t);
@@ -967,7 +967,13 @@ export function AskJanis({
           ...(agentId ? { agent_id: agentId } : {}),
           // widget/chip taps arrive marked — a pick with context, not a
           // typed instruction
-          ...(tap ? { tap: true, ...(tap.of ? { tap_of: tap.of } : {}) } : {}),
+          ...(tap
+            ? {
+                tap: true,
+                ...(tap.of ? { tap_of: tap.of } : {}),
+                ...(tap.kind ? { tap_kind: tap.kind } : {}),
+              }
+            : {}),
           // copilot thread — Ask Janis "New chat" scopes the signed-in
           // user's participant to this key's own conversation
           ...(thread ? { thread } : {}),

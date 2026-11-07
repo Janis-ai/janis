@@ -80,7 +80,7 @@ export function Widgets({
   onSend,
 }: {
   widgets: ChatWidget[];
-  onSend: (text: string, tap?: { of?: string }) => void;
+  onSend: (text: string, tap?: { of?: string; kind?: string }) => void;
 }) {
   return (
     <>
@@ -91,7 +91,7 @@ export function Widgets({
   );
 }
 
-function Widget({ w, onSend }: { w: ChatWidget; onSend: (t: string, tap?: { of?: string }) => void }) {
+function Widget({ w, onSend }: { w: ChatWidget; onSend: (t: string, tap?: { of?: string; kind?: string }) => void }) {
   return (
     <div className={`wgt wgt-${w.type}`}>
       {w.type === 'cards' && <Cards w={w} onSend={onSend} />}
@@ -157,7 +157,7 @@ function ScrollArrows({ show, canPrev, canNext, step }: { show: boolean; canPrev
   );
 }
 
-function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
+function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSend: (t: string, tap?: { of?: string; kind?: string }) => void }) {
   const { rowRef, sync, step, showArrows, canPrev, canNext } = useOverflowRow(w.items.length);
   // Placeholder tiles exist to keep a mixed carousel uniform — when NO card
   // has an image the whole slot is just a wall of broken icons; drop it.
@@ -256,7 +256,7 @@ function Cards({ w, onSend }: { w: Extract<ChatWidget, { type: 'cards' }>; onSen
   );
 }
 
-function Options({ w, onSend }: { w: Extract<ChatWidget, { type: 'options' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
+function Options({ w, onSend }: { w: Extract<ChatWidget, { type: 'options' }>; onSend: (t: string, tap?: { of?: string; kind?: string }) => void }) {
   const [picked, setPicked] = useState<number | null>(null);
   return (
     <>
@@ -271,7 +271,7 @@ function Options({ w, onSend }: { w: Extract<ChatWidget, { type: 'options' }>; o
               // Picks mark, never lock — a browse picker (collections,
               // categories) stays live so the customer can switch lanes.
               setPicked(i);
-              onSend(item.send ?? item.label, { of: w.title });
+              onSend(item.send ?? item.label, { of: w.title, kind: 'options' });
             }}
           >
             {item.label}
@@ -283,7 +283,7 @@ function Options({ w, onSend }: { w: Extract<ChatWidget, { type: 'options' }>; o
   );
 }
 
-function WForm({ w, onSend }: { w: Extract<ChatWidget, { type: 'form' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
+function WForm({ w, onSend }: { w: Extract<ChatWidget, { type: 'form' }>; onSend: (t: string, tap?: { of?: string; kind?: string }) => void }) {
   const [sent, setSent] = useState(false);
   const [vals, setVals] = useState<Record<string, string>>(() =>
     Object.fromEntries(w.fields.filter((f) => f.value).map((f) => [f.name, f.value!])),
@@ -389,7 +389,7 @@ function Receipt({ w }: { w: Extract<ChatWidget, { type: 'receipt' }> }) {
   );
 }
 
-function Pricing({ w, onSend }: { w: Extract<ChatWidget, { type: 'pricing' }>; onSend: (t: string, tap?: { of?: string }) => void }) {
+function Pricing({ w, onSend }: { w: Extract<ChatWidget, { type: 'pricing' }>; onSend: (t: string, tap?: { of?: string; kind?: string }) => void }) {
   const { rowRef, sync, step, showArrows, canPrev, canNext } = useOverflowRow(w.items.length);
   return (
     <div className="wgt-pricing">

@@ -197,6 +197,9 @@ const postMessage = z
     // intent. tap_of names the card/widget it came from.
     tap: z.boolean().optional(),
     tap_of: z.string().max(300).optional(),
+    // Which widget produced the tap ('options' = a question pick — the
+    // answer is collected data, not just a click).
+    tap_kind: z.string().max(40).optional(),
     // Storefront cart snapshot — the widget reads the shop's /cart.js and
     // sends a one-line summary so the agent can answer "what's in my cart"
     // from the shopper's real cart. Lands on user_profile.metadata.cart.
@@ -685,7 +688,7 @@ export function webchatRoutes(db: Db) {
   app.post('/:token/messages', zValidator('json', postMessage), async (c) => {
     const channel = await findChannel(db, c.req.param('token'));
     if (!channel) return c.json({ error: 'not found' }, 404);
-    const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of, cart, market, thread, form } =
+    const { visitor_id, text, name, user, page, agent_id, attachments, client_id, tap, tap_of, tap_kind, cart, market, thread, form } =
       c.req.valid('json');
     const threadKey = threadFor(thread);
     // Inbound throttle — anonymous widgets are the spam/cost surface. Two
@@ -746,7 +749,21 @@ export function webchatRoutes(db: Db) {
     // just the readable line + tap flag. Parsing it gives their answers
     // the same context record; a POSTED `form` still needs a configured
     // or saved-component match, so arbitrary claims can't write rows.
-    const tapForm = !form && tap ? parseFormSubmitText(text) : undefined;
+    const parsedTap = !form && tap ? parseFormSubmitText(text) : undefined;
+    // An options pick is structured too — the title is the question and
+    // the tapped send text is the answer. Only kind-stamped taps count;
+    // card/pagination taps share the tap flag but aren't answers.
+    const optionTap: { form: SubmissionForm; values: Record<string, string> } | undefined =
+      !form && !parsedTap && tap && tap_kind === 'options' && tap_of
+        ? {
+            form: {
+              name: tap_of.slice(0, 60),
+              fields: [{ name: 'answer', label: tap_of.slice(0, 60), type: 'text' }],
+            },
+            values: { answer: text.slice(0, 2000) },
+          }
+        : undefined;
+    const tapForm = parsedTap ?? optionTap;
     const submitRunner = form || tapForm
       ? async () => {
           // The conversation may not exist yet — a form can be the first
@@ -793,7 +810,9 @@ export function webchatRoutes(db: Db) {
               values: tapForm.values,
             });
             await postNote(
-              `form "${tapForm.form.name}" submitted — saved to the contact`,
+              optionTap && !parsedTap
+                ? `picked "${text.slice(0, 80)}" in "${tapForm.form.name}" — saved to the contact`
+                : `form "${tapForm.form.name}" submitted — saved to the contact`,
               'form submit saved',
             );
             return;
@@ -889,7 +908,13 @@ export function webchatRoutes(db: Db) {
       attachments,
       payload: {
         ...(client_id ? { client_id } : {}),
-        ...(tap ? { tap: true, ...(tap_of ? { tap_of } : {}) } : {}),
+        ...(tap
+          ? {
+              tap: true,
+              ...(tap_of ? { tap_of } : {}),
+              ...(tap_kind ? { tap_kind } : {}),
+            }
+          : {}),
         ...(market ? { market: market.toUpperCase() } : {}),
       },
     }).catch((err) => {

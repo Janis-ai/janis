@@ -2796,6 +2796,43 @@ describe('collect-form submissions', () => {
     }
   });
 
+  it('records an options pick as a one-field answer — tap_of is the question', async () => {
+    const visitor = 'vis_collect00000004';
+    await post('hi', visitor);
+    const res = await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        visitor_id: visitor,
+        text: 'Classical',
+        tap: true,
+        tap_of: 'Favorite Music Genre',
+        tap_kind: 'options',
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    const sub = await waitFor(async () => {
+      const [r] = await db
+        .select()
+        .from(formSubmissions)
+        .where(eq(formSubmissions.form, 'Favorite Music Genre'))
+        .limit(1);
+      return r;
+    });
+    expect(sub).toBeTruthy();
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, sub.conversationId!))
+      .limit(1);
+    expect(
+      (conv?.userProfile as { metadata?: Record<string, string> } | null)?.metadata?.[
+        'Favorite Music Genre'
+      ],
+    ).toBe('Classical');
+  });
+
   it('ignores an unknown form name but still delivers the message', async () => {
     const visitor = 'vis_collect00000002';
     await post('hello', visitor);

@@ -1759,7 +1759,7 @@
         var sels = list.querySelectorAll('.janis-wsel');
         for (var i = 0; i < sels.length; i++) sels[i].classList.remove('janis-wsel');
         b.classList.add('janis-wsel');
-        sendText(item.send || item.label, { of: w.title });
+        sendText(item.send || item.label, { of: w.title, kind: 'options' });
       };
       list.appendChild(b);
     });
@@ -2286,6 +2286,7 @@
     if (tap) {
       body.tap = true;
       if (tap.of) body.tap_of = tap.of;
+      if (tap.kind) body.tap_kind = tap.kind;
       if (tap.form) body.form = tap.form;
     }
     var entry = addPending(body, []);
