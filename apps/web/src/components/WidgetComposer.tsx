@@ -844,7 +844,7 @@ function Composer({
                   : k === 'values'
                     ? '{name} puts that answer in a column · blank = one column per field, in order'
                     : /(^id$|_id$)/.test(k) && listTool
-                      ? `the ${k.replace(/_id$/, '').replace(/_/g, ' ')} to write to — pick it by name`
+                      ? null
                       : params[k] ?? null;
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
