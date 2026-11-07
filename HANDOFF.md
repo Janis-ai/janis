@@ -93,6 +93,17 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06m — create_agent re-pitches revise the pending card in place
+- 05.peace-guests concierge thread: the visitor parked a "Create agent
+  Nova Reign" approval card, then uploaded more persona SOP files before
+  approving. The concierge had no honest move — re-calling create_agent
+  stacked a second card the decider could approve stale — so it just
+  acknowledged, claimed "I've updated the setup" with zero tool calls,
+  and the claim guard stripped it. parkConciergeAction now takes an
+  optional reviseMatch: a re-pitch for the same agent name+workspace
+  updates the parked action's args AND the rendered card payload in
+  place (status-guarded so a mid-revise decide isn't resurrected), and
+  the tool description tells the model to re-call with the merged brief.
 ## 2026-11-06l — Guided drafts: operators can steer the suggest card
 - The sparkles draft ran a full suggesting-mode agent turn but took no
   input — take it or regenerate blind. The card now carries a guide
