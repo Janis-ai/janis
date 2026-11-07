@@ -2017,317 +2017,317 @@ export default function ConversationPage() {
               ↓ Jump to latest
             </button>
           )}
+          {canSuggest && (suggestOpen || suggestions?.length > 0) && (
+            <div className="card suggestion draft">
+              {suggest.isPending ||
+              (replacedSid !== null && suggestions?.[0]?.id === replacedSid) ? (
+                <div className="muted">Drafting…</div>
+              ) : suggestions?.length > 0 ? (
+                <>
+                  <div className="muted" style={{ marginBottom: 6 }}>
+                    <span className="draft-tag">draft</span> Suggested (
+                    {suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
+                    {suggestions[0].payload?.instruction
+                      ? ` — “${suggestions[0].payload.instruction}”`
+                      : ''}
+                  </div>
+                  {suggestions[0].notes && (
+                    <div className="muted" style={{ fontStyle: 'italic', marginBottom: 6 }}>
+                      {suggestions[0].notes}
+                    </div>
+                  )}
+                  {suggestions[0].payload?.empty_draft ? (
+                    <div className="muted" style={{ fontStyle: 'italic' }}>
+                      The agent couldn't draft a reply this time — nothing usable came
+                      back. Try again.
+                    </div>
+                  ) : draftSent ? (
+                    <div className="muted" style={{ fontStyle: 'italic' }}>
+                      reply sent — the actions below still need a decision
+                    </div>
+                  ) : (
+                    <div>{suggestions[0].text}</div>
+                  )}
+                  {!draftSent && (suggestions[0].payload?.widgets?.length ?? 0) > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      <Widgets
+                        widgets={suggestions[0].payload!.widgets as ChatWidget[]}
+                        onSend={() => {}}
+                      />
+                      {/* Wiring check — what each staged component actually
+                          does, so a form that's supposed to save somewhere is
+                          verifiable before Send. */}
+                      {suggestions[0].payload!.widgets!.map((_w, wi) => {
+                        const ref = (suggestions[0].payload as { widget_refs?: (string | null)[] })
+                          ?.widget_refs?.[wi];
+                        if (!ref) return null;
+                        const saved = agentWidgets?.widgets.find(
+                          (x) => x.name.toLowerCase().replace(/[\s_-]+/g, '-') === ref,
+                        );
+                        const line = saved?.tool?.submit?.name
+                          ? `saves submissions via ${saved.tool.submit.name}`
+                          : saved?.tool?.name
+                            ? `bound to ${saved.tool.name} — fetches when sent`
+                            : saved
+                              ? 'no tool wiring — answers just arrive as a message'
+                              : 'not a saved component on this agent';
+                        return (
+                          <div key={wi} className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                            {ref} · {line}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {!draftSent && (suggestions[0].payload?.buttons?.length ?? 0) > 0 && (
+                    <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                      {suggestions[0].payload!.buttons!.map((b, i) => (
+                        <span key={i} className="sug-chip" title="Sends as a quick reply">
+                          {typeof b === 'string' ? b : `share ${b.type}`}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {suggestions[0].payload?.proposed_actions?.map((a, ai) => {
+                    // Local runAction state wins; a.status is the persisted
+                    // decision hydrated on load so a refresh keeps the card
+                    // resolved instead of resetting to the buttons.
+                    const decided =
+                      actionResults[ai] ??
+                      (a.status === 'approved'
+                        ? `ran — ${actionResultLine(a.result)}`
+                        : a.status === 'denied'
+                          ? 'declined'
+                          : a.status === 'pending'
+                            ? 'awaiting teammate approval'
+                            : undefined);
+                    return (
+                    <div key={ai} className="action-card" style={{ marginTop: 8 }}>
+                      <div className="mono" style={{ fontSize: 12 }}>
+                        {a.name}
+                      </div>
+                      {decided ? (
+                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                          {decided}
+                        </div>
+                      ) : editAction === ai ? (
+                        <>
+                          <textarea
+                            className="args-edit"
+                            rows={5}
+                            value={actionArgsDraft}
+                            onChange={(e) => setActionArgsDraft(e.target.value)}
+                          />
+                          <div className="row" style={{ marginTop: 6 }}>
+                            <button
+                              className="btn sm primary"
+                              disabled={runAction.isPending}
+                              onClick={() => {
+                                let args: Record<string, unknown>;
+                                try {
+                                  args = JSON.parse(actionArgsDraft) as Record<string, unknown>;
+                                } catch {
+                                  setError('args must be valid JSON');
+                                  return;
+                                }
+                                runAction.mutate(
+                                  { name: a.name, args },
+                                  {
+                                    onSuccess: (r) => {
+                                      setActionResults((p) => ({
+                                        ...p,
+                                        [ai]: `ran — ${actionResultLine(r.action?.result)}`,
+                                      }));
+                                      setEditAction(null);
+                                    },
+                                  },
+                                );
+                              }}
+                            >
+                              Run edited
+                            </button>
+                            <button className="btn sm" onClick={() => setEditAction(null)}>
+                              Cancel
+                            </button>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <ArgsRows args={a.args} />
+                          <div className="row" style={{ marginTop: 6 }}>
+                            <button
+                              className="btn sm primary"
+                              disabled={runAction.isPending}
+                              onClick={() =>
+                                runAction.mutate(
+                                  { name: a.name, args: a.args },
+                                  {
+                                    onSuccess: (r) =>
+                                      setActionResults((p) => ({
+                                        ...p,
+                                        [ai]: `ran — ${actionResultLine(r.action?.result)}`,
+                                      })),
+                                  },
+                                )
+                              }
+                            >
+                              Approve & run
+                            </button>
+                            <button
+                              className="btn sm"
+                              onClick={() => {
+                                setEditAction(ai);
+                                setActionArgsDraft(JSON.stringify(a.args, null, 2));
+                              }}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              className="btn sm"
+                              title="Park a real approval card so another teammate decides"
+                              disabled={runAction.isPending}
+                              onClick={() =>
+                                runAction.mutate(
+                                  { name: a.name, args: a.args, park: true },
+                                  {
+                                    onSuccess: () =>
+                                      setActionResults((p) => ({
+                                        ...p,
+                                        [ai]: 'parked for team approval',
+                                      })),
+                                  },
+                                )
+                              }
+                            >
+                              For teammate
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                    );
+                  })}
+                </>
+              ) : (
+                <div className="muted">Drafting…</div>
+              )}
+              <div className="draft-foot">
+              <div className="row" style={{ marginTop: 10 }}>
+                {!draftSent && (
+                <button
+                  className="btn primary"
+                  disabled={
+                    !(suggestions?.length > 0) ||
+                    !!suggestions[0].payload?.empty_draft ||
+                    outbox.some((o) => o.status === 'pending')
+                  }
+                  onClick={() => {
+                    const s = suggestions[0];
+                    send([], undefined, {
+                      text: s.text,
+                      ...(s.payload?.widgets?.length ? { widgets: s.payload.widgets } : {}),
+                      ...(s.payload?.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
+                    });
+                    const undecided = (s.payload?.proposed_actions ?? []).some(
+                      (a, i) => !actionResults[i] && !a.status,
+                    );
+                    if (undecided) {
+                      // Actions decide in place — the suggestion stays open
+                      // (still 'pending') until they're all resolved.
+                      setDraftSent(true);
+                    } else {
+                      suggestionStatus.mutate({ sid: s.id, status: 'used' });
+                      setSuggestOpen(false);
+                      setDraftSent(false);
+                    }
+                  }}
+                >
+                  Send
+                </button>
+                )}
+                {!draftSent && (
+                <button
+                  className="btn"
+                  disabled={!(suggestions?.length > 0) || !!suggestions[0].payload?.empty_draft}
+                  title="Edit the text in the composer before sending — components stay attached"
+                  onClick={() => {
+                    const s = suggestions[0];
+                    setDraft(s.text);
+                    if (s.payload?.widgets?.length || s.payload?.buttons?.length) {
+                      setPendingComponents({
+                        ...(s.payload.widgets?.length ? { widgets: s.payload.widgets } : {}),
+                        ...(s.payload.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
+                      });
+                    }
+                    suggestionStatus.mutate({ sid: s.id, status: 'used' });
+                    setSuggestOpen(false);
+                  }}
+                >
+                  Edit
+                </button>
+                )}
+                {!draftSent && (
+                <button
+                  className="btn icon"
+                  title="Try another suggestion"
+                  aria-label="Try another suggestion"
+                  disabled={suggest.isPending}
+                  onClick={() => {
+                    // Re-draft blind from context — guidance goes through the
+                    // composer's "Draft a reply with AI" popover now.
+                    setReplacedSid(suggestions?.[0]?.id ?? null);
+                    setDraftSent(false);
+                    setActionResults({});
+                    suggest.mutate(undefined);
+                  }}
+                >
+                  <RefreshCw size={13} />
+                </button>
+                )}
+                <button
+                  className="btn"
+                  onClick={() => { setSuggestOpen(false); setDraftSent(false); void dismissSuggestions(); }}
+                >
+                  Dismiss
+                </button>
+                {!draftSent && !selfThread && hasCopilot && (
+                  <button
+                    className="btn"
+                    title="Hand this draft to Copilot — it composes and stages the reply back here"
+                    onClick={() => {
+                      const s = suggestions?.[0];
+                      const instruction = lastInstruction || s?.payload?.instruction;
+                      const draftText = s?.payload?.empty_draft ? '' : (s?.text ?? '');
+                      railBus.publish({
+                        channelId: '',
+                        label: 'Copilot',
+                        seed:
+                          `Help me with my reply to ${displayName(c)} on ${agent?.name ?? 'its agent'} — the conversation I have open.` +
+                          (instruction ? ` What I want: ${instruction}.` : '') +
+                          (draftText ? ` Current draft: "${draftText.slice(0, 600)}".` : '') +
+                          ` When it's ready, put it on that conversation's draft card with stage_reply — or send it with send_reply if I say to send it.`,
+                      });
+                      window.dispatchEvent(new CustomEvent('janis:open-copilot'));
+                      setRoutedToCopilot(true);
+                    }}
+                  >
+                    Continue in Copilot
+                  </button>
+                )}
+              </div>
+              {!draftSent && routedToCopilot && (
+                <div className="muted" style={{ marginTop: 6 }}>
+                  Opened in Copilot — a staged draft will land here.
+                </div>
+              )}
+              </div>
+            </div>
+          )}
           <div ref={bottomRef} />
         </div>
 
         {error && <div className="error">{error}</div>}
 
-        {canSuggest && (suggestOpen || suggestions?.length > 0) && (
-          <div className="card suggestion draft">
-            {suggest.isPending ||
-            (replacedSid !== null && suggestions?.[0]?.id === replacedSid) ? (
-              <div className="muted">Drafting…</div>
-            ) : suggestions?.length > 0 ? (
-              <>
-                <div className="muted" style={{ marginBottom: 6 }}>
-                  <span className="draft-tag">draft</span> Suggested (
-                  {suggestions[0].source === 'agent' ? 'your agent' : 'AI'})
-                  {suggestions[0].payload?.instruction
-                    ? ` — “${suggestions[0].payload.instruction}”`
-                    : ''}
-                </div>
-                {suggestions[0].notes && (
-                  <div className="muted" style={{ fontStyle: 'italic', marginBottom: 6 }}>
-                    {suggestions[0].notes}
-                  </div>
-                )}
-                {suggestions[0].payload?.empty_draft ? (
-                  <div className="muted" style={{ fontStyle: 'italic' }}>
-                    The agent couldn't draft a reply this time — nothing usable came
-                    back. Try again.
-                  </div>
-                ) : draftSent ? (
-                  <div className="muted" style={{ fontStyle: 'italic' }}>
-                    reply sent — the actions below still need a decision
-                  </div>
-                ) : (
-                  <div>{suggestions[0].text}</div>
-                )}
-                {!draftSent && (suggestions[0].payload?.widgets?.length ?? 0) > 0 && (
-                  <div style={{ marginTop: 6 }}>
-                    <Widgets
-                      widgets={suggestions[0].payload!.widgets as ChatWidget[]}
-                      onSend={() => {}}
-                    />
-                    {/* Wiring check — what each staged component actually
-                        does, so a form that's supposed to save somewhere is
-                        verifiable before Send. */}
-                    {suggestions[0].payload!.widgets!.map((_w, wi) => {
-                      const ref = (suggestions[0].payload as { widget_refs?: (string | null)[] })
-                        ?.widget_refs?.[wi];
-                      if (!ref) return null;
-                      const saved = agentWidgets?.widgets.find(
-                        (x) => x.name.toLowerCase().replace(/[\s_-]+/g, '-') === ref,
-                      );
-                      const line = saved?.tool?.submit?.name
-                        ? `saves submissions via ${saved.tool.submit.name}`
-                        : saved?.tool?.name
-                          ? `bound to ${saved.tool.name} — fetches when sent`
-                          : saved
-                            ? 'no tool wiring — answers just arrive as a message'
-                            : 'not a saved component on this agent';
-                      return (
-                        <div key={wi} className="muted" style={{ fontSize: 11, marginTop: 4 }}>
-                          {ref} · {line}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                {!draftSent && (suggestions[0].payload?.buttons?.length ?? 0) > 0 && (
-                  <div className="row" style={{ gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
-                    {suggestions[0].payload!.buttons!.map((b, i) => (
-                      <span key={i} className="sug-chip" title="Sends as a quick reply">
-                        {typeof b === 'string' ? b : `share ${b.type}`}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {suggestions[0].payload?.proposed_actions?.map((a, ai) => {
-                  // Local runAction state wins; a.status is the persisted
-                  // decision hydrated on load so a refresh keeps the card
-                  // resolved instead of resetting to the buttons.
-                  const decided =
-                    actionResults[ai] ??
-                    (a.status === 'approved'
-                      ? `ran — ${actionResultLine(a.result)}`
-                      : a.status === 'denied'
-                        ? 'declined'
-                        : a.status === 'pending'
-                          ? 'awaiting teammate approval'
-                          : undefined);
-                  return (
-                  <div key={ai} className="action-card" style={{ marginTop: 8 }}>
-                    <div className="mono" style={{ fontSize: 12 }}>
-                      {a.name}
-                    </div>
-                    {decided ? (
-                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                        {decided}
-                      </div>
-                    ) : editAction === ai ? (
-                      <>
-                        <textarea
-                          className="args-edit"
-                          rows={5}
-                          value={actionArgsDraft}
-                          onChange={(e) => setActionArgsDraft(e.target.value)}
-                        />
-                        <div className="row" style={{ marginTop: 6 }}>
-                          <button
-                            className="btn sm primary"
-                            disabled={runAction.isPending}
-                            onClick={() => {
-                              let args: Record<string, unknown>;
-                              try {
-                                args = JSON.parse(actionArgsDraft) as Record<string, unknown>;
-                              } catch {
-                                setError('args must be valid JSON');
-                                return;
-                              }
-                              runAction.mutate(
-                                { name: a.name, args },
-                                {
-                                  onSuccess: (r) => {
-                                    setActionResults((p) => ({
-                                      ...p,
-                                      [ai]: `ran — ${actionResultLine(r.action?.result)}`,
-                                    }));
-                                    setEditAction(null);
-                                  },
-                                },
-                              );
-                            }}
-                          >
-                            Run edited
-                          </button>
-                          <button className="btn sm" onClick={() => setEditAction(null)}>
-                            Cancel
-                          </button>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <ArgsRows args={a.args} />
-                        <div className="row" style={{ marginTop: 6 }}>
-                          <button
-                            className="btn sm primary"
-                            disabled={runAction.isPending}
-                            onClick={() =>
-                              runAction.mutate(
-                                { name: a.name, args: a.args },
-                                {
-                                  onSuccess: (r) =>
-                                    setActionResults((p) => ({
-                                      ...p,
-                                      [ai]: `ran — ${actionResultLine(r.action?.result)}`,
-                                    })),
-                                },
-                              )
-                            }
-                          >
-                            Approve & run
-                          </button>
-                          <button
-                            className="btn sm"
-                            onClick={() => {
-                              setEditAction(ai);
-                              setActionArgsDraft(JSON.stringify(a.args, null, 2));
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            className="btn sm"
-                            title="Park a real approval card so another teammate decides"
-                            disabled={runAction.isPending}
-                            onClick={() =>
-                              runAction.mutate(
-                                { name: a.name, args: a.args, park: true },
-                                {
-                                  onSuccess: () =>
-                                    setActionResults((p) => ({
-                                      ...p,
-                                      [ai]: 'parked for team approval',
-                                    })),
-                                },
-                              )
-                            }
-                          >
-                            For teammate
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                  );
-                })}
-              </>
-            ) : (
-              <div className="muted">Drafting…</div>
-            )}
-            <div className="draft-foot">
-            <div className="row" style={{ marginTop: 10 }}>
-              {!draftSent && (
-              <button
-                className="btn primary"
-                disabled={
-                  !(suggestions?.length > 0) ||
-                  !!suggestions[0].payload?.empty_draft ||
-                  outbox.some((o) => o.status === 'pending')
-                }
-                onClick={() => {
-                  const s = suggestions[0];
-                  send([], undefined, {
-                    text: s.text,
-                    ...(s.payload?.widgets?.length ? { widgets: s.payload.widgets } : {}),
-                    ...(s.payload?.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
-                  });
-                  const undecided = (s.payload?.proposed_actions ?? []).some(
-                    (a, i) => !actionResults[i] && !a.status,
-                  );
-                  if (undecided) {
-                    // Actions decide in place — the suggestion stays open
-                    // (still 'pending') until they're all resolved.
-                    setDraftSent(true);
-                  } else {
-                    suggestionStatus.mutate({ sid: s.id, status: 'used' });
-                    setSuggestOpen(false);
-                    setDraftSent(false);
-                  }
-                }}
-              >
-                Send
-              </button>
-              )}
-              {!draftSent && (
-              <button
-                className="btn"
-                disabled={!(suggestions?.length > 0) || !!suggestions[0].payload?.empty_draft}
-                title="Edit the text in the composer before sending — components stay attached"
-                onClick={() => {
-                  const s = suggestions[0];
-                  setDraft(s.text);
-                  if (s.payload?.widgets?.length || s.payload?.buttons?.length) {
-                    setPendingComponents({
-                      ...(s.payload.widgets?.length ? { widgets: s.payload.widgets } : {}),
-                      ...(s.payload.buttons?.length ? { quick_replies: s.payload.buttons } : {}),
-                    });
-                  }
-                  suggestionStatus.mutate({ sid: s.id, status: 'used' });
-                  setSuggestOpen(false);
-                }}
-              >
-                Edit
-              </button>
-              )}
-              {!draftSent && (
-              <button
-                className="btn icon"
-                title="Try another suggestion"
-                aria-label="Try another suggestion"
-                disabled={suggest.isPending}
-                onClick={() => {
-                  // Re-draft blind from context — guidance goes through the
-                  // composer's "Draft a reply with AI" popover now.
-                  setReplacedSid(suggestions?.[0]?.id ?? null);
-                  setDraftSent(false);
-                  setActionResults({});
-                  suggest.mutate(undefined);
-                }}
-              >
-                <RefreshCw size={13} />
-              </button>
-              )}
-              <button
-                className="btn"
-                onClick={() => { setSuggestOpen(false); setDraftSent(false); void dismissSuggestions(); }}
-              >
-                Dismiss
-              </button>
-              {!draftSent && !selfThread && hasCopilot && (
-                <button
-                  className="btn"
-                  title="Hand this draft to Copilot — it composes and stages the reply back here"
-                  onClick={() => {
-                    const s = suggestions?.[0];
-                    const instruction = lastInstruction || s?.payload?.instruction;
-                    const draftText = s?.payload?.empty_draft ? '' : (s?.text ?? '');
-                    railBus.publish({
-                      channelId: '',
-                      label: 'Copilot',
-                      seed:
-                        `Help me with my reply to ${displayName(c)} on ${agent?.name ?? 'its agent'} — the conversation I have open.` +
-                        (instruction ? ` What I want: ${instruction}.` : '') +
-                        (draftText ? ` Current draft: "${draftText.slice(0, 600)}".` : '') +
-                        ` When it's ready, put it on that conversation's draft card with stage_reply — or send it with send_reply if I say to send it.`,
-                    });
-                    window.dispatchEvent(new CustomEvent('janis:open-copilot'));
-                    setRoutedToCopilot(true);
-                  }}
-                >
-                  Continue in Copilot
-                </button>
-              )}
-            </div>
-            {!draftSent && routedToCopilot && (
-              <div className="muted" style={{ marginTop: 6 }}>
-                Opened in Copilot — a staged draft will land here.
-              </div>
-            )}
-            </div>
-          </div>
-        )}
 
         {/* Footer pins to the viewport bottom on phones while the page
             scrolls above it — composer or the ops row, whichever renders. */}

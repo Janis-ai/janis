@@ -1992,9 +1992,9 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .conv-main { min-width: 420px; }
 }
 .card.suggestion { border-color: var(--accent); }
-/* The suggestion draft is a transcript element — full height, no internal
-   scroll, no cap; it grows with its content at the bottom of the thread. */
-.conv-open .conv-main > .card.suggestion.draft { max-height: none; overflow: visible; }
+/* The suggestion draft lives INSIDE the transcript — full height, scrolls
+   away with the thread, sits last until sent or dismissed. */
+.transcript > .card.suggestion.draft { margin-top: 12px; flex-shrink: 0; }
 /* The Ask Janis rail claims ~340px — on the conversation screen at mid widths
    that squeezes the transcript + details into nested scrollbars, so the sidebar
    collapses to icons and the details panel stacks under the transcript in the
