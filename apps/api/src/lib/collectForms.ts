@@ -7,6 +7,37 @@ import { sendEmail } from './notify.js';
 import { env } from '../env.js';
 
 type CollectForm = NonNullable<AgentConfig['collect_forms']>[number];
+
+/** Build a submit-side tool call: static args where a `{field}`
+ *  placeholder interpolates the posted value of that form field — inside
+ *  a JSON-structured arg (`[[{f}]]`) the value substitutes JSON-encoded so
+ *  `[[{"answer"}]]` stays parseable. A tool param literally named `values`
+ *  (sheets-style append APIs) left unset defaults to one row of the form's
+ *  fields in order — "put the answers in columns" needs no mapping. */
+export function submitToolArgs(
+  sub: { name: string; args?: Record<string, string> },
+  spec: unknown,
+  values: Record<string, string>,
+  toolParams: Record<string, string> | undefined,
+): Record<string, unknown> {
+  const fields = (((spec as { fields?: { name?: string }[] } | undefined)?.fields) ?? [])
+    .map((f) => f.name)
+    .filter((n): n is string => !!n);
+  const args: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(sub.args ?? {})) {
+    // JSON-structured args (`[[{f}]]`) substitute encoded — a bare `{f}`
+    // arg is just a string fill, quoting it would double-wrap.
+    const jsonish = /^[\[{]/.test(v.trim()) && !/^\{[a-z0-9_]+\}$/i.test(v.trim());
+    args[k] = v.replace(/\{([a-z0-9_]+)\}/gi, (_m, f: string) => {
+      const val = values[f.toLowerCase()] ?? values[f] ?? '';
+      return jsonish ? JSON.stringify(val) : val;
+    });
+  }
+  if (toolParams && 'values' in toolParams && args.values == null) {
+    args.values = JSON.stringify([fields.map((n) => values[n] ?? '')]);
+  }
+  return args;
+}
 type ConvRow = typeof conversations.$inferSelect;
 
 /** Read the agent's configured collect forms (lenient — config is jsonb). */

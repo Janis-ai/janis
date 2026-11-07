@@ -195,16 +195,30 @@ export type WidgetComponent = z.infer<typeof WidgetComponent>;
 export const WidgetState = z.object({ name: s(40), spec: WidgetComponent });
 export type WidgetState = z.infer<typeof WidgetState>;
 
+/** Submit-side binding — a form's "save the collected answers somewhere"
+ *  wiring. Runs when the visitor posts the form, never at render. `args`
+ *  are static parameter values (a spreadsheet id, a range) where a
+ *  `{field}` placeholder interpolates the submitted value of that form
+ *  field; a `values` arg left unset defaults to one row of the fields in
+ *  order — the common "append answers to a sheet" case needs no mapping. */
+export const WidgetSubmitBinding = z.object({
+  name: s(64),
+  args: z.record(z.string(), s(500)).optional(),
+});
+export type WidgetSubmitBinding = z.infer<typeof WidgetSubmitBinding>;
+
 /** Tool binding — a widget that fetches live data when referenced. The
  *  model supplies `args` in the WIDGET_REF data (prop → tool-param via
  *  `args`, identity-mapped by default); `props`/`items`/`item_map` map the
- *  JSON result into {prop} placeholders / a list's item rows. */
+ *  JSON result into {prop} placeholders / a list's item rows. On a form,
+ *  `submit` adds the write-side — collect answers into another tool. */
 export const WidgetToolBinding = z.object({
   name: s(64),
   args: z.record(z.string(), s(80)).optional(),
   props: z.record(z.string(), s(160)).optional(),
   items: s(120).optional(),
   item_map: z.record(z.string(), s(160)).optional(),
+  submit: WidgetSubmitBinding.optional(),
 });
 export type WidgetToolBinding = z.infer<typeof WidgetToolBinding>;
 

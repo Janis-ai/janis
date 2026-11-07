@@ -10,6 +10,7 @@ interface WidgetToolBinding {
   props?: Record<string, string>;
   items?: string;
   item_map?: Record<string, string>;
+  submit?: { name: string; args?: Record<string, string> };
 }
 
 /** The subset of a ToolDef the composer needs — name + declared params for
@@ -17,6 +18,8 @@ interface WidgetToolBinding {
 export interface WidgetTool {
   name: string;
   params?: Record<string, string>;
+  method?: string;
+  approval?: boolean;
 }
 
 interface TestResult {
@@ -296,10 +299,19 @@ function Composer({
   const [toolCfg, setToolCfg] = useState(() => {
     if (!initial?.tool) return '';
     const rest = Object.fromEntries(
-      Object.entries(initial.tool).filter(([k, v]) => k !== 'name' && v != null),
+      Object.entries(initial.tool).filter(([k, v]) => k !== 'name' && k !== 'submit' && v != null),
     );
     return Object.keys(rest).length ? JSON.stringify(rest) : '';
   });
+  const [submitName, setSubmitName] = useState(initial?.tool?.submit?.name ?? '');
+  const [submitCfg, setSubmitCfg] = useState(() => {
+    const a = initial?.tool?.submit?.args;
+    return a && Object.keys(a).length ? JSON.stringify(a) : '';
+  });
+  // "Browse…" pick list for an id param (spreadsheet_id ← gsheets_list
+  // and friends) — {rows, param} while open.
+  const [browse, setBrowse] = useState<{ rows: { id: string; label: string }[]; param: string } | null>(null);
+  const [browseErr, setBrowseErr] = useState('');
   const [autoGreet, setAutoGreet] = useState(initial?.autoGreet ?? false);
   const [jsonErr, setJsonErr] = useState('');
   const [testData, setTestData] = useState('{}');
@@ -327,7 +339,6 @@ function Composer({
 
   /** toolName + the mapping textarea → binding object, or an error string. */
   const buildTool = (): { tool: WidgetToolBinding | null; err?: string } => {
-    if (!toolName) return { tool: null };
     let extra: Record<string, unknown> = {};
     if (toolCfg.trim()) {
       try {
@@ -338,7 +349,29 @@ function Composer({
         return { tool: null, err: 'tool mapping is not valid JSON' };
       }
     }
-    return { tool: { name: toolName, ...(extra as Omit<WidgetToolBinding, 'name'>) } };
+    let submitArgs: Record<string, string> | undefined;
+    if (submitCfg.trim()) {
+      try {
+        const parsed: unknown = JSON.parse(submitCfg);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+        submitArgs = parsed as Record<string, string>;
+      } catch {
+        return { tool: null, err: 'submit args are not valid JSON' };
+      }
+    }
+    if (!toolName && !submitName) return { tool: null };
+    return {
+      tool: {
+        // A submit-only form still needs the binding's name slot — the
+        // write tool's name there is harmless (non-GET never runs at
+        // render) and keeps one schema for both directions.
+        name: toolName || submitName,
+        ...(extra as Omit<WidgetToolBinding, 'name' | 'submit'>),
+        ...(submitName
+          ? { submit: { name: submitName, ...(submitArgs ? { args: submitArgs } : {}) } }
+          : {}),
+      },
+    };
   };
 
   const normStates = () =>
@@ -346,6 +379,54 @@ function Composer({
       name: s.name.trim().toLowerCase().replace(/[\s_]+/g, '-'),
       spec: s.spec,
     }));
+
+  /** The sibling read tool a write tool's list comes from — gsheets_append
+   *  → gsheets_list, hubspot_create_contact → hubspot_list, etc. */
+  const listToolFor = (toolName: string): string | undefined => {
+    const prefix = toolName.replace(
+      /_(append|update|read|create|add|write|delete|get|set|find|search|put|post)$/i,
+      '',
+    );
+    return tools.find((t) => t.name === `${prefix}_list`)?.name;
+  };
+
+  const openBrowse = async (param: string) => {
+    const lt = submitName ? listToolFor(submitName) : undefined;
+    if (!lt) return;
+    setBrowseErr('');
+    try {
+      const out = await api<{ result: string }>(`/api/agents/${agentId}/tools/run`, {
+        method: 'POST',
+        body: JSON.stringify({ tool: lt }),
+      });
+      const j: unknown = JSON.parse(out.result);
+      const rows = (
+        Array.isArray(j) ? j : Object.values(j as object).find(Array.isArray)
+      ) as Record<string, unknown>[] | undefined;
+      setBrowse({
+        param,
+        rows: (rows ?? [])
+          .slice(0, 20)
+          .map((r) => ({
+            id: String(r.id ?? r.spreadsheetId ?? ''),
+            label: String(r.name ?? r.title ?? r.id ?? ''),
+          }))
+          .filter((r) => r.id),
+      });
+    } catch (e) {
+      setBrowseErr(e instanceof Error ? e.message : 'the list tool failed');
+    }
+  };
+
+  const pickBrowse = (id: string) => {
+    if (!browse) return;
+    let cur: Record<string, unknown> = {};
+    try {
+      cur = JSON.parse(submitCfg || '{}');
+    } catch {}
+    setSubmitCfg(JSON.stringify({ ...cur, [browse.param]: id }));
+    setBrowse(null);
+  };
 
   const runTest = async () => {
     const { tool, err } = buildTool();
@@ -604,6 +685,90 @@ function Composer({
                   </pre>
                 </details>
               )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Submit binding — the form's write side: post answers into a
+          tool when the visitor submits. */}
+      {spec.type === 'form' && tools.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <Field label="submit tool — runs when the visitor submits the form (saves the answers somewhere)">
+              <select
+                className="input"
+                style={inputStyle}
+                value={submitName}
+                onChange={(e) => {
+                  setSubmitName(e.target.value);
+                  setBrowse(null);
+                }}
+              >
+                <option value="">none — submit just posts as a message</option>
+                {tools.map((t) => (
+                  <option key={t.name} value={t.name}>{t.name}</option>
+                ))}
+              </select>
+            </Field>
+            {submitName && (
+              <Field label="submit args JSON — {field_name} interpolates the posted value">
+                <textarea
+                  className="input"
+                  style={{ ...inputStyle, fontFamily: 'ui-monospace, monospace' }}
+                  rows={3}
+                  value={submitCfg}
+                  onChange={(e) => setSubmitCfg(e.target.value)}
+                  placeholder='{"spreadsheet_id":"…","range":"Sheet1!A1"}'
+                />
+              </Field>
+            )}
+          </div>
+          {submitName &&
+            (() => {
+              const idParams = Object.keys(
+                tools.find((t) => t.name === submitName)?.params ?? {},
+              ).filter((p) => /(^id$|_id$)/.test(p));
+              const listTool = listToolFor(submitName);
+              return (
+                <div className="muted" style={{ fontSize: 11.5 }}>
+                  a <span className="mono">"values"</span> arg left unset defaults to a row of the
+                  fields in order
+                  {listTool && idParams.length > 0 && (
+                    <>
+                      {' — browse for a value: '}
+                      {idParams.map((p) => (
+                        <button
+                          key={p}
+                          className="btn"
+                          style={{ fontSize: 11, padding: '1px 8px', marginRight: 4 }}
+                          onClick={() => void openBrowse(p)}
+                        >
+                          {p}…
+                        </button>
+                      ))}
+                    </>
+                  )}
+                </div>
+              );
+            })()}
+          {browseErr && <div className="error">{browseErr}</div>}
+          {browse && (
+            <div className="card" style={{ padding: 6, maxHeight: 160, overflow: 'auto' }}>
+              {!browse.rows.length && (
+                <div className="muted" style={{ fontSize: 12 }}>the list tool returned nothing</div>
+              )}
+              {browse.rows.map((r) => (
+                <div
+                  key={r.id}
+                  className="row"
+                  style={{ fontSize: 12, cursor: 'pointer', padding: '3px 4px', gap: 8 }}
+                  onClick={() => pickBrowse(r.id)}
+                >
+                  <span style={{ flex: 1 }}>{r.label}</span>
+                  <span className="muted mono" style={{ fontSize: 10.5 }}>{r.id}</span>
+                </div>
+              ))}
             </div>
           )}
         </div>

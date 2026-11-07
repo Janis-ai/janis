@@ -6,7 +6,7 @@ import { AgentConfig, catalogModel, friendlyName, vendorForBaseUrl } from '@jani
 import type { Db } from '../db/client.js';
 import { agents, agentApiKeys, agentConnections, agentInstructionRevisions, agentMembers, agentSecrets, agentTests, agentTestRuns, agentWidgets, alertRules, alerts, campaignSends, campaigns, channelBindings, channels, contactIdentities, conversations, evalSuggestions, helpArticles, helpSearchLog, knowledgeFiles, memberships, messages, pendingActions, savedReplies, shopifyShops, slackInstallations, slackThreads, suggestions, usageEvents, users, webhookDeliveries, workspaces } from '../db/schema.js';
 import { WidgetComponent, WidgetState, WidgetToolBinding } from '../lib/widgets.js';
-import { toolsFor } from '../lib/toolExec.js';
+import { callTool, toolsFor } from '../lib/toolExec.js';
 import {
   adminOnly,
   agentAdminOnly,
@@ -2294,12 +2294,28 @@ export function agentRoutes(db: Db) {
 
   // A bound tool must exist on this agent and be a plain read — gated tools
   // can't feed a display component (approval cards can't render mid-reply).
-  const validToolBind = (agent: typeof agents.$inferSelect, tool: WidgetToolBinding | null | undefined) => {
+  const validToolBind = (
+    agent: typeof agents.$inferSelect,
+    tool: WidgetToolBinding | null | undefined,
+    specType?: string,
+  ) => {
     if (!tool) return { ok: true as const };
-    const def = toolsFor(agent).find((t) => t.name === tool.name);
+    const defs = toolsFor(agent);
+    const def = defs.find((t) => t.name === tool.name);
     if (!def) return { ok: false as const, error: `no tool named "${tool.name}" on this agent` };
     if (def.approval)
       return { ok: false as const, error: `"${tool.name}" is approval-gated — bind a read tool` };
+    // Submit-side: forms only, real tool, never gated — it fires per
+    // visitor submit with no further review.
+    if (tool.submit) {
+      if (specType !== 'form')
+        return { ok: false as const, error: 'a submit binding only applies to form components' };
+      const subDef = defs.find((t) => t.name === tool.submit!.name);
+      if (!subDef)
+        return { ok: false as const, error: `no tool named "${tool.submit.name}" on this agent` };
+      if (subDef.approval)
+        return { ok: false as const, error: `"${tool.submit.name}" is approval-gated — a submit-side tool must run without review` };
+    }
     return { ok: true as const };
   };
 
@@ -2320,7 +2336,7 @@ export function agentRoutes(db: Db) {
     const body = c.req.valid('json');
     const spec = WidgetComponent.safeParse(body.spec);
     if (!spec.success) return c.json({ error: 'invalid spec', issues: spec.error.issues }, 400);
-    const toolCheck = validToolBind(agent, body.tool);
+    const toolCheck = validToolBind(agent, body.tool, spec.data.type);
     if (!toolCheck.ok) return c.json({ error: toolCheck.error }, 400);
     const [row] = await db
       .insert(agentWidgets)
@@ -2367,7 +2383,18 @@ export function agentRoutes(db: Db) {
       }
       if (body.states !== undefined) patch.states = body.states;
       if (body.tool !== undefined) {
-        const toolCheck = validToolBind(agent, body.tool);
+        // A submit binding is form-only — when the patch doesn't carry a
+        // spec the existing row's type is the one that applies.
+        let specType = body.spec ? (WidgetComponent.parse(body.spec).type as string) : undefined;
+        if (body.tool?.submit && specType === undefined) {
+          const [cur] = await db
+            .select({ spec: agentWidgets.spec })
+            .from(agentWidgets)
+            .where(eq(agentWidgets.id, c.req.param('wid')))
+            .limit(1);
+          specType = (cur?.spec as { type?: string } | undefined)?.type;
+        }
+        const toolCheck = validToolBind(agent, body.tool, specType);
         if (!toolCheck.ok) return c.json({ error: toolCheck.error }, 400);
         patch.tool = body.tool;
       }
@@ -2412,7 +2439,7 @@ export function agentRoutes(db: Db) {
     const body = c.req.valid('json');
     const spec = WidgetComponent.safeParse(body.spec);
     if (!spec.success) return c.json({ error: 'invalid spec', issues: spec.error.issues }, 400);
-    const toolCheck = validToolBind(agent, body.tool ?? null);
+    const toolCheck = validToolBind(agent, body.tool ?? null, spec.data.type);
     if (!toolCheck.ok) return c.json({ error: toolCheck.error }, 400);
     const cap: { args?: Record<string, unknown>; result?: string; error?: string } = {};
     const widget = await resolveWidgetRef(
@@ -2445,6 +2472,28 @@ export function agentRoutes(db: Db) {
       tool_result: cap.result?.slice(0, 8000),
       error: cap.error,
     });
+  });
+
+  // Run a READ tool for real — the composer's "browse" pickers (choose the
+  // spreadsheet gsheets_append writes to) need live lists, not hand-typed
+  // ids. GET-only, never approval-gated: writes stay behind cards.
+  const toolRunBody = z.object({
+    tool: z.string().min(1),
+    args: z.record(z.string(), z.unknown()).optional(),
+  });
+  app.post('/:id/tools/run', agentAdmin, zValidator('json', toolRunBody), async (c) => {
+    const agent = await ownedAgent(c);
+    if (!agent) return c.json({ error: 'not found' }, 404);
+    const body = c.req.valid('json');
+    const def = toolsFor(agent).find((t) => t.name === body.tool);
+    if (!def) return c.json({ error: `no tool "${body.tool}"` }, 404);
+    if (def.approval || def.method !== 'GET')
+      return c.json({ error: 'only read tools run from the composer' }, 400);
+    const result = await callTool(def, body.args ?? {}, {
+      ...(await loadSecretsMap(db, agent.id)),
+      ...(await connectionSecrets(db, agent.id)),
+    });
+    return c.json({ result: result.slice(0, 12000) });
   });
 
   app.delete('/:id/knowledge/:fileId', agentAdmin, async (c) => {

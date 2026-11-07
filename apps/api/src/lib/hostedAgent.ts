@@ -535,12 +535,25 @@ export async function resolveWidgetRef(
    *  "WIDGET_REF: tracker" after the model already looked the order up
    *  means "render that result", not "fetch again with empty args". */
   priorResult?: string,
+  /** The ref's own name — stamped as `collect` on a form-bound spec so a
+   *  visitor submit routes back to this component's submit-side tool. */
+  refName?: string,
 ): Promise<WidgetComponent | null> {
   const props: Record<string, unknown> = {};
   let items: Record<string, unknown>[] | null = null;
   let toolRan = false;
   let toolEmptyResult = false;
-  if (def.tool) {
+  // A form's binding splits read/submit: a non-GET `tool` (legacy "bind
+  // the append" bindings) is write-side — it runs when the visitor POSTS
+  // the form, never at render, where a write would fire on every view and
+  // a failure drops the whole component (the cheese-survey bug). A GET
+  // `tool` still reads at emit to prefill {prop}s; an explicit `submit`
+  // block never reaches the render path at all.
+  const boundTool = def.tool ? tools.find((t) => t.name === def.tool!.name) : undefined;
+  const submitBound =
+    def.spec.type === 'form' && !!def.tool && (boundTool?.method ?? 'GET') !== 'GET';
+  const submitCapable = def.spec.type === 'form' && !!def.tool && (!!def.tool.submit || submitBound);
+  if (def.tool && !submitBound) {
     const tool = tools.find((t) => t.name === def.tool!.name);
     if (!tool || tool.approval) {
       console.warn(`[widgets] bound tool unavailable or gated: ${def.tool.name}`);
@@ -673,6 +686,10 @@ export async function resolveWidgetRef(
     if (kept.length) bound.summary = kept;
     else delete bound.summary;
   }
+  // A form with submit-side wiring stamps `collect` so the visitor's post
+  // routes back to this component's binding — the submit handler resolves
+  // the name against agent_widgets server-side (never client-sent).
+  if (submitCapable && refName) bound.collect = refName.slice(0, 40);
   const parsed = WidgetComponent.safeParse(bound);
   if (!parsed.success) {
     console.warn(`[widgets] ref spec failed validation after binding`);
@@ -4143,8 +4160,15 @@ export async function complete(
                           : {},
                       })
                   : `error: unknown tool ${call.function.name}`;
-          if (result.startsWith('error') || result.startsWith('{"error"')) outcome = 'failed';
-          else if (result.startsWith('{')) {
+          if (result.startsWith('error') || result.startsWith('{"error"')) {
+            outcome = 'failed';
+            // The run-degradation alert only records "tool failed: X" —
+            // the actual cause (HTTP status, missing secret, bad args)
+            // would otherwise be invisible after the fact.
+            console.error(
+              `[hosted] tool failed conv=${ctx?.convId} tool=${call.function.name} — ${result.slice(0, 240)}`,
+            );
+          } else if (result.startsWith('{')) {
             // GraphQL request errors return HTTP 200 as {"errors":[…]} — a
             // successful-looking body the prefix check marks "ran", so the
             // model treats a broken response as data and retries forever.
@@ -5633,6 +5657,7 @@ export async function runHostedEvent(
         result?.producedIds ?? new Set<string>(),
         undefined,
         def.tool ? result?.lastToolResult.get(def.tool.name) : undefined,
+        ref.name,
       );
       if (spec) widgets.push(spec);
     }
@@ -6552,6 +6577,7 @@ async function replyAsHostedAgent(
           gen.producedIds,
           cap,
           def.tool ? gen.lastToolResult.get(def.tool.name) : undefined,
+          ref.name,
         );
         if (spec) {
           w.push(spec);

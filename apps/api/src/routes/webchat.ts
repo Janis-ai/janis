@@ -16,7 +16,10 @@ import { mathToUnicode, MODEL_CATALOG } from '@janis/shared';
 import type { ChannelCredentials, InboundMessage } from '../lib/channels.js';
 import { resolveGreeting } from '../lib/greeting.js';
 import { emitHookEvent } from '../lib/hooks.js';
-import { interpolateSpec, stripEmptyStrings, WidgetComponent } from '../lib/widgets.js';
+import { interpolateSpec, normWidgetRef, stripEmptyStrings, WidgetComponent, WidgetToolBinding } from '../lib/widgets.js';
+import { callTool, toolsFor } from '../lib/toolExec.js';
+import { loadSecretsMap } from '../lib/secrets.js';
+import { connectionSecrets } from '../lib/connections.js';
 import { effectivePlanKey } from '../lib/plans.js';
 import { recordSttUsage } from '../lib/usage.js';
 import { MAX_UPLOAD_BYTES, storeUpload } from '../lib/uploads.js';
@@ -24,9 +27,10 @@ import { adoptVisitorConversation, handleChannelMessage } from '../services/chan
 import { processEvents } from '../services/ingest.js';
 import { applyConvEffects } from '../lib/conversationOps.js';
 import { bus } from '../lib/bus.js';
+import { toMessage } from '../lib/serializers.js';
 import { rateLimit, takeDbAllowance } from '../lib/rateLimit.js';
 import { agentWorking, operatorTyping } from '../lib/typingState.js';
-import { collectFormNamed, recordFormSubmission } from '../lib/collectForms.js';
+import { collectFormNamed, recordFormSubmission, submitToolArgs } from '../lib/collectForms.js';
 import { operatorIdentities } from '../lib/access.js';
 
 /**
@@ -734,13 +738,80 @@ export function webchatRoutes(db: Db) {
       void (async () => {
         const [agent] = await db.select().from(agents).where(eq(agents.id, channel.agentId)).limit(1);
         const def = agent ? collectFormNamed(agent, form.name) : undefined;
-        if (!agent || !def) return;
+        if (agent && def) {
+          const conv = await findConversation(
+            db,
+            channel,
+            participantFor(resolved, visitor_id, threadKey),
+          );
+          await recordFormSubmission(db, { agent, conv, form: def, values: form.values });
+          return;
+        }
+        // Component-bound submit — the emitted spec stamped `collect` with
+        // the component's name; its submit binding runs server-side with
+        // the posted values (never a client-sent binding).
+        if (!agent) return;
+        const [w] = await db
+          .select()
+          .from(agentWidgets)
+          .where(
+            and(
+              eq(agentWidgets.agentId, agent.id),
+              eq(agentWidgets.name, normWidgetRef(form.name)),
+            ),
+          )
+          .limit(1);
+        const parsedBind = w?.tool ? WidgetToolBinding.safeParse(w.tool) : null;
+        const binding = parsedBind?.success ? parsedBind.data : undefined;
+        if (!w || !binding) return;
+        const agentToolDefs = toolsFor(agent);
+        // Explicit `submit` wins; a legacy binding parked the write tool
+        // on `tool` — non-GET methods are writes, never a render read.
+        const legacy =
+          !binding.submit &&
+          agentToolDefs.find((t) => t.name === binding.name)?.method !== 'GET'
+            ? { name: binding.name, args: binding.args }
+            : undefined;
+        const sub = binding.submit ?? legacy;
+        if (!sub) return;
+        const toolDef = agentToolDefs.find((t) => t.name === sub.name);
         const conv = await findConversation(
           db,
           channel,
           participantFor(resolved, visitor_id, threadKey),
         );
-        await recordFormSubmission(db, { agent, conv, form: def, values: form.values });
+        if (!conv) return;
+        const result = !toolDef
+          ? `error: bound tool "${sub.name}" is not on ${agent.name}`
+          : toolDef.approval
+            ? `error: bound tool "${sub.name}" is approval-gated`
+            : await callTool(
+                toolDef,
+                submitToolArgs(sub, w.spec, form.values, toolDef.params),
+                {
+                  ...(await loadSecretsMap(db, agent.id)),
+                  ...(await connectionSecrets(db, agent.id)),
+                },
+              );
+        const ok = !result.startsWith('error');
+        if (!ok)
+          console.error(
+            `[webchat] form submit tool failed conv=${conv.id} tool=${sub.name} — ${result.slice(0, 200)}`,
+          );
+        // Console-side note — the operator sees the wiring did (or didn't)
+        // run; the visitor just sees their submit arrive as a message.
+        const [note] = await db
+          .insert(messages)
+          .values({
+            conversationId: conv.id,
+            direction: 'human',
+            text: ok
+              ? `form "${form.name}" submitted — ${sub.name} recorded it`
+              : `form "${form.name}" submitted — ${sub.name} failed: ${result.slice(0, 160)}`,
+            payload: { internal: true, event: ok ? 'form submit ran' : 'form submit failed' },
+          })
+          .returning();
+        bus.publish(agent.workspaceId, { type: 'message', data: toMessage(note) });
       })().catch((err) => console.error('[webchat] form submission failed:', err));
     }
     // Ingress includes awaited side-paths (sync greeting generation on a

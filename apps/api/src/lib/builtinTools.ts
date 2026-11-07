@@ -3245,7 +3245,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   {
     name: 'save_widget',
     description:
-      "Propose saving a chat component on an agent in the visitor's workspace — the same cards/options/form/status/receipt blocks the console's Chat components composer manages. The saved component renders verbatim when the agent emits WIDGET_REF, or pins to the webchat greeting with auto_greet. Use this when the visitor asks to add a widget/component to an agent — NOT update_agent (that's settings: greeting, chips, CSAT). Posts an approval card — nothing is saved until the visitor approves. Admin-only.",
+      "Propose saving a chat component on an agent in the visitor's workspace — the same cards/options/form/status/receipt blocks the console's Chat components composer manages. The saved component renders verbatim when the agent emits WIDGET_REF, or pins to the webchat greeting with auto_greet. Use this when the visitor asks to add a widget/component to an agent — NOT update_agent (that's settings: greeting, chips, CSAT). Posts an approval card — nothing is saved until the visitor approves. If the visitor sends corrections while the card is still pending (different fields, a changed binding), call this AGAIN with the revised details — a card for the same component updates in place rather than stacking a second one. Admin-only.",
     params: {
       agent: 'agent name (required)',
       name: 'component handle the agent will reference, e.g. pricing-table (required)',
@@ -3254,7 +3254,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       states:
         'optional JSON array of named spec variants — [{"name":"in_transit","spec":{…full spec…}},{"name":"not_found","spec":{…}}]. The model picks one with {"state":"<name>"} in the ref data.',
       tool:
-        'optional JSON object binding the component to one of the agent\'s READ tools — {"name":"<tool>","args":{"<prop>":"<tool param>"},"props":{"<prop>":"<dotpath into result>"},"items":"<dotpath to rows array>","item_map":{"<item field>":"<row dotpath>"}}. When the agent emits WIDGET_REF: name {"arg":…}, the tool runs and its result fills the component. Only non-approval tools can bind.',
+        'optional JSON object binding the component to one of the agent\'s tools — {"name":"<tool>","args":{"<prop>":"<tool param>"},"props":{"<prop>":"<dotpath into result>"},"items":"<dotpath to rows array>","item_map":{"<item field>":"<row dotpath>"}}. When the agent emits WIDGET_REF: name {"arg":…}, the tool runs and its result fills the component (a READ binding — use GET tools). A form component also takes "submit":{"name":"<tool>","args":{"<tool param>":"<static value or {field} placeholder>"}} — the WRITE side: on visitor submit the tool runs with the posted values; a "values" arg left unset defaults to a row of the fields in order (the natural fit for sheets-style appends). Only non-approval tools can bind.',
       auto_greet: 'true/false — also pin this component under the webchat greeting',
       workspace: 'workspace name — only needed when ambiguous',
     },
@@ -3312,13 +3312,25 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
         // that can never run — the ref resolves nothing at emit and the
         // visitor gets promise text with no component. Fail the call so
         // the model fills a real value or drops the binding.
-        const placeholderArg = Object.entries(toolBind.args ?? {}).find(
-          ([, v]) => typeof v === 'string' && /^\s*\[[^\]]*\]\s*$/.test(v),
-        );
+        const placeholderArg = Object.entries({
+          ...(toolBind.args ?? {}),
+          ...(toolBind.submit?.args ?? {}),
+        }).find(([, v]) => typeof v === 'string' && /^\s*\[[^\]]*\]\s*$/.test(v));
         if (placeholderArg) {
           return JSON.stringify({
             error: `"${toolBind.name}" arg "${placeholderArg[0]}" is a placeholder (${placeholderArg[1]}) — pass a real value or drop the binding; a component bound to it can never run`,
           });
+        }
+        // Submit-side: forms only, real tool, never approval-gated — it
+        // fires per visitor submit with no further review.
+        const sub = toolBind.submit;
+        if (sub) {
+          if (spec.data.type !== 'form')
+            return JSON.stringify({ error: 'a submit binding only applies to form components' });
+          const subDef = toolsFor(agent).find((t) => t.name === sub.name);
+          if (!subDef) return JSON.stringify({ error: `no tool named "${sub.name}" on ${agent.name}` });
+          if (subDef.approval)
+            return JSON.stringify({ error: `"${sub.name}" is approval-gated — a submit-side tool must run without review` });
         }
       }
       const autoGreet = ['true', 'yes', 'on', '1'].includes(String(args.auto_greet).toLowerCase());
@@ -3365,6 +3377,11 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           ...(toolBind ? { tool: toolBind.name } : {}),
           ...(autoGreet ? { on_open: 'pinned to greeting' } : {}),
         },
+        // Re-pitching the same component revises the pending card in
+        // place — a stacked second card could approve the stale spec.
+        (p) =>
+          p.toolName === 'apply_save_widget' &&
+          (p.args as { name?: string }).name === name,
       );
     },
   },
@@ -3460,6 +3477,9 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
             secrets,
             runCtx,
             new Set<string>(),
+            undefined,
+            undefined,
+            ref,
           );
           if (spec) widgets.push(spec);
           else failures.push(`"${ref}" resolved to nothing (bound tool missing, gated, or errored)`);
