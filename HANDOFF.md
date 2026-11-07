@@ -122,6 +122,10 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   updates the parked action's args AND the rendered card payload in
   place (status-guarded so a mid-revise decide isn't resurrected), and
   the tool description tells the model to re-call with the merged brief.
+  Prod follow-up: the three persona SOP .md uploads were patched into
+  Nova Reign as knowledge_files sources (extractKnowledgeText path,
+  ready+enabled) since the approved card couldn't carry them. Also
+  added .devin/skills/alert-triage — the alert→prod-trace→fix runbook.
 ## 2026-11-06l — Guided drafts: operators can steer the suggest card
 - The sparkles draft ran a full suggesting-mode agent turn but took no
   input — take it or regenerate blind. The card now carries a guide
