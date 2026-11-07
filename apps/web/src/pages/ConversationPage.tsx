@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { DEFAULT_INTENTS } from '@janis/shared';
 import type { Alert, Attachment, Conversation, ConversationState, Message } from '@janis/shared';
 import { api, ApiError } from '../api/client';
-import { useAgents, useConversation, useConversationBrief, useInvalidateConversations, useMe, useUsers, patchConversationCaches } from '../api/hooks';
+import { useAgents, useAgentWidgets, useConversation, useConversationBrief, useInvalidateConversations, useMe, useUsers, patchConversationCaches } from '../api/hooks';
 import { ArgsRows, Avatar, displayName, fmtTime, mdSpans, SearchInput, surfaceLabel } from '../components/bits';
 import { Widgets, type ChatWidget } from '../components/ChatWidgets';
 import Composer from '../components/Composer';
@@ -1058,6 +1058,9 @@ export default function ConversationPage() {
   }
   if (!data) return <ConversationSkeleton />;
   const { conversation: c, messages, alerts, suggestions } = data;
+  // Saved components on this agent — the draft card labels each staged
+  // widget with its wiring (submits to / bound to) via payload.widget_refs.
+  const { data: agentWidgets } = useAgentWidgets(c.agent_id);
   const brief = briefQ.data?.summary ?? null;
   const refreshBrief = async () => {
     if (briefBusy) return;
@@ -2079,6 +2082,29 @@ export default function ConversationPage() {
                       widgets={suggestions[0].payload!.widgets as ChatWidget[]}
                       onSend={() => {}}
                     />
+                    {/* Wiring check — what each staged component actually
+                        does, so a form that's supposed to save somewhere is
+                        verifiable before Send. */}
+                    {suggestions[0].payload!.widgets!.map((_w, wi) => {
+                      const ref = (suggestions[0].payload as { widget_refs?: (string | null)[] })
+                        ?.widget_refs?.[wi];
+                      if (!ref) return null;
+                      const saved = agentWidgets?.widgets.find(
+                        (x) => x.name.toLowerCase().replace(/[\s_-]+/g, '-') === ref,
+                      );
+                      const line = saved?.tool?.submit?.name
+                        ? `saves submissions via ${saved.tool.submit.name}`
+                        : saved?.tool?.name
+                          ? `bound to ${saved.tool.name} — fetches when sent`
+                          : saved
+                            ? 'no tool wiring — answers just arrive as a message'
+                            : 'not a saved component on this agent';
+                      return (
+                        <div key={wi} className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+                          {ref} · {line}
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
                 {!draftSent && (suggestions[0].payload?.buttons?.length ?? 0) > 0 && (
@@ -2215,40 +2241,6 @@ export default function ConversationPage() {
               <div className="muted">Drafting…</div>
             )}
             <div className="draft-foot">
-            {!draftSent && (
-              <div className="row" style={{ marginTop: 10, gap: 6, alignItems: 'flex-end' }}>
-                <textarea
-                  ref={guideRef}
-                  rows={1}
-                  value={guide}
-                  onChange={(e) => {
-                    setGuide(e.target.value);
-                    setRoutedToCopilot(false);
-                  }}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      guidedSuggest();
-                    }
-                  }}
-                  placeholder="Guide the draft — e.g. “offer 10% off and include the return form”"
-                  style={{ flex: 1, resize: 'none' }}
-                />
-                <button
-                  className="btn sm"
-                  onClick={guidedSuggest}
-                  disabled={suggest.isPending || !guide.trim()}
-                  title="Draft a reply to your instruction"
-                >
-                  Draft
-                </button>
-              </div>
-            )}
-            {!draftSent && routedToCopilot && (
-              <div className="muted" style={{ marginTop: 6 }}>
-                Opened in Copilot — a staged draft will land here.
-              </div>
-            )}
             <div className="row" style={{ marginTop: 10 }}>
               {!draftSent && (
               <button
@@ -2352,6 +2344,40 @@ export default function ConversationPage() {
                 </button>
               )}
             </div>
+            {!draftSent && routedToCopilot && (
+              <div className="muted" style={{ marginTop: 6 }}>
+                Opened in Copilot — a staged draft will land here.
+              </div>
+            )}
+            {!draftSent && (
+              <div className="row" style={{ marginTop: 10, gap: 6, alignItems: 'flex-end' }}>
+                <textarea
+                  ref={guideRef}
+                  rows={1}
+                  value={guide}
+                  onChange={(e) => {
+                    setGuide(e.target.value);
+                    setRoutedToCopilot(false);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      guidedSuggest();
+                    }
+                  }}
+                  placeholder="Guide the draft — e.g. “offer 10% off and include the return form”"
+                  style={{ flex: 1, resize: 'none' }}
+                />
+                <button
+                  className="btn sm"
+                  onClick={guidedSuggest}
+                  disabled={suggest.isPending || !guide.trim()}
+                  title="Draft a reply to your instruction"
+                >
+                  Draft
+                </button>
+              </div>
+            )}
             </div>
           </div>
         )}

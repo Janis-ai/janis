@@ -5713,6 +5713,10 @@ export async function runHostedEvent(
     // tool runs (as the operator, never gated), {prop}s fill, a state key
     // picks the variant. An unresolvable ref degrades to text only — its
     // line is already stripped from the draft.
+    // Which saved component each ref-resolved widget came from — the draft
+    // card shows the wiring (submits to X / bound to Y) so the operator can
+    // verify before sending. Ref-resolved specs append after inline ones.
+    const refNames: string[] = [];
     for (const ref of refs) {
       const def = refSpecs.get(ref.name);
       if (!def) continue;
@@ -5727,7 +5731,10 @@ export async function runHostedEvent(
         def.tool?.name ? result?.lastToolResult.get(def.tool.name) : undefined,
         ref.name,
       );
-      if (spec) widgets.push(spec);
+      if (spec) {
+        widgets.push(spec);
+        refNames.push(ref.name);
+      }
     }
 
     const text =
@@ -5758,8 +5765,17 @@ export async function runHostedEvent(
           : { empty_draft: true }),
         // Tool-produced widgets plus inline WIDGET: specs parsed from the
         // draft text — either rides the card and the eventual reply send.
+        // widget_refs aligns: which saved component each resolved spec came
+        // from (null = inline/tool-produced).
         ...(result?.widgets?.length || widgets.length
-          ? { widgets: [...(result?.widgets ?? []), ...widgets] }
+          ? {
+              widgets: [...(result?.widgets ?? []), ...widgets],
+              widget_refs: [
+                ...(result?.widgets ?? []).map(() => null),
+                ...widgets.slice(0, widgets.length - refNames.length).map(() => null),
+                ...refNames,
+              ],
+            }
           : {}),
         ...(buttons.length ? { buttons } : {}),
         // Guidance the draft was generated to — the card echoes it back so

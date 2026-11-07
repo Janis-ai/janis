@@ -1999,7 +1999,7 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
    even though it comes first in the DOM. */
 .card.suggestion.draft:has(.draft-body) { display: flex; flex-direction: column; overflow: hidden; }
 .card.suggestion.draft .draft-foot { flex-shrink: 0; padding-bottom: 8px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
-.card.suggestion.draft .draft-body { order: 1; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.card.suggestion.draft .draft-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 /* The Ask Janis rail claims ~340px — on the conversation screen at mid widths
    that squeezes the transcript + details into nested scrollbars, so the sidebar
    collapses to icons and the details panel stacks under the transcript in the

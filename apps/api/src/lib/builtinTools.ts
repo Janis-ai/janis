@@ -590,7 +590,7 @@ async function composeReply(
   workspaceId: string,
   convId: string,
   args: Record<string, unknown>,
-): Promise<{ text: string; widgets: WidgetComponent[]; failures: string[] }> {
+): Promise<{ text: string; widgets: WidgetComponent[]; widgetRefs: (string | null)[]; failures: string[] }> {
   let text = String(args.text ?? args.message ?? '').trim();
   const rawWidgets: unknown[] = [...(argObjectArray(args.widgets) ?? [])];
   const REF = /WIDGET_REF:\s*([a-z0-9_-]+)\s*(\{[^\n{}]*\})?/gi;
@@ -650,6 +650,10 @@ async function composeReply(
     suggesting: true as const,
   };
   const widgets: WidgetComponent[] = [];
+  // Which saved component each resolved widget came from (null = inline
+  // spec) — the draft card shows its wiring so the operator can verify
+  // a form actually saves somewhere before sending.
+  const widgetRefs: (string | null)[] = [];
   const failures: string[] = [];
   for (const w of rawWidgets.slice(0, 3)) {
     const ref = (w as { ref?: unknown }).ref;
@@ -670,15 +674,19 @@ async function composeReply(
         undefined,
         ref,
       );
-      if (spec) widgets.push(spec);
-      else failures.push(`"${ref}" resolved to nothing (bound tool missing, gated, or errored)`);
+      if (spec) {
+        widgets.push(spec);
+        widgetRefs.push(normWidgetRef(ref));
+      } else failures.push(`"${ref}" resolved to nothing (bound tool missing, gated, or errored)`);
     } else {
       const spec = WidgetComponent.safeParse(w);
-      if (spec.success) widgets.push(spec.data);
-      else failures.push(`a component spec failed validation (${spec.error.issues[0]?.message})`);
+      if (spec.success) {
+        widgets.push(spec.data);
+        widgetRefs.push(null);
+      } else failures.push(`a component spec failed validation (${spec.error.issues[0]?.message})`);
     }
   }
-  return { text, widgets, failures };
+  return { text, widgets, widgetRefs, failures };
 }
 
 /** Name for a reply card — the customer's profile name, else email. */
@@ -3701,7 +3709,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       // Components: inline specs validate against the schema; refs resolve
       // through the saved-component catalog + bound-tool machinery the
       // suggestion path uses, so the card shows exactly what will send.
-      const { text, widgets, failures } = await composeReply(
+      const { text, widgets, widgetRefs, failures } = await composeReply(
         ctx,
         agent,
         ws.id,
@@ -3714,7 +3722,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
 
       const { storeSuggestion } = await import('../services/suggestions.js');
       await storeSuggestion(ctx.db, conv.conversations.id, text || '(components only)', 'agent', undefined, {
-        ...(widgets.length ? { widgets } : {}),
+        ...(widgets.length ? { widgets, widget_refs: widgetRefs } : {}),
         ...(args.instruction ? { instruction: String(args.instruction) } : {}),
       });
       return JSON.stringify({
