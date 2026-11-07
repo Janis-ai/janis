@@ -93,6 +93,18 @@ Commit style: imperative, terse, "why" over "what"; trailer:
   nav above.
 
 ## Recently shipped (Oct 29–30, 2026)
+## 2026-11-06l — Guided drafts: operators can steer the suggest card
+- The sparkles draft ran a full suggesting-mode agent turn but took no
+  input — take it or regenerate blind. The card now carries a guide
+  input under the draft ("offer 10% off and include the return form"):
+  POST /conversations/:id/suggest accepts `instruction`, forwarded on
+  the suggestion.request payload as payload.instruction (external/SDK
+  agents may ignore it; hosted agents get it appended to the
+  forSuggestion directive — "shape the reply around it, never quote
+  it"), and echoed back on suggestion.payload.instruction so a teammate
+  sees what the draft aimed at. LLM-fallback path gets the same line.
+  Tools, widgets, and proposed actions flow through the suggesting run
+  unchanged — guided drafts can chain lookups and attach gated actions.
 ## 2026-11-06k — save_widget accepts {"name":"none"} as "no binding"
 - Ask rail flashed "Run error — tool failed: save_widget" mid-run even
   though the approval card parked and applied fine. Inspector showed the
