@@ -5704,16 +5704,16 @@ export async function runHostedEvent(
       // this it renders to the operator as raw spec text. WIDGET_REF: names
       // resolve against the saved-component catalog after the draft text
       // settles (a retry can re-emit different refs).
-      const { text: noWidgets, widgets, refs } = extractWidgets(noButtons);
+      const { text: noWidgets, widgets, refs, dropped } = extractWidgets(noButtons);
       // Unparseable leftovers (truncated JSON, malformed refs) are still
       // directive markup — never show them as draft text either.
       const text = noWidgets
         .split('\n')
         .filter((l) => !/^\s*WIDGET(?:_REF)?:/i.test(l))
         .join('\n');
-      return { text: unwrapInlineLists(text) || undefined, buttons, widgets, refs };
+      return { text: unwrapInlineLists(text) || undefined, buttons, widgets, refs, dropped };
     };
-    let { text: draft, buttons, widgets, refs } = stripLabel(result?.text);
+    let { text: draft, buttons, widgets, refs, dropped } = stripLabel(result?.text);
     if (draft && CONTROL_TAG.test(draft)) draft = undefined;
 
     if (!draft) {
@@ -5756,6 +5756,7 @@ export async function runHostedEvent(
       if (retryStrip.buttons.length) buttons = retryStrip.buttons;
       if (retryStrip.widgets.length) widgets = retryStrip.widgets;
       if (retryStrip.refs.length) refs = retryStrip.refs;
+      dropped = (dropped ?? 0) + (retryStrip.dropped ?? 0);
       if (draft && CONTROL_TAG.test(draft)) draft = undefined;
     }
 
@@ -5833,7 +5834,12 @@ export async function runHostedEvent(
         (await guardReplyLinks(text, blessedUrls, { exists: consoleIdChecker(db, agent.workspaceId) })).text,
       ).text,
       'agent',
-      undefined,
+      // An emitted component that failed to parse used to vanish —
+      // surface it so a failed emit doesn't look like the model ignored
+      // the instruction.
+      dropped
+        ? `${dropped} component${dropped === 1 ? '' : 's'} was emitted but didn't parse — dropped`
+        : undefined,
       {
         // An empty run stores the placeholder text for transparency but is
         // NOT a draft — the card shows "couldn't draft" instead of offering

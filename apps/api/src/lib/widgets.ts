@@ -98,9 +98,14 @@ export const WidgetComponent = z.discriminatedUnion('type', [
         z.object({
           name: s(40).regex(/^[a-z][a-z0-9_]*$/i),
           label: s(60),
-          type: z
-            .enum(['text', 'email', 'tel', 'textarea', 'select', 'multiselect'])
-            .default('text'),
+          // Models write what the operator said — "checkbox"/"checkboxes"
+          // normalize to multiselect rather than drop the whole spec.
+          type: z.preprocess(
+            (v) => (v === 'checkbox' || v === 'checkboxes' ? 'multiselect' : v),
+            z
+              .enum(['text', 'email', 'tel', 'textarea', 'select', 'multiselect'])
+              .default('text'),
+          ),
           options: z.array(s(60)).max(10).optional(),
           required: z.boolean().optional(),
           // Prefill — server stamps a fact it already knows (email, name);
