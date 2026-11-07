@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import type { Db } from '../db/client.js';
 import * as schema from '../db/schema.js';
 import { eq, sql } from 'drizzle-orm';
-import { agents, agentWidgets, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, suggestions, uploads, users, workspaces } from '../db/schema.js';
+import { agents, agentWidgets, channelBindings, channels, contactIdentities, contacts, conversations, memberships, messages, pendingActions, suggestions, uploads, users, workspaces } from '../db/schema.js';
 import { applyVerifiedAnchors, blessedUrlsFor, buttonLabelOverflow, cardsCoverQuickReplies, channelKeyFor, claimsAction, claimsAnyCatalogueCount, claimsFullCatalogue, claimsPhantomProduct, claimsWidgetShown, claimsWrongCount, complete, controlTag, conversationContext, OFFER_QUESTION, deniesConfirmedAdd, deniesWidgetShown, extractButtons, extractLearns, fileAnalysisAllowed, filterChipsAgainstCards, fixFullCatalogueClaims, fixWrongCounts, guardReplyLinks, HUMAN_ASK, knowledgeQueryFor, listsPricedItems, matchSavedComponent, mergeCardWidgets, normalizeCardSelects, promisesLookup, rankDocs, repairCardImages, repairCardStock, repairPricingItems, janisPlanPrices, runHostedEvent, saveUserProfile, sendVerificationEmail, checkVerificationCode, stripActionClaims, stripEscalationClaims, stripLookupPromises, stripPhantomClaims, stripPricedLists, stripRedundantCardLists, stripTranscriptNotes, stripUnbackedCounts, stripWidgetClaims, deniesLiveData, ungroundedFigures, ungroundedSource, systemPrompt, unwrapInlineLists, transcriptFor, verifiedIdentityFor, verifyCardItems, prefillFormFields, openUrlFromToolCalls } from './hostedAgent.js';
 import { identityBlockReason, type ToolDef } from './toolExec.js';
 import { env } from '../env.js';
@@ -3067,6 +3067,134 @@ describe('guided suggestion drafts', () => {
     expect(payload.widgets?.[0]?.type).toBe('form');
     expect(payload.widgets?.[0]?.title).toBe('Your hobbies');
     expect(sug.text).not.toContain('WIDGET_REF');
+  });
+
+  it('a suggestion run never offers card-parking or reply-staging builtins — even enabled', async () => {
+    // Prod bug: a guided draft called save_widget and parked a real
+    // approval card in the (closed) Copilot rail. Drafts compose inline.
+    const prev = env.operatorWorkspaceId;
+    env.operatorWorkspaceId = wsId;
+    const [agent] = await db
+      .insert(agents)
+      .values({
+        workspaceId: wsId,
+        name: 'Guide2',
+        apiKeyHash: 'h-guide2',
+        apiKeyPreview: 'p',
+        hosted: true,
+        config: {
+          llm: { api_key: 'k', base_url: 'https://llm.example', model: 'm' },
+          builtin_tools: ['save_widget', 'send_reply', 'stage_reply', 'update_agent'],
+        },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'webchat:guide-2', state: 'active' })
+      .returning();
+    await db.insert(messages).values([
+      { conversationId: conv.id, direction: 'in', text: 'send me a random widget', createdAt: new Date() },
+    ]);
+    const toolMenus: string[][] = [];
+    fetchMock.mockImplementation(async (url, init) => {
+      if (String(url).includes('/chat/completions')) {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          tools?: { function?: { name?: string } }[];
+        };
+        toolMenus.push((body.tools ?? []).map((t) => t.function?.name ?? ''));
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: 'Here is a widget for you.' } }], usage: {} }),
+          { status: 200 },
+        );
+      }
+      return new Response(null, { status: 404 });
+    });
+    try {
+      await runHostedEvent(db, agent, {
+        type: 'suggestion.request',
+        timestamp: new Date().toISOString(),
+        conversation_id: conv.externalId,
+        janis_conversation_id: conv.id,
+        payload: { instruction: 'send a random widget' },
+      });
+      const offered = toolMenus.flat();
+      for (const banned of ['save_widget', 'send_reply', 'stage_reply', 'update_agent']) {
+        expect(offered).not.toContain(banned);
+      }
+    } finally {
+      env.operatorWorkspaceId = prev;
+    }
+  });
+
+  it('a stubbed save_widget call in a suggestion run parks no card', async () => {
+    const prev = env.operatorWorkspaceId;
+    env.operatorWorkspaceId = wsId;
+    const [agent] = await db
+      .insert(agents)
+      .values({
+        workspaceId: wsId,
+        name: 'Guide3',
+        apiKeyHash: 'h-guide3',
+        apiKeyPreview: 'p',
+        hosted: true,
+        config: {
+          llm: { api_key: 'k', base_url: 'https://llm.example', model: 'm' },
+          builtin_tools: ['save_widget'],
+        },
+      })
+      .returning();
+    const [conv] = await db
+      .insert(conversations)
+      .values({ agentId: agent.id, externalId: 'webchat:guide-3', state: 'active' })
+      .returning();
+    await db.insert(messages).values([
+      { conversationId: conv.id, direction: 'in', text: 'make me a survey widget', createdAt: new Date() },
+    ]);
+    let calls = 0;
+    fetchMock.mockImplementation(async (url, init) => {
+      if (String(url).includes('/chat/completions')) {
+        calls += 1;
+        const msg =
+          calls === 1
+            ? {
+                tool_calls: [
+                  {
+                    id: 'call_1',
+                    type: 'function',
+                    function: {
+                      name: 'save_widget',
+                      arguments: JSON.stringify({
+                        agent: 'Guide3',
+                        name: 'survey',
+                        spec: '{"type":"form","title":"S","fields":[{"name":"f","label":"F","type":"text"}]}',
+                      }),
+                    },
+                  },
+                ],
+              }
+            : { content: 'Working on it — WIDGET: {"type":"form","title":"S","fields":[{"name":"f","label":"F","type":"text"}]}' };
+        return new Response(JSON.stringify({ choices: [{ message: msg }], usage: {} }), {
+          status: 200,
+        });
+      }
+      return new Response(null, { status: 404 });
+    });
+    try {
+      await runHostedEvent(db, agent, {
+        type: 'suggestion.request',
+        timestamp: new Date().toISOString(),
+        conversation_id: conv.externalId,
+        janis_conversation_id: conv.id,
+        payload: { instruction: 'send a survey widget' },
+      });
+      const parked = await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, conv.id));
+      expect(parked).toHaveLength(0);
+    } finally {
+      env.operatorWorkspaceId = prev;
+    }
   });
 });
 

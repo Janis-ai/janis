@@ -1992,6 +1992,10 @@ button.link:disabled { opacity: .5; cursor: not-allowed; }
   .conv-main { min-width: 420px; }
 }
 .card.suggestion { border-color: var(--accent); }
+/* The draft card scrolls its content at the 34vh cap — the guide input
+   and Send/Edit row pin to the card's bottom edge instead of scrolling
+   away with the draft text. */
+.card.suggestion.draft .draft-foot { position: sticky; bottom: 0; background: var(--bg-2, var(--bg)); padding-bottom: 2px; }
 /* The Ask Janis rail claims ~340px — on the conversation screen at mid widths
    that squeezes the transcript + details into nested scrollbars, so the sidebar
    collapses to icons and the details panel stacks under the transcript in the

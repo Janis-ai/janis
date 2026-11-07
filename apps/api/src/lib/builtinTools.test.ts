@@ -1749,6 +1749,203 @@ describe('stage_reply builtin', () => {
   });
 });
 
+describe('send_reply builtin', () => {
+  const send = () => BUILTIN_TOOLS.find((b) => b.name === 'send_reply')!;
+  const applySend = () => BUILTIN_TOOLS.find((b) => b.name === 'apply_send_reply')!;
+
+  const operatorChat = async (page: string | null, ext: string) => {
+    const [agent2] = await db
+      .select()
+      .from(agents)
+      .where(eq(agents.workspaceId, WS2))
+      .limit(1);
+    const [viewConv] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent2.id,
+        externalId: ext,
+        userProfile: {
+          external_id: USER2,
+          email: 'a@x.com',
+          identity_verified: true,
+          ...(page ? { metadata: { page } } : {}),
+        },
+      })
+      .returning();
+    return { agent2, viewConv };
+  };
+
+  const targetConv = async (ext: string, agentId?: string) => {
+    const [agent2] = agentId
+      ? await db.select().from(agents).where(eq(agents.id, agentId)).limit(1)
+      : await db.select().from(agents).where(eq(agents.workspaceId, WS2)).limit(1);
+    const [t] = await db
+      .insert(conversations)
+      .values({ agentId: agent2.id, externalId: ext, userProfile: { name: 'Ava Chen' } })
+      .returning();
+    return t;
+  };
+
+  const parkedCard = async (convId: string) =>
+    (
+      await db
+        .select()
+        .from(pendingActions)
+        .where(eq(pendingActions.conversationId, convId))
+        .orderBy(desc(pendingActions.createdAt))
+    ).find((p) => p.toolName === 'apply_send_reply' && p.status === 'pending');
+
+  it('targets the open page over a passed uuid or a bare name', async () => {
+    const pageConv = await targetConv('cust:send-page');
+    const otherConv = await targetConv('cust:send-other');
+    // A real-but-wrong uuid: the page still wins.
+    let { viewConv } = await operatorChat(`/conversations/${pageConv.id}`, 'u:test:send1');
+    let out = await send().run(
+      { text: 'hi', conversation: otherConv.id },
+      cctx(viewConv.id),
+    );
+    expect(out).toContain('action_card');
+    let card = await parkedCard(viewConv.id);
+    expect((card!.args as { conversation_id: string }).conversation_id).toBe(pageConv.id);
+    // A bare name resolves the same way.
+    ({ viewConv } = await operatorChat(`/conversations/${pageConv.id}`, 'u:test:send2'));
+    out = await send().run({ text: 'hi', conversation: 'Ava Chen' }, cctx(viewConv.id));
+    expect(out).toContain('action_card');
+    card = await parkedCard(viewConv.id);
+    expect((card!.args as { conversation_id: string }).conversation_id).toBe(pageConv.id);
+  });
+
+  it('refuses when the open page is the concierge chat itself', async () => {
+    const { viewConv } = await operatorChat(null, 'u:test:send-self');
+    await db
+      .update(conversations)
+      .set({
+        userProfile: {
+          external_id: USER2,
+          email: 'a@x.com',
+          identity_verified: true,
+          metadata: { page: `/conversations/${viewConv.id}` },
+        },
+      })
+      .where(eq(conversations.id, viewConv.id));
+    const out = JSON.parse(await send().run({ text: 'hi' }, cctx(viewConv.id)));
+    expect(out.error).toContain('not a customer conversation');
+  });
+
+  it('pulls an inline WIDGET_REF out of the text into a real component', async () => {
+    const pageConv = await targetConv('cust:send-ref');
+    await db.insert(agentWidgets).values({
+      agentId: pageConv.agentId,
+      name: 'favorite-food-survey',
+      spec: {
+        type: 'form',
+        title: 'Favorite food',
+        fields: [{ name: 'food', label: 'Favorite food?', type: 'text' }],
+      },
+    });
+    const { viewConv } = await operatorChat(`/conversations/${pageConv.id}`, 'u:test:send3');
+    const out = await send().run(
+      { text: 'Here you go\nWIDGET_REF: favorite-food-survey' },
+      cctx(viewConv.id),
+    );
+    expect(out).toContain('action_card');
+    const card = await parkedCard(viewConv.id);
+    const args = card!.args as { text: string; widgets: { type: string }[] };
+    expect(args.text).toBe('Here you go');
+    expect(args.widgets).toHaveLength(1);
+    expect(args.widgets[0].type).toBe('form');
+  });
+
+  it('accepts `message` as the text alias', async () => {
+    const pageConv = await targetConv('cust:send-alias');
+    const { viewConv } = await operatorChat(`/conversations/${pageConv.id}`, 'u:test:send4');
+    const out = await send().run({ message: 'alias works' }, cctx(viewConv.id));
+    expect(out).toContain('action_card');
+    const card = await parkedCard(viewConv.id);
+    expect((card!.args as { text: string }).text).toBe('alias works');
+  });
+
+  it('apply_send_reply writes a human message with the widgets on the target thread', async () => {
+    const pageConv = await targetConv('cust:send-apply');
+    const { viewConv } = await operatorChat(`/conversations/${pageConv.id}`, 'u:test:send5');
+    const out = await send().run(
+      { text: 'Your order ships Monday.' },
+      cctx(viewConv.id),
+    );
+    expect(out).toContain('action_card');
+    const card = await parkedCard(viewConv.id);
+    const result = await applySend().run(card!.args as Record<string, unknown>, {
+      db,
+      convId: viewConv.id,
+      workspaceId: WS,
+    });
+    expect(result).not.toContain('error:');
+    const [msg] = await db
+      .select()
+      .from(messages)
+      .where(and(eq(messages.conversationId, pageConv.id), eq(messages.direction, 'human')))
+      .orderBy(desc(messages.createdAt))
+      .limit(1);
+    expect(msg.text).toBe('Your order ships Monday.');
+    expect(msg.authorId).toBe(USER2);
+  });
+
+  it('refuses a viewer member and a hidden agent grant', async () => {
+    const [viewUser] = await db
+      .insert(users)
+      .values({ email: 'viewer@x.com', name: 'Vic' })
+      .returning();
+    await db
+      .insert(memberships)
+      .values({ userId: viewUser.id, workspaceId: WS2, role: 'viewer', acceptedAt: new Date() });
+    const pageConv = await targetConv('cust:send-viewer');
+    const [agent2] = await db.select().from(agents).where(eq(agents.workspaceId, WS2)).limit(1);
+    const [viewerChat] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent2.id,
+        externalId: 'u:test:send-viewer',
+        userProfile: {
+          external_id: viewUser.id,
+          email: 'viewer@x.com',
+          identity_verified: true,
+          metadata: { page: `/conversations/${pageConv.id}` },
+        },
+      })
+      .returning();
+    const out = JSON.parse(await send().run({ text: 'hi' }, cctx(viewerChat.id)));
+    expect(out.error).toContain("viewers can't send replies");
+
+    // A member whose agent_members row is 'hidden' is refused outright.
+    const [hidUser] = await db
+      .insert(users)
+      .values({ email: 'hidden@x.com', name: 'Hank' })
+      .returning();
+    await db
+      .insert(memberships)
+      .values({ userId: hidUser.id, workspaceId: WS2, role: 'member', acceptedAt: new Date() });
+    await db
+      .insert(agentMembers)
+      .values({ agentId: agent2.id, userId: hidUser.id, role: 'hidden', acceptedAt: new Date() });
+    const pageConv2 = await targetConv('cust:send-hidden');
+    const [hidChat] = await db
+      .insert(conversations)
+      .values({
+        agentId: agent2.id,
+        externalId: 'u:test:send-hidden',
+        userProfile: {
+          external_id: hidUser.id,
+          email: 'hidden@x.com',
+          identity_verified: true,
+          metadata: { page: `/conversations/${pageConv2.id}` },
+        },
+      })
+      .returning();
+    const out2 = JSON.parse(await send().run({ text: 'hi' }, cctx(hidChat.id)));
+    expect(out2.error).toContain("don't have access");
+  });
+});
+
 describe('teach_from_conversation + assign_conversation builtins', () => {
   const teachFrom = () => BUILTIN_TOOLS.find((b) => b.name === 'teach_from_conversation')!;
   const assign = () => BUILTIN_TOOLS.find((b) => b.name === 'assign_conversation')!;

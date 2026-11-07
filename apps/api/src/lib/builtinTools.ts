@@ -44,6 +44,7 @@ import {
 } from './slack.js';
 import { normWidgetRef, WidgetComponent, WidgetState, WidgetToolBinding } from './widgets.js';
 import { toolsFor } from './toolExec.js';
+import { agentRoleFor, type AgentRole, type AgentScope } from './access.js';
 import { backfillSentimentAlerts } from './intent.js';
 import { fetchUrlText, normalizeSourceUrl } from './urlSource.js';
 import { importHelpCentre } from './helpCentreImport.js';
@@ -89,6 +90,9 @@ export interface BuiltinTool {
    *  from unsigned conversations: the model can't call what it can't see,
    *  so a forgotten signedInUser check can't become an info leak. */
   publicAnon?: boolean;
+  /** run() parks an approval card — never offered in a suggestion run,
+   *  where a draft staging another draft's card is nonsense. */
+  parksCard?: true;
   run: (args: Record<string, string>, ctx?: BuiltinCtx) => Promise<string>;
 }
 
@@ -433,6 +437,219 @@ async function currentView(
       page.match(/\/inbox\/([0-9a-f-]{36})\b/i)?.[1],
     contactId: page.match(/\/contacts\/([0-9a-f-]{36})\b/i)?.[1],
   };
+}
+
+/** Which conversation a reply-targeting tool (stage_reply / send_reply)
+ *  means. The open console page wins over whatever the model passed — it
+ *  has sent a bare name and a real-but-wrong uuid before; the page is what
+ *  the operator is actually looking at. Only when no conversation page is
+ *  open does a uuid-shaped arg pin the target. */
+async function resolveReplyTarget(
+  ctx: BuiltinCtx,
+  rawConversationArg: unknown,
+): Promise<{ id: string } | { error: string }> {
+  const arg = String(rawConversationArg ?? '').trim();
+  const page = (await currentView(ctx)).conversationId;
+  if (page && page !== ctx.convId) return { id: page };
+  if (/^[0-9a-f-]{36}$/i.test(arg) && arg !== ctx.convId) return { id: arg };
+  if (page === ctx.convId || arg === ctx.convId) {
+    return {
+      error:
+        'the open page is this chat, not a customer conversation — ask them to open the conversation to message',
+    };
+  }
+  return { error: 'no conversation open — ask them to open the conversation they mean' };
+}
+
+/** Load a conversation + its agent and prove the user can reply in it —
+ *  the same scope/role resolution the console session middleware builds:
+ *  workspace members carry a hidden-agent list, agent-scoped users carry
+ *  grants. Returns the scope so the caller's write path re-enforces it. */
+export async function conversationAccess(
+  db: Db,
+  userId: string,
+  convId: string,
+): Promise<
+  | {
+      conv: typeof conversations.$inferSelect;
+      agent: typeof agents.$inferSelect;
+      scope: AgentScope;
+      role: AgentRole;
+    }
+  | { error: string }
+> {
+  const [row] = await db
+    .select({ conv: conversations, agent: agents })
+    .from(conversations)
+    .innerJoin(agents, eq(conversations.agentId, agents.id))
+    .where(eq(conversations.id, convId))
+    .limit(1);
+  if (!row) return { error: 'that conversation does not exist' };
+  const { conv, agent } = row;
+
+  const [member] = await db
+    .select({ role: memberships.role })
+    .from(memberships)
+    .where(
+      and(
+        eq(memberships.userId, userId),
+        eq(memberships.workspaceId, agent.workspaceId),
+        isNotNull(memberships.acceptedAt),
+      ),
+    )
+    .limit(1);
+
+  let scope: AgentScope;
+  let workspaceRole: AgentRole;
+  if (member) {
+    const hiddenRows = await db
+      .select({ agentId: agentMembers.agentId })
+      .from(agentMembers)
+      .innerJoin(agents, eq(agentMembers.agentId, agents.id))
+      .where(
+        and(
+          eq(agentMembers.userId, userId),
+          eq(agents.workspaceId, agent.workspaceId),
+          eq(agentMembers.role, 'hidden'),
+          isNotNull(agentMembers.acceptedAt),
+        ),
+      );
+    scope = { grants: null, hidden: hiddenRows.map((h) => h.agentId) };
+    workspaceRole = member.role as AgentRole;
+  } else {
+    const granted = await db
+      .select({ agentId: agentMembers.agentId, role: agentMembers.role })
+      .from(agentMembers)
+      .innerJoin(agents, eq(agentMembers.agentId, agents.id))
+      .where(
+        and(
+          eq(agentMembers.userId, userId),
+          eq(agents.workspaceId, agent.workspaceId),
+          isNotNull(agentMembers.acceptedAt),
+        ),
+      );
+    const usable = granted.filter((g) => g.role !== 'hidden');
+    if (!usable.length) return { error: "you don't have access to that conversation" };
+    scope = {
+      grants: Object.fromEntries(usable.map((g) => [g.agentId, (g.role ?? 'member') as AgentRole])),
+      hidden: [],
+    };
+    workspaceRole = 'viewer'; // no workspace role — the grant map decides
+  }
+
+  const role = await agentRoleFor(db, userId, workspaceRole, scope, agent.id, agent.workspaceId);
+  if (!role) return { error: "you don't have access to that conversation" };
+  if (role === 'viewer') return { error: "viewers can't send replies" };
+  return { conv, agent, scope, role };
+}
+
+/** Shared reply composer for stage_reply / send_reply: text + components.
+ *  The concierge writes `WIDGET_REF: name` inline in the text instead of
+ *  the widgets arg — pull each occurrence into a real ref (optional JSON
+ *  data object straight after the name) and strip the token so it never
+ *  reaches the customer. Refs resolve through the target agent's saved
+ *  components exactly like the suggestion path. */
+async function composeReply(
+  ctx: BuiltinCtx,
+  agent: typeof agents.$inferSelect,
+  workspaceId: string,
+  convId: string,
+  args: Record<string, unknown>,
+): Promise<{ text: string; widgets: WidgetComponent[]; failures: string[] }> {
+  let text = String(args.text ?? args.message ?? '').trim();
+  const rawWidgets: unknown[] = [...(argObjectArray(args.widgets) ?? [])];
+  const REF = /WIDGET_REF:\s*([a-z0-9_-]+)\s*(\{[^\n{}]*\})?/gi;
+  for (const m of text.matchAll(REF)) {
+    let data: Record<string, unknown> | undefined;
+    if (m[2]) {
+      try {
+        data = JSON.parse(m[2]) as Record<string, unknown>;
+      } catch {
+        /* malformed ref data — resolve bare */
+      }
+    }
+    rawWidgets.push({ ref: m[1], ...(data ? { data } : {}) });
+  }
+  text = text
+    .replace(REF, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const { resolveWidgetRef } = await import('./hostedAgent.js');
+  const { loadSecretsMap } = await import('./secrets.js');
+  const { connectionSecrets } = await import('./connections.js');
+  const agentToolDefs = toolsFor(agent);
+  const refSpecs = new Map<string, import('./hostedAgent.js').SavedWidgetDef>();
+  for (const w of await ctx.db
+    .select({
+      name: agentWidgets.name,
+      description: agentWidgets.description,
+      spec: agentWidgets.spec,
+      states: agentWidgets.states,
+      tool: agentWidgets.tool,
+    })
+    .from(agentWidgets)
+    .where(eq(agentWidgets.agentId, agent.id))) {
+    const spec = WidgetComponent.safeParse(w.spec);
+    if (!spec.success) continue;
+    const states = z.array(WidgetState).safeParse(w.states ?? []);
+    const tool = w.tool ? WidgetToolBinding.safeParse(w.tool) : null;
+    refSpecs.set(normWidgetRef(w.name), {
+      spec: spec.data,
+      states: states.success ? states.data : undefined,
+      tool: tool?.success ? tool.data : undefined,
+      description: w.description ?? undefined,
+    });
+  }
+  const secrets = {
+    ...(await loadSecretsMap(ctx.db, agent.id)),
+    ...(await connectionSecrets(ctx.db, agent.id)),
+  };
+  const runCtx = {
+    db: ctx.db,
+    convId,
+    workspaceId,
+    agent,
+    suggesting: true as const,
+  };
+  const widgets: WidgetComponent[] = [];
+  const failures: string[] = [];
+  for (const w of rawWidgets.slice(0, 3)) {
+    const ref = (w as { ref?: unknown }).ref;
+    if (typeof ref === 'string') {
+      const def = refSpecs.get(normWidgetRef(ref));
+      if (!def) {
+        failures.push(`"${ref}" is not a saved component on ${agent.name}`);
+        continue;
+      }
+      const spec = await resolveWidgetRef(
+        def,
+        (w as { data?: Record<string, unknown> }).data,
+        agentToolDefs,
+        secrets,
+        runCtx,
+        new Set<string>(),
+        undefined,
+        undefined,
+        ref,
+      );
+      if (spec) widgets.push(spec);
+      else failures.push(`"${ref}" resolved to nothing (bound tool missing, gated, or errored)`);
+    } else {
+      const spec = WidgetComponent.safeParse(w);
+      if (spec.success) widgets.push(spec.data);
+      else failures.push(`a component spec failed validation (${spec.error.issues[0]?.message})`);
+    }
+  }
+  return { text, widgets, failures };
+}
+
+/** Name for a reply card — the customer's profile name, else email. */
+function replyTargetName(conv: typeof conversations.$inferSelect): string {
+  const p = (conv.userProfile ?? {}) as UserProfile;
+  return p.name ?? p.email ?? 'the customer';
 }
 
 /** The visitor-context block a conversation's userProfile carries — for a
@@ -1045,6 +1262,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'create_agent',
+    parksCard: true,
     description:
       "Propose creating a new hosted AI agent — 'take a prompt, get a working agent'. ONLY for signed-in users administering a workspace: if the visitor is not signed in (anonymous chat or voice caller), do NOT offer this — tell them to sign in first instead. Confirm the name and purpose with the visitor, then call this with their description as `purpose` — it is stored verbatim as the agent's builder brief and drives the drafted instructions, greeting, and setup suggestions, exactly as if they had typed it into the Create step. Posts an approval card showing the name + drafted instructions — nothing is created until the visitor approves. On approval the builder's Create page opens for the new agent — do NOT offer channels, the builder covers that next. Ask which workspace only if they administer more than one. If the visitor sends more setup material or corrections while the card is still pending (extra instructions, files, a fuller persona), call this AGAIN with everything merged in — the same card updates in place rather than stacking a second one, so the approval covers the latest details.",
     params: {
@@ -1317,6 +1535,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'update_agent_brief',
+    parksCard: true,
     description:
       "Propose changing an agent's builder brief — the Create-page 'what should this agent do' description — and/or its name. The new brief re-drafts the agent's instructions, tone, greeting, and setup suggestions to match, exactly like editing the brief on the Create page and applying Janis's suggested changes. Posts an approval card — nothing changes until the visitor approves. For small edits to existing instructions (add a rule, fix a phrase) use update_agent instead — this is for redirecting the agent's whole purpose. Admin-only.",
     params: {
@@ -2419,6 +2638,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'teach_agent',
+    parksCard: true,
     description:
       "Propose a knowledge entry for an agent in the visitor's workspace — the fix for a recurring gap, so the agent answers it next time. Draft the entry (a factual line the agent can quote, e.g. \"Refunds under $50 are auto-approved within 24h\") and call this as soon as the proposal is reasonable — it posts an approval card in the chat, no verbal confirmation needed. For chat components/widgets the agent renders in conversation, use save_widget — a knowledge entry is text facts, not a component. Admin-only.",
     params: {
@@ -2515,6 +2735,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'add_routing_rule',
+    parksCard: true,
     description:
       "Propose an alert/routing rule on an agent in the visitor's workspace — the same rules the Escalation tab manages: keyword match → assign/alert, inactivity timeout → assign/alert, auto_assign round-robin pool, or failure/handoff_request/custom_alert notifications. Posts an approval card — nothing is created until the visitor approves. Admin-only.",
     params: {
@@ -2692,6 +2913,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'teach_from_conversation',
+    parksCard: true,
     description:
       "Teach an agent from a real conversation — 'that rescue was good, add it to the bot's knowledge'. Call with just `conversation` (uuid or customer name/email) to read the transcript first, then call again with `entry` — one line per fact the human resolved — to post a Teach card against that conversation's agent. Admin-only to park.",
     params: {
@@ -2790,6 +3012,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'assign_conversation',
+    parksCard: true,
     description:
       "Assign a conversation in the visitor's workspace to a teammate — 'put that waiting one on me' or 'give it to Ann'. Posts an approval card; on approve the inbox assigns it and refreshes live. Any member can propose.",
     params: {
@@ -2936,6 +3159,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'update_agent',
+    parksCard: true,
     description:
       "Propose an agent settings change in the visitor's workspace — rename, instructions/system-prompt changes, tone, greeting text, greeting on/off, quick-reply chips, CSAT survey (enabled/prompt/thanks), handoff re-alert minutes, auto-assign, widget accent colour, or email alerts. Posts an approval card — nothing changes until the visitor approves. Pass ONLY the params the visitor actually asked to change — every param is a real write; filling unrequested fields with current or guessed values makes an unsafe card. For how-do-I questions, answer with a link to the settings page instead of proposing a card. For chat components/widgets the agent shows in conversation, use save_widget instead. Admin-only.",
     params: {
@@ -3244,6 +3468,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'save_widget',
+    parksCard: true,
     description:
       "Propose saving a chat component on an agent in the visitor's workspace — the same cards/options/form/status/receipt blocks the console's Chat components composer manages. The saved component renders verbatim when the agent emits WIDGET_REF, or pins to the webchat greeting with auto_greet. Use this when the visitor asks to add a widget/component to an agent — NOT update_agent (that's settings: greeting, chips, CSAT). Posts an approval card — nothing is saved until the visitor approves. If the visitor sends corrections while the card is still pending (different fields, a changed binding), call this AGAIN with the revised details — a card for the same component updates in place rather than stacking a second one. Admin-only.",
     params: {
@@ -3417,93 +3642,29 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
       if (!('ws' in resolved)) return JSON.stringify(resolved);
       const ws = resolved.ws;
 
-      // Target the open conversation page, not this chat — currentView
-      // reads the operator's `page` trait so the model can't misaddress a
-      // staged draft to its own thread.
-      const targetId = String(args.conversation ?? '').trim() || (await currentView(ctx)).conversationId;
-      if (targetId === ctx.convId) {
-        return JSON.stringify({
-          error: 'the open page is this chat, not a customer conversation — ask them to open the conversation to draft for',
-        });
-      }
-      if (!targetId) {
-        return JSON.stringify({ error: 'no conversation open — ask them to open the thread to draft for, or pass a conversation id' });
-      }
+      // Target the open conversation page, not this chat — the page the
+      // operator is looking at wins over whatever the model passed.
+      const target = await resolveReplyTarget(ctx, args.conversation);
+      if ('error' in target) return JSON.stringify(target);
       const [conv] = await ctx.db
         .select()
         .from(conversations)
         .innerJoin(agents, eq(conversations.agentId, agents.id))
-        .where(and(eq(conversations.id, targetId), eq(agents.workspaceId, ws.id)))
+        .where(and(eq(conversations.id, target.id), eq(agents.workspaceId, ws.id)))
         .limit(1);
       if (!conv) return JSON.stringify({ error: 'that conversation is not in this workspace' });
       const agent = conv.agents;
 
-      const text = String(args.text ?? '').trim();
-      const rawWidgets = argObjectArray(args.widgets) ?? [];
-      if (!text && !rawWidgets.length) {
-        return JSON.stringify({ error: 'nothing to stage — pass reply text and/or components' });
-      }
-
       // Components: inline specs validate against the schema; refs resolve
       // through the saved-component catalog + bound-tool machinery the
       // suggestion path uses, so the card shows exactly what will send.
-      const { resolveWidgetRef } = await import('./hostedAgent.js');
-      const { loadSecretsMap } = await import('./secrets.js');
-      const { connectionSecrets } = await import('./connections.js');
-      const agentToolDefs = toolsFor(agent);
-      const refSpecs = new Map<string, import('./hostedAgent.js').SavedWidgetDef>();
-      for (const w of await ctx.db
-        .select({
-          name: agentWidgets.name,
-          description: agentWidgets.description,
-          spec: agentWidgets.spec,
-          states: agentWidgets.states,
-          tool: agentWidgets.tool,
-        })
-        .from(agentWidgets)
-        .where(eq(agentWidgets.agentId, agent.id))) {
-        const spec = WidgetComponent.safeParse(w.spec);
-        if (!spec.success) continue;
-        const states = z.array(WidgetState).safeParse(w.states ?? []);
-        const tool = w.tool ? WidgetToolBinding.safeParse(w.tool) : null;
-        refSpecs.set(normWidgetRef(w.name), {
-          spec: spec.data,
-          states: states.success ? states.data : undefined,
-          tool: tool?.success ? tool.data : undefined,
-          description: w.description ?? undefined,
-        });
-      }
-      const secrets = { ...(await loadSecretsMap(ctx.db, agent.id)), ...(await connectionSecrets(ctx.db, agent.id)) };
-      const runCtx = { db: ctx.db, convId: conv.conversations.id, workspaceId: ws.id, agent, suggesting: true as const };
-      const widgets: unknown[] = [];
-      const failures: string[] = [];
-      for (const w of rawWidgets.slice(0, 3)) {
-        const ref = (w as { ref?: unknown }).ref;
-        if (typeof ref === 'string') {
-          const def = refSpecs.get(normWidgetRef(ref));
-          if (!def) {
-            failures.push(`"${ref}" is not a saved component on ${agent.name}`);
-            continue;
-          }
-          const spec = await resolveWidgetRef(
-            def,
-            (w as { data?: Record<string, unknown> }).data,
-            agentToolDefs,
-            secrets,
-            runCtx,
-            new Set<string>(),
-            undefined,
-            undefined,
-            ref,
-          );
-          if (spec) widgets.push(spec);
-          else failures.push(`"${ref}" resolved to nothing (bound tool missing, gated, or errored)`);
-        } else {
-          const spec = WidgetComponent.safeParse(w);
-          if (spec.success) widgets.push(spec.data);
-          else failures.push(`a component spec failed validation (${spec.error.issues[0]?.message})`);
-        }
-      }
+      const { text, widgets, failures } = await composeReply(
+        ctx,
+        agent,
+        ws.id,
+        conv.conversations.id,
+        args,
+      );
       if (!text && !widgets.length) {
         return JSON.stringify({ error: `nothing sendable — ${failures.join('; ') || 'empty draft'}` });
       }
@@ -3520,6 +3681,116 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
           `Staged on the draft card — the operator reviews and sends it there.` +
           (failures.length ? ` Dropped: ${failures.join('; ')}.` : ''),
       });
+    },
+  },
+  {
+    name: 'send_reply',
+    parksCard: true,
+    description:
+      "Send a message — text plus optional components — to the person in the conversation the operator has open: 'send Ava the survey', 'message them that it ships Monday', 'reply to this customer'. Posts an approval card; nothing sends until the operator approves, and on approve it goes out as the operator's own reply (taking the thread over from the bot). The target resolves from the console page they have open — never this chat; pass `conversation` only when no conversation page is open. Admin or member access to that conversation's agent required — a teammate with access can send to any thread they can read.",
+    params: {
+      text: 'the message text to send the customer, verbatim',
+      widgets:
+        'optional JSON array — inline component specs [{"type":"form",...}] or refs [{"ref":"component-name","data":{…}}] resolved to saved specs on the target agent. Inline specs render as-is but cannot save answers anywhere; a form that must record answers through a tool has to be a saved component with a submit binding (save_widget) — send it by {"ref": name} after the card is approved',
+      conversation: 'conversation id — only needed when no conversation page is open',
+    },
+    available: (ws) => Boolean(env.operatorWorkspaceId) && ws === env.operatorWorkspaceId,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'visitor is not a signed-in Janis user — ask them to sign in first' });
+      }
+      const target = await resolveReplyTarget(ctx, args.conversation);
+      if ('error' in target) return JSON.stringify(target);
+      const access = await conversationAccess(ctx.db, user.id, target.id);
+      if ('error' in access) return JSON.stringify(access);
+      const { conv, agent } = access;
+
+      const { text, widgets, failures } = await composeReply(
+        ctx,
+        agent,
+        agent.workspaceId,
+        conv.id,
+        args,
+      );
+      if (!text && !widgets.length) {
+        return JSON.stringify({ error: `nothing sendable — ${failures.join('; ') || 'empty message'}` });
+      }
+      if (conv.state === 'archived') {
+        return JSON.stringify({ error: 'that conversation is archived' });
+      }
+      const name = replyTargetName(conv);
+      return parkConciergeAction(
+        ctx,
+        'apply_send_reply',
+        { conversation_id: conv.id, text, widgets },
+        `Send to ${name}`,
+        {
+          to: name,
+          ...(text ? { message: text.slice(0, 300) } : {}),
+          ...(widgets.length
+            ? { components: `${widgets.length} (${widgets.map((w) => w.type).join(', ')})` }
+            : {}),
+          ...(failures.length ? { dropped: failures.join('; ') } : {}),
+        },
+        // Re-pitching a send to the same thread revises the pending card —
+        // an operator approving the stale one sends the old text.
+        (p) =>
+          p.toolName === 'apply_send_reply' &&
+          (p.args as { conversation_id?: string }).conversation_id === conv.id,
+      );
+    },
+  },
+  {
+    // Executor for approved send_reply cards — hidden from the model.
+    name: 'apply_send_reply',
+    description: 'internal — executes an approved send_reply action card',
+    available: () => false,
+    run: async (args, ctx) => {
+      if (!ctx) return 'error: no conversation context';
+      const user = await signedInUser(ctx);
+      if (!user) {
+        return JSON.stringify({ error: 'the decider is not a signed-in Janis user' });
+      }
+      const convId = String(args.conversation_id ?? '').trim();
+      if (!convId) return JSON.stringify({ error: 'missing conversation_id' });
+      // Re-verify at send time — the approver may have lost access (or the
+      // page moved) since the card was parked.
+      const access = await conversationAccess(ctx.db, user.id, convId);
+      if ('error' in access) return JSON.stringify(access);
+      const { conv, agent, scope } = access;
+      const widgetsParsed = z
+        .array(WidgetComponent)
+        .max(8)
+        .safeParse(argObjectArray(args.widgets) ?? []);
+      if (!widgetsParsed.success) {
+        return JSON.stringify({ error: `invalid widgets — ${widgetsParsed.error.issues[0]?.message}` });
+      }
+      const text = String(args.text ?? '').trim();
+      const name = replyTargetName(conv);
+      const { humanReply, TakeoverError } = await import('../services/takeover.js');
+      try {
+        const { delivery } = await humanReply(
+          ctx.db,
+          agent.workspaceId,
+          conv.id,
+          user,
+          text,
+          undefined,
+          false,
+          undefined,
+          scope,
+          { widgets: widgetsParsed.data },
+        );
+        if (!delivery.delivered) {
+          return `Posted to ${name}'s conversation, but the channel didn't accept it: ${delivery.error ?? 'delivery failed'}.`;
+        }
+        return `Sent to ${name}.`;
+      } catch (err) {
+        if (err instanceof TakeoverError) return `error: ${err.message}`;
+        throw err;
+      }
     },
   },
   {
@@ -3600,6 +3871,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'update_channel',
+    parksCard: true,
     description:
       "Propose a channel settings change in the visitor's workspace — rename a channel (the console label like 'Bubble', which is also the chat bubble's default header title) or set a bubble channel's header title. Posts an approval card — nothing changes until the visitor approves. Use this when the visitor asks to rename the bubble/channel itself, NOT the agent — that is update_agent's name param. Admin-only.",
     params: {
@@ -3740,6 +4012,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'create_channel',
+    parksCard: true,
     description:
       "Propose adding a Bubble (webchat) channel to an existing agent in a workspace the visitor administers — posts an approval card; nothing is created until they approve. Use when the visitor wants web chat / a site widget for an agent — DO NOT describe manual steps when this card can do it. Other kinds (Messenger, email, SMS, WhatsApp) need credential/OAuth setup on the agent's Channels page — link that page instead. Admin-only.",
     params: {
@@ -3841,6 +4114,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'add_knowledge_source',
+    parksCard: true,
     description:
       "Propose adding a knowledge SOURCE to an agent in the visitor's workspace — kind=url crawls a web page (and re-crawls it on the refresh cadence, like the console's Websites source), kind=site imports a WHOLE website or help centre as one site row with per-page sources nested under it (Zendesk API → sitemap → link crawl), kind=text saves a pasted document as a file (like an uploaded doc). For a one-line fact use teach_agent instead; for a public help-centre article use draft_article. Posts an approval card — nothing is added until the visitor approves. Admin-only.",
     params: {
@@ -4054,6 +4328,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'draft_article',
+    parksCard: true,
     description:
       "Propose a help-centre article on an agent in the visitor's workspace — the public KB customers read at /help/{agent}. Drafts by default; pass publish=true to publish immediately. Posts an approval card — nothing is saved until the visitor approves. For internal knowledge the agent quotes in chat, use teach_agent or add_knowledge_source instead. Admin-only.",
     params: {
@@ -4176,6 +4451,7 @@ export const BUILTIN_TOOLS: BuiltinTool[] = [
   },
   {
     name: 'save_regression_test',
+    parksCard: true,
     description:
       "Propose saving a regression test on an agent in the visitor's workspace — the same kind of test the console's Test tab saves: a customer message is replayed and the judge checks the reply against the expectation. Use when the visitor wants to pin down behavior ('make sure it always does X', 'save this as a test'). Posts an approval card — nothing is saved until the visitor approves. Admin-only.",
     params: {

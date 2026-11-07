@@ -1021,13 +1021,13 @@ export function systemPrompt(
     parts.push(
       '\nNow write the reply you would send to the customer right now — your single best, most confident answer to their latest message, in your own voice. If details are missing, give the best answer you can and ask one targeted follow-up rather than hedging or deferring. Output only the reply text — no speaker labels, no preamble; never output [HANDOFF] in a draft. When the reply needs an action — sending a verification email, updating a profile, a gated tool — CALL that tool so it attaches to the draft as an operator-decidable card; never narrate an action you did not take, and never mention consoles, approvals or internal steps to the customer. And when the reply needs a component — a form, cards, an options picker — emit it as WIDGET: markup (or WIDGET_REF: name for a saved one) on its own line, never mid-sentence; never describe a component as a bulleted list of its fields.' +
         (opts.operator
-          ? ' For apply/save work (a component, a knowledge entry, a settings change) call the apply_*/save_widget tool so the approval card carries it — never emit raw JSON, code blocks or spec blobs in the draft text.'
+          ? ' Components belong inline in this draft — emit WIDGET: markup (or WIDGET_REF: name for a saved one) on its own line. A draft never saves components or changes settings, and never mentions approval cards, consoles or internal steps to the customer.'
           : ''),
     );
   } else {
     parts.push(
       (opts.operator
-        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When they ask you to draft, compose, or write a reply for a conversation or thread, build it and call stage_reply — it lands on the draft card of the thread they have open for one-click send; never paste the draft into this chat and call it staged. When you link to a console page, link it (https://www.janis.ai/…) — never leave a destination as bare bold text; use a URL a tool returned verbatim, or build it from a real uuid — your context lists agents and workspaces by name only (ids hidden); resolve the id you need through a tool — select_agent/inspect_agent return the agent's id and urls, lookup_contact/read_conversation return the visitor's full trait strings, and current_agent names the selected agent. The `page` trait is the console page the operator is on RIGHT NOW — restamped on every message, so when they say 'this conversation', 'this contact', 'this user here' or 'the thread I'm looking at', call read_conversation or lookup_contact with no argument and it resolves the open page; never guess or transcribe a conversation or contact uuid. When the referent is ambiguous between this chat and a console page they have open — 'this conversation', 'this thread', 'who is the customer here' — prefer the page: those asks mean what they're looking at, not your own chat (you chatting with them does not make them this thread's customer); resolve it with the tool rather than answering from this chat's own details. A contact's account.plan/role/workspace traits describe that person's OWN Janis account — 'their workspace' is the workspace named in their traits, never yours just because you can see it. Agent pages live at /agents/{agent-id}/{section} — sections: behavior (?sub=instructions (covers greeting + quick replies too), components — sidebar label 'Behavior'), knowledge (?sub=sources, gaps — articles manage as a row inside Sources), channels (/{channel-id} for one channel), integrations ('Actions'), components, tests ('Test'), settings (?sub=general, csat, escalation, team) — plus /agents/{agent-id}/inbox (/{conv-id} for a thread), /contacts, /campaigns, /reports; workspace-wide: /conversations (/{conv-id}), /contacts (/{id}), /campaigns, /reports, /errors, /billing, /settings?section=workspace|me|csat|escalation|team, /docs, and setup steps at /agents/new/{agent-id}?step=teach|guide|abilities|try|deploy. Every {…} slot needs a real uuid — take it verbatim from a tool result, never emit the placeholder itself or a slug or a kind name in an id slot, and when the context names no specific agent never emit an agent-scoped URL at all (link to https://www.janis.ai/agents or describe where to click in words). The console is a single-page app but every route above is a real browser deep link — never claim deep links don't exist or that the address bar can't reach them, and emit the full https URL, not a relative path or a code span. When the operator asks for a link, give the deep link — do not reply with click-path instructions instead. Never point the operator at a Google search or external docs for console navigation — you are the product's help desk; if you truly cannot construct a URL, say so plainly rather than outsourcing the answer to a search engine. Pick tools by domain: questions about an agent's setup, knowledge, channels or settings are answered by inspect_agent — never by billing or catalogue tools; stripe_*/product/price lookups exist only for billing, plan and charge questions about the workspace's own subscription, and a 'show me the knowledge' ask is never a product list. Never call a tool just to have a widget or cards to show — widgets come only from tools whose data the question itself asked for." +
+        ? "\nYou are the operator's copilot — the person messaging you is a signed-in teammate with console access, not an end customer. Prefer acting through your tools (with approval cards where they exist) over explaining how to do it by hand. When they ask you to message, send or reply to the person in a conversation they have open, call send_reply — it posts an approval card and sends on approve; when they ask for a draft to review first, call stage_reply. Both target the conversation page they have open, never this chat — don't pass a conversation unless no conversation page is open, and never pass a name; never paste the message here and call it sent or staged. When you link to a console page, link it (https://www.janis.ai/…) — never leave a destination as bare bold text; use a URL a tool returned verbatim, or build it from a real uuid — your context lists agents and workspaces by name only (ids hidden); resolve the id you need through a tool — select_agent/inspect_agent return the agent's id and urls, lookup_contact/read_conversation return the visitor's full trait strings, and current_agent names the selected agent. The `page` trait is the console page the operator is on RIGHT NOW — restamped on every message, so when they say 'this conversation', 'this contact', 'this user here' or 'the thread I'm looking at', call read_conversation or lookup_contact with no argument and it resolves the open page; never guess or transcribe a conversation or contact uuid. When the referent is ambiguous between this chat and a console page they have open — 'this conversation', 'this thread', 'who is the customer here' — prefer the page: those asks mean what they're looking at, not your own chat (you chatting with them does not make them this thread's customer); resolve it with the tool rather than answering from this chat's own details. A contact's account.plan/role/workspace traits describe that person's OWN Janis account — 'their workspace' is the workspace named in their traits, never yours just because you can see it. Agent pages live at /agents/{agent-id}/{section} — sections: behavior (?sub=instructions (covers greeting + quick replies too), components — sidebar label 'Behavior'), knowledge (?sub=sources, gaps — articles manage as a row inside Sources), channels (/{channel-id} for one channel), integrations ('Actions'), components, tests ('Test'), settings (?sub=general, csat, escalation, team) — plus /agents/{agent-id}/inbox (/{conv-id} for a thread), /contacts, /campaigns, /reports; workspace-wide: /conversations (/{conv-id}), /contacts (/{id}), /campaigns, /reports, /errors, /billing, /settings?section=workspace|me|csat|escalation|team, /docs, and setup steps at /agents/new/{agent-id}?step=teach|guide|abilities|try|deploy. Every {…} slot needs a real uuid — take it verbatim from a tool result, never emit the placeholder itself or a slug or a kind name in an id slot, and when the context names no specific agent never emit an agent-scoped URL at all (link to https://www.janis.ai/agents or describe where to click in words). The console is a single-page app but every route above is a real browser deep link — never claim deep links don't exist or that the address bar can't reach them, and emit the full https URL, not a relative path or a code span. When the operator asks for a link, give the deep link — do not reply with click-path instructions instead. Never point the operator at a Google search or external docs for console navigation — you are the product's help desk; if you truly cannot construct a URL, say so plainly rather than outsourcing the answer to a search engine. Pick tools by domain: questions about an agent's setup, knowledge, channels or settings are answered by inspect_agent — never by billing or catalogue tools; stripe_*/product/price lookups exist only for billing, plan and charge questions about the workspace's own subscription, and a 'show me the knowledge' ask is never a product list. Never call a tool just to have a widget or cards to show — widgets come only from tools whose data the question itself asked for." +
             slackSurfaceNote(conv)
         : '') +
         (handoffOff
@@ -4144,10 +4144,18 @@ export async function complete(
                   'approval_required: this action needs a human teammate to approve it before it runs — describe it in the suggestion rather than claiming it was done')
                 : await customerBuiltin(ctx, args)
               : builtin
-                ? await builtin.run(
-                    Object.fromEntries(Object.entries(args).map(([k, v]) => [k, String(v)])),
-                    ctx,
-                  )
+                ? ctx?.suggesting &&
+                    (builtin.parksCard ||
+                      builtin.name === 'stage_reply' ||
+                      builtin.name === 'send_reply')
+                  ? // Defence in depth — these are filtered out of the
+                    // suggestion menu already, but a repeat/misrouted call
+                    // must still not park a card or stage a draft.
+                    'error: not available in a draft — put components inline with WIDGET: markup'
+                  : await builtin.run(
+                      Object.fromEntries(Object.entries(args).map(([k, v]) => [k, String(v)])),
+                      ctx,
+                    )
                 : tool
                   ? gated
                     ? ctx!.suggesting
@@ -4159,7 +4167,42 @@ export async function complete(
                           ? { country: ctx.shopperMarket }
                           : {},
                       })
-                  : `error: unknown tool ${call.function.name}`;
+                  : (() => {
+                      // The suggestion menu withholds card-parking/reply
+                      // builtins, but a draft on the concierge calls them
+                      // anyway — its persona and this thread's history
+                      // push save_widget. The call's spec arg IS the
+                      // component it wanted — attach it to the draft
+                      // instead of feeding an "unknown tool" error it
+                      // narrates to the customer (or invents a human
+                      // handoff to cover).
+                      if (ctx?.suggesting) {
+                        const enabled =
+                          ((ctx.agent?.config ?? {}) as { builtin_tools?: string[] })
+                            .builtin_tools ?? [];
+                        if (enabled.includes(call.function.name)) {
+                          if (call.function.name === 'save_widget') {
+                            const raw = args.spec;
+                            let spec: unknown = raw;
+                            if (typeof raw === 'string') {
+                              try {
+                                spec = JSON.parse(raw);
+                              } catch {
+                                spec = undefined;
+                              }
+                            }
+                            const parsed =
+                              spec !== undefined ? WidgetComponent.safeParse(spec) : null;
+                            if (parsed?.success) {
+                              toolWidgets.push(parsed.data);
+                              return 'component attached to the draft — it renders with your reply; now write the reply text only';
+                            }
+                          }
+                          return 'error: not available in a draft — put components inline with WIDGET: markup';
+                        }
+                      }
+                      return `error: unknown tool ${call.function.name}`;
+                    })();
           if (result.startsWith('error') || result.startsWith('{"error"')) {
             outcome = 'failed';
             // The run-degradation alert only records "tool failed: X" —
@@ -5499,6 +5542,21 @@ export async function runHostedEvent(
         description: w.description ?? undefined,
       });
     }
+    // Drafts never park Copilot cards — a save_widget/stage card parked
+    // mid-draft sits in a rail the operator may not even have open, and
+    // a draft staging/sending a draft is nonsense. Offer the rest.
+    const enabledForDraft = enabledBuiltins(
+      ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
+      agent.workspaceId,
+      ((conv.userProfile ?? {}) as { identity_verified?: boolean }).identity_verified === true,
+    );
+    const draftOnly = (b: { parksCard?: true; name: string }) =>
+      !b.parksCard && b.name !== 'stage_reply' && b.name !== 'send_reply';
+    // The agent's own persona may still say "use save_widget for a
+    // component" — with the tool withheld the model calls it anyway, hits
+    // unknown-tool and narrates the failure to the customer. Name what's
+    // withheld and what replaces it.
+    const withheld = enabledForDraft.filter((b) => !draftOnly(b)).map((b) => b.name);
     const shopperVerified =
       !!ctx.identity?.operator ||
       !!(ctx.identity?.emails?.size || ctx.identity?.ids?.size);
@@ -5519,6 +5577,9 @@ export async function runHostedEvent(
       ((await campaignP) ?? '') +
       (instruction
         ? `\n\nThe operator directing this draft asked for: "${instruction.replace(/"/g, "'")}". Shape the reply around it — what to say, what to offer, which component to include — and call whatever tools it implies. Never quote the instruction or mention that the draft was directed; the customer sees only the reply.`
+        : '') +
+      (withheld.length
+        ? `\n\nThis draft cannot use ${withheld.join(', ')} — those setup tools run only in Copilot, whatever your instructions above say about them. A survey, form, picker or set of cards the reply needs goes inline in this reply as a WIDGET: line (a saved component as a WIDGET_REF: line) — build it directly. Never tell the customer a tool is unavailable, and never ask anyone to build a component.`
         : '');
     const blessedUrls = blessedUrlsFor(agent, prompt, history);
     const result = await generateReply(
@@ -5529,11 +5590,7 @@ export async function runHostedEvent(
       agentToolDefs,
       secrets,
       ctx,
-      enabledBuiltins(
-        ((agent.config ?? {}) as { builtin_tools?: string[] }).builtin_tools,
-        agent.workspaceId,
-        ((conv.userProfile ?? {}) as { identity_verified?: boolean }).identity_verified === true,
-      ),
+      enabledForDraft.filter(draftOnly),
     ).catch(() => null);
     if (result) {
       await recordLlmUsage(db, {
@@ -5635,6 +5692,9 @@ export async function runHostedEvent(
           refs.push({ name: normWidgetRef(name) });
           return '';
         })
+        // A ref quoted in backticks leaves an empty code span behind
+        // ("by emitting `WIDGET_REF: x`" → "by emitting ``") — drop it.
+        .replace(/`\s*`/g, '')
         .replace(/[ \t]{2,}/g, ' ')
         .replace(/\s+([.,!?])/g, '$1')
         .trim();

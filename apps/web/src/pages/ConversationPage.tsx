@@ -623,9 +623,12 @@ export default function ConversationPage() {
   // return form". Rides /suggest as `instruction`; the landed suggestion
   // echoes it back via payload.instruction.
   const [guide, setGuide] = useState('');
-  // The instruction went to the concierge instead of /suggest — the card
-  // shows a quiet receipt until the staged draft lands.
+  // The operator handed the draft off to Copilot — the card shows a quiet
+  // receipt until a staged draft lands.
   const [routedToCopilot, setRoutedToCopilot] = useState(false);
+  // The guide text behind the current draft — the Copilot hand-off seed
+  // carries it forward so the concierge knows what the draft is for.
+  const [lastInstruction, setLastInstruction] = useState<string | null>(null);
   const guideRef = useRef<HTMLTextAreaElement>(null);
   // Autosize like the composer — a pasted multi-line brief shouldn't
   // collapse into a one-line scroll.
@@ -681,6 +684,7 @@ export default function ConversationPage() {
     setSuggestOpen(false);
     setGuide('');
     setRoutedToCopilot(false);
+    setLastInstruction(null);
     setOb(() => []);
     setError('');
     receiptFor.current = null;
@@ -761,43 +765,19 @@ export default function ConversationPage() {
     suggest.mutate(undefined);
   };
 
-  // Guided draft — the guide input's submit. A real instruction goes to
-  // the concierge, which builds the procedure conversationally (inline
-  // components, tool wiring, chained asks) and stages the result back
-  // onto this card via stage_reply. No guide = fast one-shot /suggest.
-  // The concierge thread itself (the operator's own webchat) and accounts
-  // without a copilot fall back to the one-shot — a seed posted into the
-  // concierge's own thread would just chat back, never stage a draft.
+  // Guided draft — the guide input's submit. Draft-first: any instruction
+  // (or none) runs the one-shot /suggest; Copilot is the escalation path
+  // via "Continue in Copilot" on the card, not the default route.
   const guidedSuggest = () => {
+    if (suggest.isPending) return;
     const instruction = guide.trim();
-    const selfThread =
-      !!me?.user?.id &&
-      (c.external_id === `webchat:u:${me.user.id}` ||
-        c.external_id.startsWith(`webchat:u:${me.user.id}:`));
-    const hasCopilot = !!me?.support_channel_id;
-    if (!instruction || selfThread || !hasCopilot) {
-      if (suggest.isPending) return;
-      setReplacedSid(data?.suggestions?.[0]?.id ?? null);
-      setDraftSent(false);
-      setActionResults({});
-      suggest.mutate(instruction || undefined);
-      setGuide('');
-      return;
-    }
-    const agentName = agents?.agents.find((a) => a.id === c.agent_id)?.name ?? 'its agent';
-    railBus.publish({
-      channelId: '',
-      label: 'Copilot',
-      seed:
-        `Draft my next reply for the conversation I have open (${displayName(c)} on ${agentName}). ` +
-        `Compose it and put it on that conversation's draft card with stage_reply — don't send it and don't answer here. ` +
-        `If it needs a form that saves answers through a tool, save it as a component on ${agentName} ` +
-        `(save_widget with a submit binding, real ids from the list tools) and stage it by ref once approved. ` +
-        `My instruction: ${instruction}`,
-    });
-    window.dispatchEvent(new CustomEvent('janis:open-copilot'));
+    setLastInstruction(instruction || null);
+    setSuggestOpen(true);
+    setReplacedSid(data?.suggestions?.[0]?.id ?? null);
+    setDraftSent(false);
+    setActionResults({});
+    suggest.mutate(instruction || undefined);
     setGuide('');
-    setRoutedToCopilot(true);
   };
 
   const saveTest = useMutation({
@@ -1102,6 +1082,14 @@ export default function ConversationPage() {
   ]);
   const extraProfile = Object.entries(p).filter(([k]) => !KNOWN.has(k));
   const agent = agents?.agents.find((a) => a.id === c.agent_id);
+  // The operator's own concierge thread can't host a customer draft, and
+  // accounts without a copilot have nowhere to hand off to — both hide
+  // the "Continue in Copilot" CTA on the draft card.
+  const selfThread =
+    !!me?.user?.id &&
+    (c.external_id === `webchat:u:${me.user.id}` ||
+      c.external_id.startsWith(`webchat:u:${me.user.id}:`));
+  const hasCopilot = !!me?.support_channel_id;
   const openAlerts = alerts.filter((a) => a.status === 'open');
   // Anchor each open alert to the transcript row its event wrote — flagged
   // system lines (handoffs, failures, offers, custom alert text), the
@@ -2054,7 +2042,7 @@ export default function ConversationPage() {
           <div className="card suggestion draft">
             {suggest.isPending ||
             (replacedSid !== null && suggestions?.[0]?.id === replacedSid) ? (
-              <div className="muted">Thinking…</div>
+              <div className="muted">Drafting…</div>
             ) : suggestions?.length > 0 ? (
               <>
                 <div className="muted" style={{ marginBottom: 6 }}>
@@ -2219,8 +2207,9 @@ export default function ConversationPage() {
                 })}
               </>
             ) : (
-              <div className="muted">Thinking…</div>
+              <div className="muted">Drafting…</div>
             )}
+            <div className="draft-foot">
             {!draftSent && (
               <div className="row" style={{ marginTop: 10, gap: 6, alignItems: 'flex-end' }}>
                 <textarea
@@ -2252,7 +2241,7 @@ export default function ConversationPage() {
             )}
             {!draftSent && routedToCopilot && (
               <div className="muted" style={{ marginTop: 6 }}>
-                Sent to Copilot — the draft lands here when it's ready.
+                Opened in Copilot — a staged draft will land here.
               </div>
             )}
             <div className="row" style={{ marginTop: 10 }}>
@@ -2333,6 +2322,31 @@ export default function ConversationPage() {
               >
                 Dismiss
               </button>
+              {!draftSent && !selfThread && hasCopilot && (
+                <button
+                  className="btn"
+                  title="Hand this draft to Copilot — it composes and stages the reply back here"
+                  onClick={() => {
+                    const s = suggestions?.[0];
+                    const instruction = lastInstruction || s?.payload?.instruction;
+                    const draftText = s?.payload?.empty_draft ? '' : (s?.text ?? '');
+                    railBus.publish({
+                      channelId: '',
+                      label: 'Copilot',
+                      seed:
+                        `Help me with my reply to ${displayName(c)} on ${agent?.name ?? 'its agent'} — the conversation I have open.` +
+                        (instruction ? ` What I want: ${instruction}.` : '') +
+                        (draftText ? ` Current draft: "${draftText.slice(0, 600)}".` : '') +
+                        ` When it's ready, put it on that conversation's draft card with stage_reply — or send it with send_reply if I say to send it.`,
+                    });
+                    window.dispatchEvent(new CustomEvent('janis:open-copilot'));
+                    setRoutedToCopilot(true);
+                  }}
+                >
+                  Continue in Copilot
+                </button>
+              )}
+            </div>
             </div>
           </div>
         )}
