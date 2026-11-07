@@ -140,6 +140,48 @@ function splitValues(
   return out;
 }
 
+/** Parse a renderer-built form-submit line — `Form "T" — Label: v · L: v`.
+ *  Unbound forms (and console previews) post only this readable text with
+ *  the tap flag; the answers still deserve the same context record a
+ *  structured submit gets. Field types are inferred from labels for the
+ *  identifier split; a ` · ` inside a value splits it — a segment with
+ *  no `: ` folds back into the previous pair. */
+export function parseFormSubmitText(text: string): {
+  form: SubmissionForm;
+  values: Record<string, string>;
+} | undefined {
+  const m = text.match(/^Form(?: "([^"]+)")? — (.+)$/s);
+  if (!m) return undefined;
+  const title = m[1]?.trim();
+  const fields: NonNullable<SubmissionForm['fields']> = [];
+  const values: Record<string, string> = {};
+  for (const seg of m[2].split(' · ')) {
+    const ci = seg.indexOf(': ');
+    if (ci === -1) {
+      const last = fields[fields.length - 1];
+      if (last?.name) values[last.name] += ' · ' + seg;
+      continue;
+    }
+    const label = seg.slice(0, ci).trim();
+    const value = seg.slice(ci + 2).trim();
+    if (!label || !value) continue;
+    const name =
+      label
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 40) || `field_${fields.length + 1}`;
+    fields.push({
+      name,
+      label,
+      type: /e-?mail/i.test(label) ? 'email' : /phone|tel|mobile/i.test(label) ? 'tel' : 'text',
+    });
+    values[name] = value;
+  }
+  if (!title || !fields.length) return undefined;
+  return { form: { name: title, fields }, values };
+}
+
 /** Record a submission into Janis's own context: the form_submissions
  *  row, the conversation's user_profile (so the agent recalls it next
  *  turn and the details panel shows it), and claimed contact enrichment

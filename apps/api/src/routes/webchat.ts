@@ -32,6 +32,7 @@ import { rateLimit, takeDbAllowance } from '../lib/rateLimit.js';
 import { agentWorking, operatorTyping } from '../lib/typingState.js';
 import {
   collectFormNamed,
+  parseFormSubmitText,
   recordFormSubmission,
   recordSubmissionContext,
   submitToolArgs,
@@ -740,7 +741,13 @@ export function webchatRoutes(db: Db) {
     // `text` (the agent reads it like any turn) plus the structured values
     // here. Record + enrich + destinations; the visitor's message still
     // flows through normal ingress regardless of the outcome.
-    const submitRunner = form
+    //
+    // Unbound forms (and console previews) carry no structured `form` —
+    // just the readable line + tap flag. Parsing it gives their answers
+    // the same context record; a POSTED `form` still needs a configured
+    // or saved-component match, so arbitrary claims can't write rows.
+    const tapForm = !form && tap ? parseFormSubmitText(text) : undefined;
+    const submitRunner = form || tapForm
       ? async () => {
           // The conversation may not exist yet — a form can be the first
           // thing a visitor sends. Wait on ingress before the lookup or
@@ -751,20 +758,50 @@ export function webchatRoutes(db: Db) {
             .from(agents)
             .where(eq(agents.id, channel.agentId))
             .limit(1);
-          const def = agent ? collectFormNamed(agent, form.name) : undefined;
           const conv = await findConversation(
             db,
             channel,
             participantFor(resolved, visitor_id, threadKey),
           );
-          if (agent && def) {
-            await recordFormSubmission(db, { agent, conv, form: def, values: form.values });
+          if (form) {
+            const def = agent ? collectFormNamed(agent, form.name) : undefined;
+            if (agent && def) {
+              await recordFormSubmission(db, { agent, conv, form: def, values: form.values });
+              return;
+            }
+          }
+          if (!agent || !conv) return;
+          const postNote = async (text: string, event: string) => {
+            const [n] = await db
+              .insert(messages)
+              .values({
+                conversationId: conv.id,
+                direction: 'human',
+                text,
+                payload: { internal: true, event },
+              })
+              .returning();
+            bus.publish(agent.workspaceId, { type: 'message', data: toMessage(n) });
+          };
+          // Text-parsed submit — no binding to run; the answers land in
+          // context and the note makes the save visible in the console.
+          if (tapForm) {
+            await recordSubmissionContext(db, {
+              agent,
+              conv,
+              form: tapForm.form,
+              values: tapForm.values,
+            });
+            await postNote(
+              `form "${tapForm.form.name}" submitted — saved to the contact`,
+              'form submit saved',
+            );
             return;
           }
           // Component-bound submit — the emitted spec stamped `collect`
           // with the component's name; its submit binding runs server-side
           // with the posted values (never a client-sent binding).
-          if (!agent || !conv) return;
+          if (!form) return;
           const [w] = await db
             .select()
             .from(agentWidgets)
@@ -788,18 +825,6 @@ export function webchatRoutes(db: Db) {
             },
             values: form.values,
           });
-          const postNote = async (text: string, event: string) => {
-            const [n] = await db
-              .insert(messages)
-              .values({
-                conversationId: conv.id,
-                direction: 'human',
-                text,
-                payload: { internal: true, event },
-              })
-              .returning();
-            bus.publish(agent.workspaceId, { type: 'message', data: toMessage(n) });
-          };
           const parsedBind = w.tool ? WidgetToolBinding.safeParse(w.tool) : null;
           const binding = parsedBind?.success ? parsedBind.data : undefined;
           const agentToolDefs = toolsFor(agent);

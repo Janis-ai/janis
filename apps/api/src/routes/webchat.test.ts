@@ -2746,6 +2746,56 @@ describe('collect-form submissions', () => {
     expect((conv.userProfile as { email?: string }).email).toBe('bee@example.com');
   });
 
+  it('records context for an unbound form submit (readable line + tap, no structured claim)', async () => {
+    const visitor = 'vis_collect00000003';
+    await post('hi', visitor);
+    const res = await app.request(`/chat/${channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        visitor_id: visitor,
+        text: 'Form "Berry Prefs" — What is your favorite berry?: blue',
+        tap: true,
+        tap_of: 'Berry Prefs',
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    // No configured form, no component, no structured claim — the parsed
+    // tap line still lands the row + conversation profile + contact facts.
+    const sub = await waitFor(async () => {
+      const [r] = await db
+        .select()
+        .from(formSubmissions)
+        .where(eq(formSubmissions.form, 'Berry Prefs'))
+        .limit(1);
+      return r;
+    });
+    expect(sub).toBeTruthy();
+    const [conv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, sub.conversationId!))
+      .limit(1);
+    expect(
+      (conv?.userProfile as { metadata?: Record<string, string> } | null)?.metadata?.[
+        'What is your favorite berry?'
+      ],
+    ).toBe('blue');
+    if (sub.contactId) {
+      const [contact] = await db
+        .select()
+        .from(contacts)
+        .where(eq(contacts.id, sub.contactId))
+        .limit(1);
+      expect(
+        (contact?.metadata as { claimed?: Record<string, string> })?.claimed?.[
+          'What is your favorite berry?'
+        ],
+      ).toBe('blue');
+    }
+  });
+
   it('ignores an unknown form name but still delivers the message', async () => {
     const visitor = 'vis_collect00000002';
     await post('hello', visitor);
