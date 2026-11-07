@@ -1510,19 +1510,25 @@ export function extractButtons(text: string): {
   const buttons: QuickReply[] = [];
   const out = text
     .split('\n')
-    .filter((line) => {
+    .map((line) => {
       const ask = line.trim().match(/^ASK:\s*([a-z_]+(?:\s+[a-z_]+)*)\s*$/i);
       const kind = ask?.[1].toLowerCase();
       if (kind === 'email' || kind === 'phone') {
         if (buttons.length < 4) buttons.push({ type: kind });
       }
-      const m = line.trim().match(/^BUTTONS?:\s*(.+)$/i);
-      if (m && buttons.length < 4) {
+      if (ask) return null;
+      // BUTTON: anywhere in the line — models often emit it mid-line after
+      // the sentence instead of on its own line; only the directive tail is
+      // stripped, the leading text keeps.
+      const m = line.match(/(?:^|\s)BUTTONS?:\s*(.+)$/i);
+      if (m) {
         const label = clampButtonLabel(m[1].trim());
-        if (label) buttons.push(label);
+        if (label && buttons.length < 4) buttons.push(label);
+        return line.slice(0, m.index).replace(/\s+$/, '') || null;
       }
-      return !ask && !m;
+      return line;
     })
+    .filter((l): l is string => l !== null)
     .join('\n');
   return { text: out.trim(), buttons };
 }
