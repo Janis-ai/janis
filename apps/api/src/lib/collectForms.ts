@@ -108,39 +108,50 @@ export function collectFormNamed(
   return collectFormsFor(agent).find((f) => f.name?.trim().toLowerCase() === norm);
 }
 
+/** The minimal shape a submission needs to land in Janis context — a
+ *  configured collect_forms entry or a saved component's spec fields
+ *  both satisfy it. */
+export type SubmissionForm = {
+  name: string;
+  contact?: boolean;
+  tags?: string[];
+  fields?: { name?: string; type?: string; label?: string }[];
+};
+
 /** Split submitted values into contact identifiers vs. everything else.
  *  Field *type* decides: email → email, tel → phone, a field named `name`
  *  → name; the rest are claimed facts keyed by their label. */
 function splitValues(
-  form: CollectForm,
+  form: SubmissionForm,
   values: Record<string, string>,
 ): { name?: string; email?: string; phone?: string; facts: Record<string, string> } {
   const out: { name?: string; email?: string; phone?: string; facts: Record<string, string> } = {
     facts: {},
   };
   for (const f of form.fields ?? []) {
+    if (!f.name) continue;
     const v = values[f.name]?.trim();
     if (!v) continue;
     if (f.type === 'email' && !out.email) out.email = v.toLowerCase();
     else if (f.type === 'tel' && !out.phone) out.phone = v;
     else if (f.name.toLowerCase() === 'name' && !out.name) out.name = v;
-    else out.facts[f.label.trim().slice(0, 40)] = v.slice(0, 200);
+    else out.facts[(f.label ?? f.name).trim().slice(0, 40)] = v.slice(0, 200);
   }
   return out;
 }
 
-/**
- * Record a collect-form submission: form_submissions row, contact
- * enrichment (same claimed-claims path save_user_profile uses), contact
- * tags, then the destinations — webhook POST and/or notify email. Never
- * throws into the caller; a dead webhook can't lose the visitor's message.
- */
-export async function recordFormSubmission(
+/** Record a submission into Janis's own context: the form_submissions
+ *  row, the conversation's user_profile (so the agent recalls it next
+ *  turn and the details panel shows it), and claimed contact enrichment
+ *  + tags. Runs for EVERY structured submit — configured collect forms
+ *  and saved-component collect stamps alike — regardless of whether an
+ *  external destination is wired or succeeds. */
+export async function recordSubmissionContext(
   db: Db,
   input: {
     agent: typeof agents.$inferSelect;
     conv: ConvRow | undefined;
-    form: CollectForm;
+    form: SubmissionForm;
     values: Record<string, string>;
   },
 ): Promise<void> {
@@ -202,6 +213,25 @@ export async function recordFormSubmission(
       console.error('collect form contact enrich failed:', err);
     }
   }
+}
+
+/**
+ * Record a collect-form submission: the Janis context record, then the
+ * destinations — webhook POST and/or notify email. Never throws into the
+ * caller; a dead webhook can't lose the visitor's message.
+ */
+export async function recordFormSubmission(
+  db: Db,
+  input: {
+    agent: typeof agents.$inferSelect;
+    conv: ConvRow | undefined;
+    form: CollectForm;
+    values: Record<string, string>;
+  },
+): Promise<void> {
+  const { agent, conv, form } = input;
+  const contactId = conv?.contactId ?? null;
+  await recordSubmissionContext(db, input);
 
   // Destinations — fire-and-forget; failures log, never block the turn.
   const payload = {

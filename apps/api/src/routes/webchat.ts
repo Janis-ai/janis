@@ -30,7 +30,13 @@ import { bus } from '../lib/bus.js';
 import { toMessage } from '../lib/serializers.js';
 import { rateLimit, takeDbAllowance } from '../lib/rateLimit.js';
 import { agentWorking, operatorTyping } from '../lib/typingState.js';
-import { collectFormNamed, recordFormSubmission, submitToolArgs } from '../lib/collectForms.js';
+import {
+  collectFormNamed,
+  recordFormSubmission,
+  recordSubmissionContext,
+  submitToolArgs,
+  type SubmissionForm,
+} from '../lib/collectForms.js';
 import { operatorIdentities } from '../lib/access.js';
 
 /**
@@ -769,20 +775,51 @@ export function webchatRoutes(db: Db) {
               ),
             )
             .limit(1);
-          const parsedBind = w?.tool ? WidgetToolBinding.safeParse(w.tool) : null;
+          if (!w) return;
+          // The answers are Janis's to keep even when the destination
+          // tool fails — or none is wired. Row + profile + contact facts
+          // record first, the external tool runs second.
+          await recordSubmissionContext(db, {
+            agent,
+            conv,
+            form: {
+              name: w.name,
+              fields: (w.spec as { fields?: SubmissionForm['fields'] } | undefined)?.fields,
+            },
+            values: form.values,
+          });
+          const postNote = async (text: string, event: string) => {
+            const [n] = await db
+              .insert(messages)
+              .values({
+                conversationId: conv.id,
+                direction: 'human',
+                text,
+                payload: { internal: true, event },
+              })
+              .returning();
+            bus.publish(agent.workspaceId, { type: 'message', data: toMessage(n) });
+          };
+          const parsedBind = w.tool ? WidgetToolBinding.safeParse(w.tool) : null;
           const binding = parsedBind?.success ? parsedBind.data : undefined;
-          if (!w || !binding) return;
           const agentToolDefs = toolsFor(agent);
           // Explicit `submit` wins; a legacy binding parked the write tool
           // on `tool` — non-GET methods are writes, never a render read.
           const legacy =
+            binding &&
             !binding.submit &&
             binding.name &&
             agentToolDefs.find((t) => t.name === binding.name)?.method !== 'GET'
               ? { name: binding.name, args: binding.args }
               : undefined;
-          const sub = binding.submit ?? legacy;
-          if (!sub) return;
+          const sub = binding?.submit ?? legacy;
+          if (!sub) {
+            await postNote(
+              `form "${form.name}" submitted — saved to the contact; no submit tool bound`,
+              'form submit saved',
+            );
+            return;
+          }
           const toolDef = agentToolDefs.find((t) => t.name === sub.name);
           const result = !toolDef
             ? `error: bound tool "${sub.name}" is not on ${agent.name}`
@@ -803,18 +840,12 @@ export function webchatRoutes(db: Db) {
             );
           // Console-side note — the operator sees the wiring did (or
           // didn't) run; the visitor just sees their submit arrive.
-          const [note] = await db
-            .insert(messages)
-            .values({
-              conversationId: conv.id,
-              direction: 'human',
-              text: ok
-                ? `form "${form.name}" submitted — ${sub.name} recorded it`
-                : `form "${form.name}" submitted — ${sub.name} failed: ${result.slice(0, 160)}`,
-              payload: { internal: true, event: ok ? 'form submit ran' : 'form submit failed' },
-            })
-            .returning();
-          bus.publish(agent.workspaceId, { type: 'message', data: toMessage(note) });
+          await postNote(
+            ok
+              ? `form "${form.name}" submitted — saved to the contact; ${sub.name} recorded it`
+              : `form "${form.name}" submitted — saved to the contact; ${sub.name} failed: ${result.slice(0, 160)}`,
+            ok ? 'form submit ran' : 'form submit failed',
+          );
         }
       : undefined;
     // Ingress includes awaited side-paths (sync greeting generation on a

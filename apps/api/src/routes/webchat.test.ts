@@ -341,6 +341,46 @@ describe('webchat widget endpoints', () => {
     // unset `values` defaulted to a row of the fields in order
     expect(sentBody.values).toEqual([['Brie']]);
     expect(note?.text).toContain('record_answer recorded it');
+
+    // The answers land in Janis context too — form_submissions row,
+    // conversation profile, and claimed contact facts — independent of
+    // the bound tool. Poll like the note: the runner is fire-and-forget.
+    let sub: typeof formSubmissions.$inferSelect | undefined;
+    while (Date.now() < deadline) {
+      const [r] = await db
+        .select()
+        .from(formSubmissions)
+        .where(eq(formSubmissions.form, 'test-survey'))
+        .limit(1);
+      if (r) {
+        sub = r;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 60));
+    }
+    expect(sub?.agentId).toBe(agent.id);
+    expect((sub?.values as Record<string, string>).pick).toBe('Brie');
+    const [subConv] = await db
+      .select()
+      .from(conversations)
+      .where(eq(conversations.id, sub!.conversationId!))
+      .limit(1);
+    expect(
+      (subConv?.userProfile as { metadata?: Record<string, string> } | null)?.metadata?.[
+        'Pick one'
+      ],
+    ).toBe('Brie');
+    if (sub?.contactId) {
+      const [contact] = await db
+        .select()
+        .from(contacts)
+        .where(eq(contacts.id, sub.contactId))
+        .limit(1);
+      expect(
+        (contact?.metadata as { claimed?: Record<string, string> })?.claimed?.['Pick one'],
+      ).toBe('Brie');
+    }
+
     // restore the agent's config for other tests
     await db.update(agents).set({ config: prevConfig as never }).where(eq(agents.id, agent.id));
   });
@@ -2676,7 +2716,7 @@ describe('collect-form submissions', () => {
       const [r] = await db
         .select()
         .from(formSubmissions)
-        .where(eq(formSubmissions.agentId, agent.id))
+        .where(eq(formSubmissions.form, 'lead_capture'))
         .limit(1);
       return r;
     });
