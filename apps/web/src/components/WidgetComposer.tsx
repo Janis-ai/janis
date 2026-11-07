@@ -916,10 +916,10 @@ function SpecEditor({ spec, onChange }: { spec: ChatWidget; onChange: (s: ChatWi
                 <Field label="label"><input className="input" style={inputStyle} value={f.label} onChange={(e) => set({ ...f, label: e.target.value })} placeholder="Email" /></Field>
                 <Field label="type">
                   <select className="input" style={inputStyle} value={f.type} onChange={(e) => set({ ...f, type: e.target.value as typeof f.type })}>
-                    {['text', 'email', 'tel', 'textarea', 'select', 'multiselect'].map((t) => <option key={t} value={t}>{t}</option>)}
+                    {['text', 'email', 'tel', 'textarea', 'select', 'radio', 'multiselect'].map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
                 </Field>
-                {(f.type === 'select' || f.type === 'multiselect') && (
+                {(f.type === 'select' || f.type === 'multiselect' || f.type === 'radio') && (
                   <Field label="options (comma-separated)"><input className="input" style={inputStyle} value={(f.options ?? []).join(', ')} onChange={(e) => set({ ...f, options: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} /></Field>
                 )}
                 <label className="row" style={{ gap: 4, fontSize: 12, alignSelf: 'flex-end' }}>

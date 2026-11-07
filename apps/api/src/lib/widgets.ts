@@ -98,12 +98,17 @@ export const WidgetComponent = z.discriminatedUnion('type', [
         z.object({
           name: s(40).regex(/^[a-z][a-z0-9_]*$/i),
           label: s(60),
-          // Models write what the operator said — "checkbox"/"checkboxes"
-          // normalize to multiselect rather than drop the whole spec.
+          // Models write what the operator said — checkbox → multiselect,
+          // radio_buttons/radio_button → radio.
           type: z.preprocess(
-            (v) => (v === 'checkbox' || v === 'checkboxes' ? 'multiselect' : v),
+            (v) =>
+              v === 'checkbox' || v === 'checkboxes'
+                ? 'multiselect'
+                : typeof v === 'string' && v.startsWith('radio')
+                  ? 'radio'
+                  : v,
             z
-              .enum(['text', 'email', 'tel', 'textarea', 'select', 'multiselect'])
+              .enum(['text', 'email', 'tel', 'textarea', 'select', 'multiselect', 'radio'])
               .default('text'),
           ),
           options: z.array(s(60)).max(10).optional(),

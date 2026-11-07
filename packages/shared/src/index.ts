@@ -238,9 +238,14 @@ export const AgentConfig = z.object({
               name: z.string().max(40).regex(/^[a-z][a-z0-9_]*$/i),
               label: z.string().max(60),
               type: z.preprocess(
-                (v) => (v === 'checkbox' || v === 'checkboxes' ? 'multiselect' : v),
+                (v) =>
+                  v === 'checkbox' || v === 'checkboxes'
+                    ? 'multiselect'
+                    : typeof v === 'string' && v.startsWith('radio')
+                      ? 'radio'
+                      : v,
                 z
-                  .enum(['text', 'email', 'tel', 'textarea', 'select', 'multiselect'])
+                  .enum(['text', 'email', 'tel', 'textarea', 'select', 'multiselect', 'radio'])
                   .default('text'),
               ),
               options: z.array(z.string().max(60)).max(10).optional(),

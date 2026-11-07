@@ -32,7 +32,7 @@ export interface WidgetOption {
 export interface WidgetField {
   name: string;
   label: string;
-  type?: 'text' | 'email' | 'tel' | 'textarea' | 'select' | 'multiselect';
+  type?: 'text' | 'email' | 'tel' | 'textarea' | 'select' | 'multiselect' | 'radio';
   options?: string[];
   required?: boolean;
   /** Server-stamped prefill — a fact the agent already knows. */
@@ -318,7 +318,27 @@ function WForm({ w, onSend }: { w: Extract<ChatWidget, { type: 'form' }>; onSend
       {w.title && <div className="wgt-title">{w.title}</div>}
       <div className="wgt-form">
         {w.fields.map((f) =>
-          f.type === 'multiselect' && f.options?.length ? (
+          f.type === 'radio' && f.options?.length ? (
+            <div key={f.name} className="wgt-field">
+              <span>
+                {f.label}
+                {f.required ? ' *' : ''}
+              </span>
+              <div className="wgt-multi">
+                {f.options.map((o) => (
+                  <label key={o} className="wgt-mopt">
+                    <input
+                      type="radio"
+                      name={`wgt-${f.name}`}
+                      checked={(vals[f.name] ?? '') === o}
+                      onChange={() => setVals({ ...vals, [f.name]: o })}
+                    />
+                    {o}
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : f.type === 'multiselect' && f.options?.length ? (
             <div key={f.name} className="wgt-field">
               <span>
                 {f.label}
