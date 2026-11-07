@@ -839,13 +839,7 @@ function Composer({
                   Number(/(^id$|_id$)/.test(b)) - Number(/(^id$|_id$)/.test(a)),
               );
               const helperFor = (k: string): string | null =>
-                k === 'range'
-                  ? 'which tab or area to write — blank writes to A1 (appends after the last row)'
-                  : k === 'values'
-                    ? '{name} puts that answer in a column · blank = one column per field, in order'
-                    : /(^id$|_id$)/.test(k) && listTool
-                      ? null
-                      : params[k] ?? null;
+                /(^id$|_id$)/.test(k) && listTool ? null : (params[k] ?? null);
               return (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                   {!argKeys.length && (
@@ -866,11 +860,11 @@ function Composer({
                           <Field
                             label={
                               k === 'values'
-                                ? "values — the sheet's columns"
+                                ? 'columns — {name} puts that answer in a column · blank = one per field, in order'
                                 : k === 'spreadsheet_id'
                                   ? 'spreadsheet — the file to write to'
                                   : k === 'range'
-                                    ? 'tab — where in the file to write'
+                                    ? 'tab — blank writes to A1 (after the last row)'
                                     : k
                             }
                           >
