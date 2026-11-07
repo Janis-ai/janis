@@ -32,7 +32,7 @@ export interface WidgetOption {
 export interface WidgetField {
   name: string;
   label: string;
-  type?: 'text' | 'email' | 'tel' | 'textarea' | 'select';
+  type?: 'text' | 'email' | 'tel' | 'textarea' | 'select' | 'multiselect';
   options?: string[];
   required?: boolean;
   /** Server-stamped prefill — a fact the agent already knows. */
@@ -288,11 +288,23 @@ function WForm({ w, onSend }: { w: Extract<ChatWidget, { type: 'form' }>; onSend
   const [vals, setVals] = useState<Record<string, string>>(() =>
     Object.fromEntries(w.fields.filter((f) => f.value).map((f) => [f.name, f.value!])),
   );
+  // Multiselect fields collect an array per field, joined ", " on submit —
+  // the readable line and the structured value stay strings.
+  const [multi, setMulti] = useState<Record<string, string[]>>(() =>
+    Object.fromEntries(
+      w.fields
+        .filter((f) => f.type === 'multiselect' && f.value)
+        .map((f) => [f.name, f.value!.split(/,\s*/).filter(Boolean)]),
+    ),
+  );
   if (sent) return <div className="wgt-sent">Sent ✓</div>;
   const submit = () => {
     const pairs: string[] = [];
     for (const f of w.fields) {
-      const v = (vals[f.name] ?? '').trim();
+      const v =
+        f.type === 'multiselect'
+          ? (multi[f.name] ?? []).join(', ')
+          : (vals[f.name] ?? '').trim();
       if (f.required && !v) return;
       if (f.type === 'email' && v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) return;
       if (v) pairs.push(`${f.label}: ${v}`);
@@ -305,7 +317,39 @@ function WForm({ w, onSend }: { w: Extract<ChatWidget, { type: 'form' }>; onSend
     <>
       {w.title && <div className="wgt-title">{w.title}</div>}
       <div className="wgt-form">
-        {w.fields.map((f) => (
+        {w.fields.map((f) =>
+          f.type === 'multiselect' && f.options?.length ? (
+            <div key={f.name} className="wgt-field">
+              <span>
+                {f.label}
+                {f.required ? ' *' : ''}
+              </span>
+              <div className="wgt-multi">
+                {f.options.map((o) => {
+                  const on = (multi[f.name] ?? []).includes(o);
+                  return (
+                    <label key={o} className="wgt-mopt">
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() => {
+                          const cur = new Set(multi[f.name] ?? []);
+                          if (on) cur.delete(o);
+                          else cur.add(o);
+                          // Keep option order in the joined value.
+                          setMulti({
+                            ...multi,
+                            [f.name]: (f.options ?? []).filter((x) => cur.has(x)),
+                          });
+                        }}
+                      />
+                      {o}
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
           <label key={f.name}>
             {f.label}
             {f.required ? ' *' : ''}
@@ -335,7 +379,8 @@ function WForm({ w, onSend }: { w: Extract<ChatWidget, { type: 'form' }>; onSend
               />
             )}
           </label>
-        ))}
+          ),
+        )}
         <button type="button" className="wgt-btn wgt-btn-primary" onClick={submit}>
           {w.submit_label || 'Submit'}
         </button>

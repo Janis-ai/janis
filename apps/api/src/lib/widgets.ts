@@ -98,7 +98,9 @@ export const WidgetComponent = z.discriminatedUnion('type', [
         z.object({
           name: s(40).regex(/^[a-z][a-z0-9_]*$/i),
           label: s(60),
-          type: z.enum(['text', 'email', 'tel', 'textarea', 'select']).default('text'),
+          type: z
+            .enum(['text', 'email', 'tel', 'textarea', 'select', 'multiselect'])
+            .default('text'),
           options: z.array(s(60)).max(10).optional(),
           required: z.boolean().optional(),
           // Prefill — server stamps a fact it already knows (email, name);

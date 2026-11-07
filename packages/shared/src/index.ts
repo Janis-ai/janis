@@ -237,7 +237,9 @@ export const AgentConfig = z.object({
             z.object({
               name: z.string().max(40).regex(/^[a-z][a-z0-9_]*$/i),
               label: z.string().max(60),
-              type: z.enum(['text', 'email', 'tel', 'textarea', 'select']).default('text'),
+              type: z
+                .enum(['text', 'email', 'tel', 'textarea', 'select', 'multiselect'])
+                .default('text'),
               options: z.array(z.string().max(60)).max(10).optional(),
               required: z.boolean().optional(),
             }),

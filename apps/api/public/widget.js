@@ -574,6 +574,9 @@
     '.janis-wform input:focus,.janis-wform textarea:focus,.janis-wform select:focus{border-color:var(--janis-accent)}' +
     '.janis-wform textarea{min-height:56px;resize:vertical}' +
     '.janis-wform label{font-size:12px;color:#6b7280;display:block;margin-bottom:2px}' +
+    '.janis-wmulti{display:flex;flex-direction:column;gap:4px;padding:2px 0}' +
+    '.janis-wform .janis-wmopt{display:flex;align-items:center;gap:7px;font-size:13px;color:#1f2937;margin-bottom:0}' +
+    '.janis-wform .janis-wmulti input[type=checkbox]{width:auto;padding:0;border:none;accent-color:var(--janis-accent)}' +
     '.janis-wsent{color:#059669;font-size:12.5px;font-weight:600;padding:4px 0}' +
     '.janis-wsteps{display:flex;flex-direction:column;gap:7px}' +
     '.janis-wstep{display:flex;gap:8px;align-items:flex-start;font-size:13px;color:#1f2937}' +
@@ -1777,6 +1780,27 @@
       var input;
       if (f.type === 'textarea') {
         input = document.createElement('textarea');
+      } else if (f.type === 'multiselect' && f.options && f.options.length) {
+        // Checkbox group — the visitor picks any subset; the joined value
+        // ("Cola, Root Beer") is what the message and the tool args carry.
+        input = el('div', {}, { class: 'janis-wmulti' });
+        var pre = f.value ? f.value.split(/,\s*/) : [];
+        var boxes = f.options.map(function (o) {
+          var ol = el('label', {}, { class: 'janis-wmopt' });
+          var cb = document.createElement('input');
+          cb.type = 'checkbox';
+          cb.value = o;
+          cb.checked = pre.indexOf(o) !== -1;
+          ol.appendChild(cb);
+          ol.appendChild(document.createTextNode(o));
+          input.appendChild(ol);
+          return cb;
+        });
+        fields.push({ f: f, boxes: boxes });
+        fw.appendChild(lab);
+        fw.appendChild(input);
+        form.appendChild(fw);
+        return;
       } else if (f.type === 'select' && f.options && f.options.length) {
         input = document.createElement('select');
         // A required select must not silently carry the first option — a
@@ -1813,8 +1837,16 @@
       var pairs = [];
       var values = {};
       for (var i = 0; i < fields.length; i++) {
-        var v = fields[i].input.value.trim();
-        if (fields[i].f.required && !v) { fields[i].input.focus(); return; }
+        var v = fields[i].boxes
+          ? fields[i].boxes
+              .filter(function (c) { return c.checked; })
+              .map(function (c) { return c.value; })
+              .join(', ')
+          : fields[i].input.value.trim();
+        if (fields[i].f.required && !v) {
+          (fields[i].input || fields[i].boxes[0]).focus();
+          return;
+        }
         if (fields[i].f.type === 'email' && v && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v)) {
           fields[i].input.focus();
           return;

@@ -407,8 +407,13 @@ body.panel-resize .sidebar, body.panel-resize .conv-inbox, body.panel-resize .in
 .wgt-opt.wgt-sel small { color: rgba(255,255,255,.8); }
 .wgt-opts.wgt-done .wgt-opt:not(.wgt-sel) { opacity: .5; pointer-events: none; }
 .wgt-form { display: flex; flex-direction: column; gap: 12px; }
-.wgt-form label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+.wgt-form label, .wgt-form .wgt-field { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
 .wgt-form input, .wgt-form textarea, .wgt-form select { border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; font-size: 13px; font-family: inherit; background: var(--bg); color: inherit; width: 100%; box-sizing: border-box; }
+/* Checkbox groups are options, not text fields — the block input rule
+   above would stretch + border them. */
+.wgt-form .wgt-multi input[type='checkbox'] { width: auto; padding: 0; border: none; accent-color: var(--accent); }
+.wgt-multi { display: flex; flex-direction: column; gap: 4px; padding: 3px 0 2px; }
+.wgt-form .wgt-mopt { display: flex; flex-direction: row; align-items: center; gap: 7px; font-size: 13px; color: var(--text); }
 .wgt-form input:focus, .wgt-form textarea:focus, .wgt-form select:focus { border-color: var(--accent); outline: none; }
 .wgt-form textarea { min-height: 56px; resize: vertical; }
 .wgt-sent { color: var(--ok); font-size: 12.5px; font-weight: 600; padding: 4px 0; }
